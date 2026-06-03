@@ -61,6 +61,7 @@ import {
   SLOT_MINUTES,
   type Identity,
 } from "./store.js";
+import { isPremium } from "./premium-api.js";
 import { publish } from "./realtime.js";
 import { appUrl, isMailConfigured, sendMail } from "./mailer.js";
 import { bookingAcceptedEmail, bookingRequestEmail } from "./emails.js";
@@ -113,16 +114,17 @@ export function buildCloudMcpServer(me: Identity): McpServer {
   server.registerTool(
     "whoami",
     {
-      description: "Identité connectée : handle, URL publique, email de récupération.",
+      description: "Identité connectée : handle, URL publique, email de récupération, offre (free/premium).",
       inputSchema: {},
       annotations: RO("Mon identité"),
     },
-    () =>
+    async () =>
       ok({
         handle: me.handle,
         publicUrl: `/@${me.handle}`,
         hasPhoto: !!me.photo_file,
         recoveryEmail: me.recovery_email,
+        plan: (await isPremium(me.id)) ? "premium" : "free",
       })
   );
 
@@ -133,7 +135,7 @@ export function buildCloudMcpServer(me: Identity): McpServer {
       inputSchema: {},
       annotations: RO("Lire ma carte"),
     },
-    async () => ok({ handle: me.handle, fields: await getFields(me.id, "owner"), events: await getEvents(me.id, true) })
+    async () => ok({ handle: me.handle, plan: (await isPremium(me.id)) ? "premium" : "free", fields: await getFields(me.id, "owner"), events: await getEvents(me.id, true) })
   );
 
   server.registerTool(
@@ -640,6 +642,8 @@ const PROBE_IDENTITY: Identity = {
   handle: "_probe",
   access_key: "",
   photo_file: null,
+  cover_file: null,
+  cover_type: "",
   recovery_email: "",
   pubkey: "",
   settings: "{}",

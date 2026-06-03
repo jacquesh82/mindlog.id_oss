@@ -366,6 +366,14 @@ app.get("/i/:token", page); // page d'acceptation d'invitation de contact
 
 const port = Number(process.env.PORT ?? 8787);
 
+// Chargement optionnel du module Premium (absent = édition communautaire).
+let _premiumStartAdmin: (() => void) | undefined;
+try {
+  const { register, startAdmin } = await import("./premium/index.js");
+  register(app);
+  _premiumStartAdmin = startAdmin;
+} catch { /* édition communautaire : Premium non disponible */ }
+
 await initDb(); // applique les migrations Drizzle
 await ensureMilo(); // crée/maj le profil mascotte @milo
 
@@ -423,6 +431,7 @@ async function runMaintenance() {
   }
 }
 
+// Chargement optionnel du module Premium (absent = édition communautaire).
 // MINDLOG_NO_LISTEN=1 : importe l'app sans ouvrir de port (tests HTTP).
 if (process.env.MINDLOG_NO_LISTEN !== "1") {
   void runMaintenance(); // au démarrage
@@ -432,8 +441,9 @@ if (process.env.MINDLOG_NO_LISTEN !== "1") {
     console.log(`\n  mindlog ID  →  ${base}`);
     console.log(`  Landing     :  ${base}/`);
     console.log(`  Profil      :  ${base}/@<handle>`);
-    console.log(`  Édition     :  ${base}/k/<clé>\n`);
+    console.log(`  Édition     :  ${base}/k/<clé>`);
   });
+  _premiumStartAdmin?.(); // serveur admin mTLS (Premium uniquement)
 }
 
 export { app };

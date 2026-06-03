@@ -16,8 +16,11 @@ export default function register(host) {
   }
 
   function itemHtml(p, isOwner) {
-    return `<div class="gal-item" data-id="${p.id}">
+    const link = (p.link_url || "").replace(/"/g, "%22");
+    return `<div class="gal-item" data-id="${p.id}" data-link="${link}">
       <img src="${p.url}?ts=${p.id}" alt="" loading="lazy" />
+      ${!isOwner && link ? `<span class="gal-linkbadge" title="Lien cliquable" aria-hidden="true">🔗</span>` : ""}
+      ${isOwner ? `<button class="gal-link${link ? " on" : ""}" title="Lien cliquable (Premium)">🔗</button>` : ""}
       ${isOwner ? `<button class="gal-del" title="Supprimer">✕</button>` : ""}
       <button class="gal-like${p.liked ? " liked" : ""}" data-id="${p.id}" title="J'aime">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="${p.liked ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
@@ -43,8 +46,15 @@ export default function register(host) {
   function wireItems(container, isOwner) {
     const fp = fingerprint();
 
-    container.querySelectorAll(".gal-item img").forEach(img => {
-      img.addEventListener("click", () => openLightbox(img.src));
+    // Clic image : visiteur avec lien → ouvre le lien (Premium P6) ; sinon lightbox.
+    container.querySelectorAll(".gal-item").forEach(item => {
+      const img = item.querySelector("img");
+      if (!img) return;
+      img.addEventListener("click", () => {
+        const link = item.dataset.link;
+        if (!isOwner && link) { window.open(link, "_blank", "noopener,noreferrer"); return; }
+        openLightbox(img.src);
+      });
     });
 
     container.querySelectorAll(".gal-like").forEach(btn => {
@@ -65,6 +75,29 @@ export default function register(host) {
     });
 
     if (isOwner) {
+      // Définir/retirer le lien cliquable d'une photo (Premium P6).
+      container.querySelectorAll(".gal-link").forEach(btn => {
+        btn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const item = btn.closest(".gal-item");
+          const id = item.dataset.id;
+          const cur = (item.dataset.link || "").replace(/%22/g, '"');
+          const url = prompt("Lien cliquable de la photo (https://…, vide pour retirer) :", cur);
+          if (url === null) return;
+          try {
+            const r = await host.api(`/api/gallery/${id}/link`, {
+              method: "PATCH",
+              headers: { ...host.authHeaders(), "Content-Type": "application/json" },
+              body: JSON.stringify({ link_url: url.trim() }),
+            });
+            item.dataset.link = (r.link_url || "").replace(/"/g, "%22");
+            btn.classList.toggle("on", !!r.link_url);
+            host.toast(r.link_url ? "Lien enregistré ✓" : "Lien retiré");
+          } catch (err) {
+            host.toast(err.message === "premium required" ? "Réservé aux comptes Premium." : err.message);
+          }
+        });
+      });
       container.querySelectorAll(".gal-del").forEach(btn => {
         btn.addEventListener("click", async () => {
           const item = btn.closest(".gal-item");

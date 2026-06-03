@@ -3,7 +3,7 @@
 // Importe le socle (core/state/deck/host/ui/crypto) ; quelques builders de vue
 // partagés avec landing/profil viennent de ../app.js (cycle assumé, usage runtime).
 // Extrait verbatim de app.js. cf. docs/web-app-split-proposal.md
-import { PENDING_INVITE, connectSSE, eventsHtml, footer, headerAccount, headerSearchHtml, notifItemHtml, openMiloTourPicker, openQR, periodsListHtml, profileCardHtml, relItemHtml, relationsListHtml, tagChipsHtml, wireHeaderSearch } from "../app.js";
+import { PENDING_INVITE, connectSSE, eventsHtml, footer, headerAccount, headerSearchHtml, notifItemHtml, openMiloTourPicker, openQR, periodsListHtml, profileCardHtml, relItemHtml, relationsListHtml, tagChipsHtml, wireHeaderSearch, wireProfileMenuBtn } from "../app.js";
 import { DEFAULT_SETTINGS, DOW_LETTERS, DOW_NAMES, TOUR_SEEN_KEY, app, myHandle, myKey, normalizeAvailability, pick, relDate, setLastHandle, setMeProfile, setSessionHint, setStoredHandle, setStoredKey, storedHandle, storedKey, viewerHeaders } from "../core.js";
 import { e2eDecrypt, e2eEncrypt, ensureE2E } from "../crypto/e2e.js";
 import { mdDeviceId } from "../crypto/multidevice.js";
@@ -20,11 +20,11 @@ import { SOCIALS, SOCIAL_BY_KEY, avatarHtml, genericAvatarSvg, icon, isSocialKey
 import { openE2eBackup, openE2eRestore } from "../ui/modals.js";
 import { addDeckColumn, deckState, removeDeckColumn } from "./deck.js";
 import { renderOptionsColumn } from "./tabs/options.js";
-import { renderHomeColumn } from "./tabs/home.js";
 import { renderIdentityColumn } from "./tabs/identity.js";
 import { renderAgendaColumn } from "./tabs/agenda.js";
 import { renderRelationsColumn } from "./tabs/relations.js";
 import { renderNotificationsColumn } from "./tabs/notifications.js";
+import { renderAccountColumn } from "./tabs/account.js";
 
 export async function consumePendingInvite() {
   let token = null;
@@ -144,6 +144,132 @@ export async function renderPrivate(key) {
     });
 }
 
+/* --------------------------- Abonnement Premium (P3) --------------------- */
+// Intention d'upgrade mémorisée avant inscription (parcours anonyme → compte).
+const PENDING_UPGRADE = "mindlog.pendingUpgrade";
+
+// Démarre un abonnement : ouvre le Checkout Stripe (redirection).
+async function startCheckout() {
+  try {
+    const res = await api("/api/billing/checkout", { method: "POST", headers: jsonAuth() });
+    if (res?.url) { location.assign(res.url); return; }
+    toast(res?.error || "Abonnements momentanément indisponibles.");
+  } catch (e) {
+    toast(e?.message || "Abonnements momentanément indisponibles.");
+  }
+}
+
+// Ouvre le portail de facturation Stripe (gérer/résilier/changer de carte).
+async function openBillingPortal() {
+  try {
+    const res = await api("/api/billing/portal", { method: "POST", headers: jsonAuth() });
+    if (res?.url) { location.assign(res.url); return; }
+    toast(res?.error || "Indisponible pour le moment.");
+  } catch (e) {
+    toast(e?.message || "Indisponible pour le moment.");
+  }
+}
+
+// Retour de Stripe : le Premium est activé par le webhook (asynchrone), on
+// attend que l'état serveur bascule avant de débloquer l'UI.
+async function pollPremiumActivation() {
+  toast("Activation de votre Premium…");
+  for (let i = 0; i < 6; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    try {
+      const fresh = await api("/api/me", { headers: authHeaders() });
+      if (fresh?.subscription?.plan === "premium" || fresh?.plan === "premium") {
+        toast("Bienvenue en Premium ! 🦎");
+        renderEditor(fresh);
+        return;
+      }
+    } catch { /* on réessaie */ }
+  }
+  toast("Activation en cours, cela peut prendre un instant. Rechargez si besoin.");
+}
+
+// Gère les retours de paiement (?upgrade=success|cancel|start) et la reprise
+// d'intention après inscription (sessionStorage). Appelé en fin de renderEditor.
+function handleBilling(data) {
+  let upgrade = null;
+  let pending = false;
+  try {
+    upgrade = new URLSearchParams(location.search).get("upgrade");
+    pending = sessionStorage.getItem(PENDING_UPGRADE) === "1";
+  } catch { /* storage/URL indisponible */ }
+  const cleanUrl = () => { try { history.replaceState(null, "", location.pathname); } catch { /* noop */ } };
+  const premium = data?.subscription?.plan === "premium" || data?.plan === "premium";
+
+  // Retour d'onboarding Stripe Connect (créateur).
+  let connect = null;
+  try { connect = new URLSearchParams(location.search).get("connect"); } catch { /* noop */ }
+  if (connect === "done") { cleanUrl(); toast("Configuration des paiements enregistrée ✓"); return; }
+  if (connect === "refresh") { cleanUrl(); toast("Reprenez la configuration des paiements quand vous voulez."); return; }
+
+  if (upgrade === "cancel") {
+    cleanUrl();
+    toast("Paiement annulé — vous pouvez réessayer quand vous voulez.");
+    return;
+  }
+  if (upgrade === "success") {
+    cleanUrl();
+    if (premium) toast("Bienvenue en Premium ! 🦎");
+    else void pollPremiumActivation();
+    return;
+  }
+  if (upgrade === "start" || pending) {
+    try { sessionStorage.removeItem(PENDING_UPGRADE); } catch { /* noop */ }
+    cleanUrl();
+    if (premium) { toast("Vous êtes déjà Premium 🦎"); return; }
+    void startCheckout();
+  }
+}
+
+// Pages payantes (P7) : peuple le bloc « Pages payantes » de l'onglet Abonnement
+// (statut Connect + liste + création). No-op si le bloc est absent (non Premium).
+async function loadPaidPages(data) {
+  const block = app.querySelector("#pp-block");
+  if (!block) return;
+  const connectEl = app.querySelector("#pp-connect");
+  try {
+    const st = await api("/api/billing/connect/status", { headers: authHeaders() });
+    if (st.chargesEnabled) {
+      connectEl.innerHTML = `✅ Paiements actifs — vous pouvez publier des pages payantes.`;
+    } else {
+      connectEl.innerHTML = `<button type="button" class="btn sm" id="pp-onboard">Configurer les paiements</button> <span style="opacity:.7">(requis pour vendre)</span>`;
+      app.querySelector("#pp-onboard")?.addEventListener("click", async () => {
+        try {
+          const r = await api("/api/billing/connect/onboard", { method: "POST", headers: jsonAuth() });
+          if (r?.url) location.assign(r.url);
+        } catch (e) { toast(e?.message || "Indisponible."); }
+      });
+    }
+  } catch { connectEl.innerHTML = ""; }
+  try {
+    const pages = (await api("/api/pages", { headers: authHeaders() })).pages || [];
+    app.querySelector("#pp-pages").innerHTML = pages.length
+      ? pages.map((p) =>
+          `<div class="pp-row"><b>${esc(p.title)}</b> <span class="lbl-sm">/${esc(p.slug)} · ${(p.price_cents / 100).toFixed(2)} ${(p.currency || "eur").toUpperCase()} · ${p.published ? "publiée" : "brouillon"}</span> <a href="/@${esc(data.handle)}/p/${esc(p.slug)}" target="_blank" rel="noopener">Voir ↗</a></div>`
+        ).join("")
+      : `<p class="lbl-sm">Aucune page payante pour l'instant.</p>`;
+  } catch { /* ignoré */ }
+  app.querySelector("#pp-save")?.addEventListener("click", async () => {
+    const slug = app.querySelector("#pp-slug")?.value.trim();
+    const title = app.querySelector("#pp-title")?.value.trim();
+    const price = Math.round(parseFloat(app.querySelector("#pp-price")?.value) * 100);
+    const content = app.querySelector("#pp-content")?.value || "";
+    const published = !!app.querySelector("#pp-pub")?.checked;
+    if (!slug || !title || !Number.isFinite(price) || price < 50) { toast("Slug, titre et prix (≥ 0,50 €) requis."); return; }
+    try {
+      await api("/api/pages", { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ slug, title, price_cents: price, content, published }) });
+      toast("Page enregistrée ✓");
+      void loadPaidPages(data);
+    } catch (e) {
+      toast(e?.message === "premium required" ? "Réservé aux comptes Premium." : (e?.message || "Échec."));
+    }
+  });
+}
+
 export function renderEditor(data) {
   // Invitation en attente (lien `/i/<token>` ouvert avant connexion) → accepter.
   consumePendingInvite();
@@ -170,7 +296,7 @@ export function renderEditor(data) {
   const dayLoad = dayLoadMap(data);
 
   const cols = [
-    renderHomeColumn(data, { photo }),
+    renderAccountColumn(data, { photo }),
     renderIdentityColumn(data, { photo, fieldEditHtml, socialEditHtml }),
     renderAgendaColumn(data, { reqFilterChips, requestsHtml, dayLoad }),
     renderRelationsColumn(data, { incomingListHtml }),
@@ -225,7 +351,7 @@ export function renderEditor(data) {
     </div>`;
   }
 
-  appState.commEmptyHtml = `<div class="comm-empty-state">${miloSvg(72)}<h3>Sélectionnez un contact</h3><p>Choisissez un contact à gauche pour démarrer une conversation ou passer un appel.</p></div>`;
+  appState.commEmptyHtml = `<div class="comm-empty-state"><h3>Sélectionnez un contact</h3><p>Choisissez un contact à gauche pour démarrer une conversation ou passer un appel.</p></div>`;
 
   const commColHtml = `<div class="comm-wrapper">
     <div class="comm-layout">
@@ -240,7 +366,7 @@ export function renderEditor(data) {
               + commContacts.filter(c => c.isConv).map(commContactHtml).join("")
               + (commContacts.some(c => !c.isConv) ? `<div class="comm-sep">Connexions directes</div>` : "")
               + commContacts.filter(c => !c.isConv).map(commContactHtml).join("")
-            : `<div class="comm-empty-state">${miloSvg(56)}<p>Aucun contact. Ajoutez des connexions pour pouvoir discuter.</p></div>`}
+            : `<div class="comm-empty-state"><p>Aucun contact. Ajoutez des connexions pour pouvoir discuter.</p></div>`}
         </div>
       </div>
       <div class="comm-right" id="comm-right">${appState.commEmptyHtml}</div>
@@ -250,7 +376,7 @@ export function renderEditor(data) {
   // Ordre du menu (communication d'abord) : Accueil · Chat · Notifs · Réseau ·
   // Mon ID · Galerie (plugin, order 45) · Agenda · Options (réglages, en dernier).
   const coreOrders = [5, 40, 50, 30, 20, 60, 10];
-  const coreLabels = ["Menu", "Identité", "Agenda", "Relations", "Notifications", "Options", "Chat"];
+  const coreLabels = ["Compte", "Identité", "Agenda", "Relations", "Notifications", "Options", "Chat"];
   const allCols = (() => {
     const list = [...cols, optCol, commColHtml]
       .map((html, i) => ({ order: coreOrders[i], label: coreLabels[i], html }))
@@ -267,11 +393,11 @@ export function renderEditor(data) {
   // partagé avec le nom et la photo issus de /api/me.
   setMeProfile({ name: _displayName, hasPhoto: data.hasPhoto });
   const BNAV = {
-    Menu: { label: "Accueil", ic: "home" },
     Identité: { label: "Mon ID", ic: "user" },
     Agenda: { label: "Agenda", ic: "calendar" },
     Relations: { label: "Réseau", ic: "users" },
     Notifications: { label: "Notifs", ic: "bell" },
+    Compte: { label: "Compte", ic: "user" },
     Galerie: { label: "Galerie", ic: "image" },
     Options: { label: "Options", ic: "settings" },
     Chat: { label: "Chat", ic: "chat" },
@@ -280,9 +406,8 @@ export function renderEditor(data) {
   app.innerHTML = `
    ${siteHeader({
      center: headerSearchHtml(),
-     right: `<button class="theme-toggle theme-toggle-header" id="theme-toggle-header" type="button" aria-label="Changer de thème"></button>
-       <button class="btn sm notif-wrap" id="notif-bell" aria-label="Notifications" title="Notifications">${icon("bell", 16)}<span class="notif-badge" id="notif-badge" ${data.unread ? "" : "hidden"}>${data.unread || ""}</span></button>
-       ${headerAccount()}`,
+     right: `<button class="btn sm notif-wrap" id="notif-bell" aria-label="Notifications" style="display:none"><span class="notif-badge" id="notif-badge" ${data.unread ? "" : "hidden"}>${data.unread || ""}</span></button>
+       ${headerAccount(data.unread || 0)}`,
    })}
    <div class="deck-viewport" id="deck-viewport">
      <div class="deck" id="deck">
@@ -297,7 +422,7 @@ export function renderEditor(data) {
        // Réseau · Agenda · Galerie · Options. « Mon ID » (Identité) est accessible
        // depuis l'Accueil (« Modifier ma carte ») ; les Notifications via la cloche
        // du header. L'ordre est fixe et chaque label n'apparaît qu'une fois.
-       const NAV = ["Menu", "Chat", "Relations", "Agenda", "Galerie", "Options"];
+       const NAV = ["Chat", "Relations", "Agenda", "Compte", "Options"];
        const navBtn = ({ i, label }) => {
          const cfg = BNAV[label] || { label, ic: "circle" };
          const isChat = label === "Chat";
@@ -324,12 +449,13 @@ export function renderEditor(data) {
    </nav>`;
   wireEditor(data);
   wireHeaderSearch();
-  // Bascule de thème intégrée à la barre (remplace le bouton flottant en vue connectée).
-  app.querySelector("#theme-toggle-header")?.addEventListener("click", toggleTheme);
+  wireProfileMenuBtn();
   applyTheme(document.documentElement.getAttribute("data-theme") || "dark"); // pose l'icône sur le bouton fraîchement rendu
   setupTabs();
   // Câblage des colonnes contribuées par les plugins (ex. boutons « Ouvrir » du chat).
   allCols.forEach((c, i) => c.wire && c.wire(app.querySelector(`[data-col="${i}"]`), data));
+  // Abonnement : retours de paiement Stripe + reprise d'intention post-inscription.
+  handleBilling(data);
 }
 
 export function setupTabs() {
@@ -381,6 +507,14 @@ export function setupTabs() {
   }
 
   deckState.go = go;
+  // Navigation par label sur le closure cols/go courant de l'éditeur (jamais
+  // périmé) : hook e2e + pratique au débogage. Inoffensif en prod.
+  deckState.goLabel = (label) => {
+    const i = cols.findIndex((c) => c.dataset.deckLabel === label);
+    if (i >= 0) go(i);
+    return i >= 0;
+  };
+  if (typeof window !== "undefined") window.__deckGoLabel = deckState.goLabel;
 
   navItems.forEach((btn) => {
     btn.addEventListener("click", () => go(Number(btn.dataset.col)));
@@ -392,6 +526,11 @@ export function setupTabs() {
     if (e.key === "ArrowLeft") go(deckState.index - 1);
   });
 
+  // Premier chargement (index=0) → atterrir sur Chat par défaut.
+  if (deckState.index === 0) {
+    const chatIdx = cols.findIndex(c => c.dataset.deckLabel === "Chat");
+    if (chatIdx >= 0) deckState.index = chatIdx;
+  }
   go(clamp(deckState.index)); // restaure l'onglet actif
 }
 
@@ -715,12 +854,35 @@ export function wireEditor(data) {
   // Disponibilités : navigation de mois + bascule des jours (plugin calendrier)
   host.calendar.wire(app.querySelector(".calendar"), data.overrides || {}, true, data.handle, dayLoadMap(data));
 
+  // Aperçu façon téléphone (colonne Accueil) : swipe entre Accueil / Calendrier /
+  // Galerie + pastilles de pagination, et montage de la vraie galerie (plugin).
+  const ltScreens = app.querySelector("#lt-screens");
+  if (ltScreens) {
+    const dots = [...app.querySelectorAll("#lt-dots .lt-dot")];
+    const goTo = (i) => ltScreens.scrollTo({ left: i * ltScreens.clientWidth, behavior: "smooth" });
+    dots.forEach((d, i) => d.addEventListener("click", () => goTo(i)));
+    ltScreens.addEventListener("scroll", () => {
+      const i = Math.round(ltScreens.scrollLeft / Math.max(1, ltScreens.clientWidth));
+      dots.forEach((d, k) => {
+        d.classList.toggle("is-on", k === i);
+        d.setAttribute("aria-selected", k === i ? "true" : "false");
+      });
+    }, { passive: true });
+    // Galerie réelle (même source que la page publique) ; repli si vide ou erreur.
+    const gslot = app.querySelector("#lt-gallery-slot");
+    if (gslot) {
+      Promise.resolve(host.gallery?.mountPublic?.(gslot, data.handle))
+        .then((ok) => { if (!ok) gslot.innerHTML = `<p class="lt-empty">Aucune photo dans ta galerie.</p>`; })
+        .catch(() => { gslot.innerHTML = `<p class="lt-empty">Galerie indisponible.</p>`; });
+    }
+  }
+
   // QR code de la page publique
   app.querySelector("#qr-btn")?.addEventListener("click", () =>
-    openQR(`${location.origin}${data.publicUrl}`, `@${data.handle}`, data)
+    openQR(`${location.origin}${data.publicUrl}`, `@${data.handle}`)
   );
   app.querySelector("#hm-qr-btn")?.addEventListener("click", () =>
-    openQR(`${location.origin}${data.publicUrl}`, `@${data.handle}`, data)
+    openQR(`${location.origin}${data.publicUrl}`, `@${data.handle}`)
   );
   // Tous les toggles data-setting (banner + onglet Options)
   app.querySelectorAll("[data-setting]").forEach((input) => {
@@ -739,7 +901,7 @@ export function wireEditor(data) {
     openE2eBackup(data.handle, appState.key, refreshVaultStatus)
   );
   app.querySelector("#opt-qr-link")?.addEventListener("click", () =>
-    openQR(`${location.origin}${data.publicUrl}`, `@${data.handle}`, data)
+    openQR(`${location.origin}${data.publicUrl}`, `@${data.handle}`)
   );
   // Communications column wiring
   const commContactList = app.querySelector("#comm-contacts");
@@ -768,28 +930,23 @@ export function wireEditor(data) {
         wire?.(commRight); // wireChat a besoin que #ch-close existe dans le DOM
         // Ajouter le bouton Appel vidéo à droite du bouton Envoyer dans le formulaire
         const form = commRight.querySelector("#ch-form");
-        if (form && !form.querySelector("#comm-call-vid")) {
-          // Appel = on joint d'abord le contact, puis on démarre audio ou vidéo selon le bouton.
-          const placeCall = async (video) => {
+        if (form && !form.querySelector("#comm-call-btn")) {
+          const placeCall = async () => {
             try {
               const p = await api(`/api/identities/${encodeURIComponent(h)}`, { headers: authHeaders() });
               if (!p.pubkey) return toast("Appels non disponibles pour ce contact.");
-              if (host.call) host.call.start(h, p.pubkey, { video });
+              if (host.call) host.call.start(h, p.pubkey, { video: true });
             } catch { toast("Impossible de joindre ce contact."); }
           };
-          const mkCallBtn = (id, ttl, ic, video) => {
-            const b = document.createElement("button");
-            b.type = "button";
-            b.id = id;
-            b.className = "btn";
-            b.title = ttl;
-            b.setAttribute("aria-label", ttl);
-            b.innerHTML = icon(ic, 18);
-            b.addEventListener("click", () => placeCall(video));
-            return b;
-          };
-          form.appendChild(mkCallBtn("comm-call-aud", "Appel audio", "phone", false));
-          form.appendChild(mkCallBtn("comm-call-vid", "Appel vidéo", "camera", true));
+          const b = document.createElement("button");
+          b.type = "button";
+          b.id = "comm-call-btn";
+          b.className = "btn";
+          b.title = "Appeler (vidéo activable pendant l'appel)";
+          b.setAttribute("aria-label", "Appeler");
+          b.innerHTML = icon("phone", 18);
+          b.addEventListener("click", placeCall);
+          form.appendChild(b);
         }
         return commRight;
       };
@@ -863,11 +1020,10 @@ export function wireEditor(data) {
 
   // Notifications : la cloche mène à la colonne Notifications + marque lues
   const markRead = () => {
-    const badge = app.querySelector("#notif-badge");
-    if (badge) {
-      badge.hidden = true;
-      badge.textContent = "";
-    }
+    ["#notif-badge", "#chip-notif-dot"].forEach((sel) => {
+      const badge = app.querySelector(sel);
+      if (badge) { badge.hidden = true; badge.textContent = ""; }
+    });
     const count = app.querySelector("#notif-count");
     if (count) count.textContent = "0 non lue(s)";
     app.querySelectorAll("#notif-list .notif.unread").forEach((n) => n.classList.remove("unread"));
@@ -898,6 +1054,8 @@ export function wireEditor(data) {
     const act = e.target.closest("[data-action]");
     if (act) { e.stopPropagation(); openContactPicker(act.dataset.action); }
   });
+  // Aperçu téléphone : « Prendre rendez-vous » (écran Calendrier) → onglet Agenda.
+  app.querySelector("#lt-book")?.addEventListener("click", () => deckGoLabel("Agenda"));
 
   // Sélecteur de contact : tuiles « Discuter » / « Passer un appel » du Menu.
   async function openContactPicker(mode) {
@@ -1022,18 +1180,27 @@ export function wireEditor(data) {
     e.stopPropagation();
   });
 
-  // Onglets de la colonne Relations (Amis / Réseau)
-  app.querySelectorAll(".rel-tab").forEach((tab) => {
-    tab.addEventListener("click", () => {
-      app.querySelectorAll(".rel-tab").forEach((t) => {
-        t.classList.toggle("active", t === tab);
-        t.setAttribute("aria-selected", String(t === tab));
-      });
-      const id = tab.dataset.tab;
-      app.querySelectorAll(".rel-panel").forEach((p) => {
-        p.hidden = p.id !== `rel-${id}`;
-      });
+  // Chips degré + type de la colonne Relations
+  app.querySelectorAll("#rel-degree-chips .rel-chip").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      app.querySelectorAll("#rel-degree-chips .rel-chip").forEach((c) => c.classList.toggle("active", c === chip));
+      filterRels();
     });
+  });
+  app.querySelectorAll("#rel-type-chips .rel-chip").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      app.querySelectorAll("#rel-type-chips .rel-chip").forEach((c) => c.classList.toggle("active", c === chip));
+      filterRels();
+    });
+  });
+  // Bannière demandes en attente
+  app.querySelector("#rel-pending-toggle")?.addEventListener("click", () => {
+    const panel = app.querySelector("#rel-pending-panel");
+    const btn = app.querySelector("#rel-pending-toggle");
+    if (!panel || !btn) return;
+    const expanded = panel.hidden;
+    panel.hidden = !expanded;
+    btn.setAttribute("aria-expanded", String(expanded));
   });
 
   // Onglets de la carte Identité (Profil / Réseaux)
@@ -1050,7 +1217,7 @@ export function wireEditor(data) {
     });
   });
 
-  // Onglets de la colonne Options (Confidentialité / Sécurité / Accès / Compte)
+  // Onglets de la colonne « Mon compte » (Abonnement / Sécurité / Accès / Données)
   app.querySelectorAll(".opt-tab").forEach((tab) => {
     tab.addEventListener("click", () => {
       app.querySelectorAll(".opt-tab").forEach((t) => {
@@ -1063,6 +1230,59 @@ export function wireEditor(data) {
       });
     });
   });
+
+  // Abonnement (Mon compte) : démarrer un abonnement / ouvrir le portail Stripe.
+  app.querySelector("#opt-upgrade-btn")?.addEventListener("click", startCheckout);
+  app.querySelector("#opt-portal-btn")?.addEventListener("click", openBillingPortal);
+
+  // Avatar upload depuis l'onglet Compte.
+  app.querySelector("#acc-av-upload")?.addEventListener("change", async (ev) => {
+    const file = ev.target.files?.[0];
+    if (file) await uploadPhotoBlob(file);
+  });
+
+  // Personnalisation Premium (colonne Accueil) : couverture + boutons (P4/P5).
+  const reloadEditor = async () => {
+    const fresh = await api("/api/me", { headers: authHeaders() });
+    renderEditor(fresh);
+  };
+  const premErr = (e) => toast(e?.message === "premium required" ? "Réservé aux comptes Premium." : (e?.message || "Échec."));
+  app.querySelector("#lt-go-premium")?.addEventListener("click", startCheckout);
+  const coverInput = app.querySelector("#cover-file");
+  coverInput?.addEventListener("change", async () => {
+    const file = coverInput.files?.[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("cover", file);
+    try { await api("/api/cover", { method: "POST", headers: authHeaders(), body: fd }); toast("Couverture mise à jour ✓"); await reloadEditor(); }
+    catch (e) { premErr(e); }
+  });
+  app.querySelector("#cover-remove")?.addEventListener("click", async () => {
+    try { await api("/api/cover", { method: "DELETE", headers: authHeaders() }); toast("Couverture retirée"); await reloadEditor(); }
+    catch (e) { premErr(e); }
+  });
+  app.querySelector("#pb-add")?.addEventListener("click", () => {
+    const list = app.querySelector("#pb-list");
+    if (!list) return;
+    const row = document.createElement("div");
+    row.className = "pb-row";
+    row.innerHTML = `<input class="pb-label" placeholder="Libellé" maxlength="80"><input class="pb-url" placeholder="https://…" maxlength="2000"><button type="button" class="pb-del" title="Retirer">✕</button>`;
+    list.appendChild(row);
+  });
+  app.querySelector("#pb-list")?.addEventListener("click", (e) => {
+    const del = e.target.closest?.(".pb-del");
+    if (del) del.closest(".pb-row")?.remove();
+  });
+  app.querySelector("#pb-save")?.addEventListener("click", async () => {
+    const buttons = [...app.querySelectorAll("#pb-list .pb-row")]
+      .map((r) => ({ label: r.querySelector(".pb-label")?.value.trim() || "", url: r.querySelector(".pb-url")?.value.trim() || "" }))
+      .filter((b) => b.label && b.url);
+    try { await api("/api/page/buttons", { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ buttons }) }); toast("Boutons enregistrés ✓"); }
+    catch (e) { premErr(e); }
+  });
+
+  // Pages payantes (P7) : statut Connect + liste + création. Premium uniquement.
+  void loadPaidPages(data);
 
   // Onglet « Options » : chaque bascule enregistre la préférence immédiatement.
   // « Vidéo » dépend d'« Appels » : on la désactive visuellement si les appels
@@ -1608,6 +1828,65 @@ export function wireEditor(data) {
   });
 
   // Relations : ajouter (avec type) / retirer
+  // Autocomplete sur le champ @handle à relier
+  {
+    const relHandle = app.querySelector("#rel-handle");
+    const relHandleResults = app.querySelector("#rel-handle-results");
+    let relHandleTimer;
+    const hideRelResults = () => { if (relHandleResults) relHandleResults.hidden = true; };
+
+    relHandle?.addEventListener("input", () => {
+      clearTimeout(relHandleTimer);
+      const q = relHandle.value.trim();
+      if (!q) { hideRelResults(); return; }
+      relHandleTimer = setTimeout(async () => {
+        try {
+          const { results: list } = await api(`/api/search?q=${encodeURIComponent(q)}`);
+          if (!list?.length) { hideRelResults(); return; }
+          relHandleResults.innerHTML = list.map((r) => {
+            const initials = (r.name || r.handle).slice(0, 2).toUpperCase();
+            const avatar = r.photo
+              ? `<img class="rhr-av" src="${esc(r.photo)}" alt="" loading="lazy" />`
+              : `<span class="rhr-av">${esc(initials)}</span>`;
+            return `<button class="rel-handle-result" data-handle="${esc(r.handle)}" type="button">
+              ${avatar}
+              <span class="rhr-info">
+                <span class="nm">${esc(r.name || r.handle)}</span>
+                <span class="hd">@${esc(r.handle)}</span>
+              </span>
+            </button>`;
+          }).join("");
+          relHandleResults.hidden = false;
+        } catch { /* silencieux */ }
+      }, 200);
+    });
+
+    relHandle?.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") hideRelResults();
+      if (e.key === "ArrowDown") {
+        const first = relHandleResults?.querySelector(".rel-handle-result");
+        first?.focus();
+        e.preventDefault();
+      }
+    });
+
+    relHandleResults?.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { hideRelResults(); relHandle?.focus(); }
+    });
+
+    relHandleResults?.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-handle]");
+      if (!btn) return;
+      relHandle.value = btn.dataset.handle;
+      hideRelResults();
+      relHandle.focus();
+    });
+
+    document.addEventListener("click", (e) => {
+      if (!relHandle?.closest(".handle-input")?.contains(e.target)) hideRelResults();
+    }, { capture: true });
+  }
+
   app.querySelector("#add-rel")?.addEventListener("click", async () => {
     const handle = app.querySelector("#rel-handle").value.trim();
     const type = app.querySelector("#rel-type").value;
@@ -1650,22 +1929,34 @@ export function wireEditor(data) {
     })
   );
 
-  // Recherche + filtre date des relations
+  // Recherche + chips degré/type des relations
   const relSearch = app.querySelector("#rel-search");
-  const relDate = app.querySelector("#rel-datefilter");
   const filterRels = () => {
     const q = (relSearch?.value || "").trim().toLowerCase();
-    const days = Number(relDate?.value || 0);
-    const minTs = days ? Date.now() - days * 86400000 : 0;
-    app.querySelectorAll(".col .rel").forEach((li) => {
+    const activeDeg = app.querySelector("#rel-degree-chips .rel-chip.active")?.dataset.degree ?? "";
+    const activeType = app.querySelector("#rel-type-chips .rel-chip.active")?.dataset.reltype ?? "";
+    let anyVisible = false;
+    app.querySelectorAll("#rel-all-list .rel").forEach((li) => {
       const okText = !q || (li.dataset.search || "").includes(q);
-      const ts = Number(li.dataset.ts || 0);
-      const okDate = !minTs || (ts && ts >= minTs);
-      li.style.display = okText && okDate ? "" : "none";
+      const okDeg = !activeDeg || li.dataset.degree === activeDeg;
+      const okType = !activeType || li.dataset.type === activeType;
+      const show = okText && okDeg && okType;
+      li.style.display = show ? "" : "none";
+      if (show) anyVisible = true;
     });
+    // Hide degree separators when all their items are hidden
+    app.querySelectorAll("#rel-all-list .rel-deg-sep").forEach((sep) => {
+      const d = sep.dataset.degree;
+      const hasVisible = [...app.querySelectorAll(`#rel-all-list .rel[data-degree="${d}"]`)].some(
+        (li) => li.style.display !== "none"
+      );
+      sep.hidden = !hasVisible;
+    });
+    // Show "no results" message
+    const noRes = app.querySelector("#rel-no-results");
+    if (noRes) noRes.hidden = anyVisible || !q && !activeDeg && !activeType;
   };
   relSearch?.addEventListener("input", filterRels);
-  relDate?.addEventListener("change", filterRels);
 
   // Demandes de RDV : statut, suppression, filtre — tout en place (pas de reload,
   // on reste sur l'onglet RDV actif).

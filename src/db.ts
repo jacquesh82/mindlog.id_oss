@@ -74,9 +74,9 @@ export function newAccessKey(): string {
 
 export async function getGallery(
   identityId: number
-): Promise<{ id: number; filename: string; likes: number; position: number }[]> {
+): Promise<{ id: number; filename: string; link_url: string; likes: number; position: number }[]> {
   const res = await db.execute(sql`
-    SELECT g.id, g.filename, g.position,
+    SELECT g.id, g.filename, g.link_url, g.position,
            COUNT(l.photo_id)::int AS likes
     FROM ${gallery} g
     LEFT JOIN ${galleryLikes} l ON l.photo_id = g.id
@@ -85,7 +85,21 @@ export async function getGallery(
     ORDER BY g.position, g.id
     LIMIT 10
   `);
-  return res.rows as { id: number; filename: string; likes: number; position: number }[];
+  return res.rows as { id: number; filename: string; link_url: string; likes: number; position: number }[];
+}
+
+/** Définit/efface le lien cliquable d'une photo (Premium P6), si elle appartient au titulaire. */
+export async function setGalleryLink(
+  photoId: number,
+  identityId: number,
+  linkUrl: string
+): Promise<boolean> {
+  const r = await db
+    .update(gallery)
+    .set({ link_url: linkUrl })
+    .where(and(eq(gallery.id, photoId), eq(gallery.identity_id, identityId)))
+    .returning({ id: gallery.id });
+  return r.length > 0;
 }
 
 export async function countGallery(identityId: number): Promise<number> {

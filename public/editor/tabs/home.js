@@ -2,7 +2,7 @@
 // publique (style linktr.ee) à gauche + colonne « back-office » à droite.
 // Builder de rendu pur (câblage dans wireEditor). cf. docs/web-app-split-proposal.md
 import { esc } from "../../ui/dom.js";
-import { SOCIAL_BY_KEY, icon, isSocialKey, miloSvg, socialIcon, socialUrl } from "../../ui/icons.js";
+import { icon, miloSvg } from "../../ui/icons.js";
 
 export function renderHomeColumn(data, { photo }) {
   const rel = data.relations || { 1: [], 2: [], 3: [] };
@@ -19,6 +19,9 @@ export function renderHomeColumn(data, { photo }) {
   const hmProfilePublic = data.settings?.profile_public !== false;
   const hmAgendaPublic = data.settings?.public_availability !== false;
   const hmGalleryPublic = data.settings?.gallery_public !== false;
+  // Couverture de l'aperçu façon téléphone : champ « cover » s'il existe un jour,
+  // sinon l'image par défaut (caméléon).
+  const coverUrl = hmGet("cover") || "/static/default-cover.webp";
 
   function hmEventCard(e) {
     const d = new Date(e.starts_at);
@@ -34,40 +37,72 @@ export function renderHomeColumn(data, { photo }) {
     </div>`;
   }
 
-  function hmNotifRow(n) {
-    return `<div class="hm-notif ${n.read ? "" : "unread"}">
-      <div class="hm-notif-dot"></div>
-      <div class="hm-notif-text">${esc(n.text || "")}</div>
+  // Mini-calendrier autonome (mois courant) pour l'écran « Calendrier » de l'aperçu
+  // téléphone : grille lundi→dimanche, pastille sur les jours à événement, puis les
+  // 2 prochains événements. Aucune dépendance au plugin calendrier (évite tout
+  // conflit de câblage avec l'onglet Agenda).
+  function miniCalHtml(events) {
+    const now = new Date();
+    const y = now.getFullYear(), m = now.getMonth(), today = now.getDate();
+    const monthName = now.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+    const startOffset = (new Date(y, m, 1).getDay() + 6) % 7; // lundi = 0
+    const daysInMonth = new Date(y, m + 1, 0).getDate();
+    const evtDays = new Set(
+      (events || [])
+        .map(e => new Date(e.starts_at))
+        .filter(d => !isNaN(d) && d.getFullYear() === y && d.getMonth() === m)
+        .map(d => d.getDate())
+    );
+    let cells = "";
+    for (let i = 0; i < startOffset; i++) cells += `<span class="lt-cal-cell is-empty"></span>`;
+    for (let d = 1; d <= daysInMonth; d++) {
+      const cls = [d === today ? "is-today" : "", evtDays.has(d) ? "has-evt" : ""].filter(Boolean).join(" ");
+      cells += `<span class="lt-cal-cell ${cls}">${d}${evtDays.has(d) ? `<span class="lt-cal-dot"></span>` : ""}</span>`;
+    }
+    const floor = new Date(y, m, today);
+    const next = [...(events || [])]
+      .filter(e => { const d = new Date(e.starts_at); return !isNaN(d) && d >= floor; })
+      .sort((a, b) => (a.starts_at || "").localeCompare(b.starts_at || ""))
+      .slice(0, 2);
+    const nextHtml = next.length
+      ? `<div class="lt-cal-next">${next.map(hmEventCard).join("")}</div>`
+      : `<p class="lt-empty">Aucun événement à venir.</p>`;
+    return `<div class="lt-cal">
+      <div class="lt-cal-month">${esc(monthName)}</div>
+      <div class="lt-cal-grid">
+        ${["L","M","M","J","V","S","D"].map(x => `<span class="lt-cal-dow">${x}</span>`).join("")}
+        ${cells}
+      </div>
+      ${nextHtml}
     </div>`;
   }
 
-  // Un « lien » de la pile linktr.ee (interne via data-goto, ou externe via href).
-  function ltLink({ href = "", goto = "", id = "", ic, label, brand = "", ext = false, muted = false }) {
-    const attrs = href
-      ? `href="${esc(href)}" target="_blank" rel="noopener noreferrer"`
-      : `type="button"${goto ? ` data-goto="${esc(goto)}"` : ""}${id ? ` id="${id}"` : ""}`;
-    const tag = href ? "a" : "button";
-    return `<${tag} class="lt-link${muted ? " lt-link-muted" : ""}" ${attrs}${brand ? ` style="--lt-brand:${brand}"` : ""}>
-      <span class="lt-link-ic">${ic}</span>
-      <span class="lt-link-label">${esc(label)}</span>
-      ${ext ? `<span class="lt-link-ext" aria-hidden="true">↗</span>` : `<span class="lt-link-go" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></span>`}
-    </${tag}>`;
+  function hmActivityRow(n) {
+    const t = n.type || "";
+    const ic = t === "subscription" ? icon("sparkles", 13)
+      : t === "meeting"             ? icon("calendar", 13)
+      : t === "call"                ? icon("phone", 13)
+      : t === "message"             ? icon("chat", 13)
+      : t === "like"                ? "♥"
+      :                               icon("clock", 13);
+    return `<div class="hm-act-row ${n.read ? "" : "unread"}">
+      <span class="hm-act-ic hm-act-ic--${t || "notif"}">${ic}</span>
+      <div class="hm-act-text">${esc(n.text || "")}</div>
+    </div>`;
   }
-
-  // Réseaux sociaux renseignés → autant de liens (couleur de marque).
-  const socialLinks = (data.fields || [])
-    .filter(f => isSocialKey(f.key) && f.value && f.value.trim())
-    .map(f => {
-      const net = SOCIAL_BY_KEY[f.key.replace(/^social_/, "")];
-      if (!net) return "";
-      const url = socialUrl(net, f.value);
-      if (!url) return "";
-      return ltLink({ href: url, ic: socialIcon(net, 18), label: net.label, brand: net.color, ext: true });
-    }).join("");
 
   const vaultBadge = data.hasVault
     ? `<span class="hm-badge vault">${icon("lock", 11)} E2E activé</span>`
     : `<span class="hm-badge secret">${icon("lock", 11)} Sans coffre</span>`;
+
+  // Personnalisation Premium (P4/P5) : couverture + boutons, éditables si Premium.
+  const isPrem = data.plan === "premium" || data.subscription?.plan === "premium";
+  const pbRowHtml = (b = { label: "", url: "" }) =>
+    `<div class="pb-row">
+      <input class="pb-label" placeholder="Libellé" maxlength="80" value="${esc(b.label || "")}" ${isPrem ? "" : "disabled"}>
+      <input class="pb-url" placeholder="https://…" maxlength="2000" value="${esc(b.url || "")}" ${isPrem ? "" : "disabled"}>
+      <button type="button" class="pb-del" title="Retirer" ${isPrem ? "" : "disabled"}>✕</button>
+    </div>`;
 
   return `<div class="hm-dashboard">
 
@@ -83,56 +118,122 @@ export function renderHomeColumn(data, { photo }) {
         <section class="hm-section hm-public">
           <div class="hm-section-title">Aperçu de ta page publique <a href="/@${esc(data.handle)}" target="_blank" rel="noopener noreferrer">Ouvrir ↗</a></div>
 
-          <div class="lt-inner">
-            <div class="lt-head">
-              <div class="lt-av">${photo}</div>
-              ${hmDisplayName ? `<div class="lt-name">${esc(hmDisplayName)}</div>` : ""}
-              <div class="lt-handle${hmDisplayName ? "" : " lt-name"}">@${esc(data.handle)}</div>
-              ${hmTitle ? `<div class="lt-role">${esc(hmTitle)}</div>` : ""}
-              ${hmLocation ? `<div class="lt-loc">${icon("pin", 13)} ${esc(hmLocation)}</div>` : ""}
-              <div class="hm-badges" id="hm-vault-badges">${vaultBadge}</div>
-            </div>
+          <div class="lt-phone-cols">
+          <div class="lt-phone" role="group" aria-label="Aperçu façon smartphone — glisse pour voir les écrans">
+            <span class="lt-phone-notch" aria-hidden="true"></span>
+            <div class="lt-phone-screen" style="--lt-cover:url('${esc(coverUrl)}')">
+              <div class="lt-screens" id="lt-screens">
 
-            <!-- Pile de liens : nav interne en data-goto (délégué via #menu-nav) -->
-            <div class="lt-links" id="menu-nav">
-              ${ltLink({ href: `/@${esc(data.handle)}`, ic: icon("link", 18), label: "Ma page publique", ext: true })}
-              ${ltLink({ id: "hm-qr-btn", ic: icon("qr", 18), label: "Mon QR code" })}
-              ${socialLinks}
-              ${hmAgendaPublic ? ltLink({ goto: "Agenda", ic: icon("calendar", 18), label: "Prendre rendez-vous" }) : ""}
-              ${hmGalleryPublic ? ltLink({ goto: "Galerie", ic: icon("image", 18), label: "Ma galerie" }) : ""}
-              ${ltLink({ goto: "Identité", ic: icon("user", 18), label: "Modifier ma carte", muted: true })}
-            </div>
+                <!-- Écran 1 : Accueil — couverture plein écran + identité en overlay bas -->
+                <section class="lt-screen lt-screen--cover" data-screen="home" aria-label="Accueil">
+                  <div class="lt-cover-full" style="background-image:url('${esc(coverUrl)}')" aria-hidden="true"></div>
+                  <button type="button" class="lt-qr" id="hm-qr-btn" aria-label="Afficher mon QR code" title="Mon QR code">${icon("qr", 18)}</button>
+                  <div class="lt-identity">
+                    ${hmDisplayName ? `<div class="lt-name">${esc(hmDisplayName)}</div>` : ""}
+                    <div class="lt-handle${hmDisplayName ? "" : " lt-name"}">@${esc(data.handle)}</div>
+                    ${hmTitle ? `<div class="lt-role">${esc(hmTitle)}</div>` : ""}
+                    ${hmLocation ? `<div class="lt-loc">${icon("pin", 13)} ${esc(hmLocation)}</div>` : ""}
+                  </div>
+                </section>
 
-            <!-- Config : ce qui est visible publiquement -->
-            <div class="lt-config">
-              <div class="lt-config-title">Visible publiquement</div>
-              <div class="hm-privacy-toggles">
-                <label class="hm-toggle">
-                  <span class="hm-toggle-ic">${icon("user", 14)}</span>
-                  <span class="hm-toggle-label">Profil public</span>
-                  <input type="checkbox" data-setting="profile_public" ${hmProfilePublic ? "checked" : ""}>
-                  <span class="hm-toggle-sw"></span>
-                </label>
-                <label class="hm-toggle">
-                  <span class="hm-toggle-ic">${icon("calendar", 14)}</span>
-                  <span class="hm-toggle-label">Agenda public</span>
-                  <input type="checkbox" data-setting="public_availability" ${hmAgendaPublic ? "checked" : ""}>
-                  <span class="hm-toggle-sw"></span>
-                </label>
-                <label class="hm-toggle">
-                  <span class="hm-toggle-ic">${icon("image", 14)}</span>
-                  <span class="hm-toggle-label">Galerie publique</span>
-                  <input type="checkbox" data-setting="gallery_public" ${hmGalleryPublic ? "checked" : ""}>
-                  <span class="hm-toggle-sw"></span>
-                </label>
+                <!-- Écran 2 : Calendrier — mini-mois autonome (issu des événements) -->
+                <section class="lt-screen lt-screen--pad" data-screen="cal" aria-label="Calendrier">
+                  <div class="lt-screen-h">${icon("calendar", 18)} Agenda</div>
+                  ${miniCalHtml(data.events)}
+                  ${hmAgendaPublic ? `<button type="button" class="btn primary lt-book" id="lt-book">${icon("calendar", 16)} Prendre rendez-vous</button>` : ""}
+                </section>
+
+                <!-- Écran 3 : Galerie — montée via le plugin (repli si vide), cf. wireEditor -->
+                <section class="lt-screen lt-screen--pad" data-screen="gallery" aria-label="Galerie">
+                  <div class="lt-screen-h">${icon("image", 18)} Galerie</div>
+                  <div id="lt-gallery-slot" class="lt-gallery-slot"></div>
+                </section>
+
               </div>
-              <button type="button" class="lt-tour" id="hm-tour-btn" title="Visite guidée avec Milo">🦎 Refaire la visite guidée</button>
+              <!-- Indicateur de pagination — colonne verticale sur le bord droit de l'écran -->
+              <div class="lt-dots" id="lt-dots" role="tablist" aria-label="Écrans de l'aperçu">
+                <button type="button" class="lt-dot is-on" data-go="0" aria-label="Accueil"></button>
+                <button type="button" class="lt-dot" data-go="1" aria-label="Calendrier"></button>
+                <button type="button" class="lt-dot" data-go="2" aria-label="Galerie"></button>
+              </div>
             </div>
           </div>
+
+          <!-- Réglages de visibilité + visite : contrôles d'édition, hors téléphone -->
+          <div class="lt-config lt-controls">
+            <div class="lt-config-title">Visible publiquement</div>
+            <div class="hm-privacy-toggles">
+              <label class="hm-toggle">
+                <span class="hm-toggle-ic">${icon("user", 14)}</span>
+                <span class="hm-toggle-label">Profil public</span>
+                <input type="checkbox" data-setting="profile_public" ${hmProfilePublic ? "checked" : ""}>
+                <span class="hm-toggle-sw"></span>
+              </label>
+              <label class="hm-toggle">
+                <span class="hm-toggle-ic">${icon("calendar", 14)}</span>
+                <span class="hm-toggle-label">Agenda public</span>
+                <input type="checkbox" data-setting="public_availability" ${hmAgendaPublic ? "checked" : ""}>
+                <span class="hm-toggle-sw"></span>
+              </label>
+              <label class="hm-toggle">
+                <span class="hm-toggle-ic">${icon("image", 14)}</span>
+                <span class="hm-toggle-label">Galerie publique</span>
+                <input type="checkbox" data-setting="gallery_public" ${hmGalleryPublic ? "checked" : ""}>
+                <span class="hm-toggle-sw"></span>
+              </label>
+            </div>
+
+            <button type="button" class="lt-tour" id="hm-tour-btn" title="Visite guidée avec Milo">🦎 Refaire la visite guidée</button>
+          </div><!-- /lt-controls -->
+          </div><!-- /lt-phone-cols -->
         </section>
 
         <!-- ===== DROITE : coup d'œil / back-office ===== -->
         <aside class="hm-aside">
+
+          <!-- Bloc Premium dédié -->
+          ${isPrem
+            ? `<div class="hm-prem-card hm-prem-card--active">
+                <div class="hm-prem-hd">
+                  <span class="hm-prem-ic">${icon("sparkles", 16)}</span>
+                  <div>
+                    <div class="hm-prem-title">Personnalisation <span class="hm-badge premium" style="vertical-align:middle">${icon("sparkles", 10)} Premium</span></div>
+                  </div>
+                </div>
+                <div class="lt-prem-row">
+                  <span class="lt-prem-label">${icon("image", 14)} Couverture (photo ou vidéo)</span>
+                  <div class="lt-prem-actions">
+                    <label class="btn sm">${icon("image", 13)} Choisir…<input type="file" id="cover-file" accept="image/*,video/mp4,video/webm" hidden></label>
+                    ${data.cover ? `<button type="button" class="btn sm danger" id="cover-remove">Retirer</button>` : ""}
+                  </div>
+                </div>
+                <div class="lt-prem-row lt-prem-col">
+                  <span class="lt-prem-label">${icon("link", 14)} Boutons personnalisés</span>
+                  <div id="pb-list" class="pb-list">${(data.buttons || []).map((b) => pbRowHtml(b)).join("")}</div>
+                  <div class="lt-prem-actions">
+                    <button type="button" class="btn sm" id="pb-add">+ Ajouter</button>
+                    <button type="button" class="btn sm primary" id="pb-save">Enregistrer</button>
+                  </div>
+                </div>
+              </div>`
+            : `<div class="hm-prem-card">
+                <div class="hm-prem-hd">
+                  <span class="hm-prem-ic">${icon("sparkles", 22)}</span>
+                  <div>
+                    <div class="hm-prem-title">Passe en Premium</div>
+                    <div class="hm-prem-sub">Personnalise ta page à ton image</div>
+                  </div>
+                  <span class="hm-badge premium" style="margin-left:auto;flex-shrink:0">1 €/mois</span>
+                </div>
+                <ul class="hm-prem-features">
+                  <li>Photo ou vidéo de couverture</li>
+                  <li>Boutons de liens personnalisés</li>
+                  <li>Mise en avant sur le réseau</li>
+                </ul>
+                <button type="button" class="btn primary" id="lt-go-premium" style="width:100%;justify-content:center">${icon("sparkles", 14)} Passer Premium — 1 €/mois</button>
+              </div>`
+          }
+
           <div class="hm-section">
             <div class="hm-section-title">Coup d'œil</div>
             <div class="hm-stats-grid">
@@ -152,12 +253,9 @@ export function renderHomeColumn(data, { photo }) {
 
           <div class="hm-section">
             <div class="hm-section-title">Activité récente <a data-goto="Notifications" href="#">Tout voir</a></div>
-            ${hmNotifs.length ? `<div class="hm-notifs">${hmNotifs.map(hmNotifRow).join("")}</div>` : `<div class="hm-empty">Aucune activité récente</div>`}
+            ${hmNotifs.length ? `<div class="hm-activity">${hmNotifs.map(hmActivityRow).join("")}</div>` : `<div class="hm-empty">Aucune activité récente</div>`}
           </div>
         </aside>
       </div>
-
-      <!-- Pied de page avec Milo -->
-      <div style="text-align:center;padding:1.5rem 0 .5rem;opacity:.5" aria-hidden="true">${miloSvg(56)}</div>
     </div>`;
 }

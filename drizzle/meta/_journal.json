@@ -141,6 +141,34 @@
       "when": 1780176520358,
       "tag": "0019_soft_argent",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1780780000000,
+      "tag": "0020_premium_subscriptions",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1780780100000,
+      "tag": "0021_premium_page_features",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1780780200000,
+      "tag": "0022_billing_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1780780300000,
+      "tag": "0023_paid_pages",
+      "breakpoints": true
     }
   ]
 }

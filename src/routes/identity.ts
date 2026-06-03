@@ -31,9 +31,11 @@ import {
   getE2eVault,
   getRequests,
   pendingRequestCount,
+  setCoverFile,
   type Identity,
   type Settings,
 } from "../store.js";
+import { isPremium, getSubscription, subscriptionIsPremium, listButtons } from "../premium-api.js";
 import { listSessions } from "../session.js";
 import { getConversationsFor } from "../messages.js";
 import { appUrl, isMailConfigured, sendMail } from "../mailer.js";
@@ -76,6 +78,17 @@ const ALLOWED = new Map([
   ["image/webp", ".webp"],
   ["image/gif", ".gif"],
 ]);
+
+// Couverture Premium (P4) : images + vidéos courtes.
+const COVER_ALLOWED = new Map([
+  ["image/jpeg", ".jpg"],
+  ["image/png", ".png"],
+  ["image/webp", ".webp"],
+  ["image/gif", ".gif"],
+  ["video/mp4", ".mp4"],
+  ["video/webm", ".webm"],
+]);
+const COVER_MAX = 25 * 1024 * 1024; // 25 Mo
 
 function servePhoto(c: Context, id: Identity | undefined) {
   if (!id?.photo_file) return c.json({ error: "no photo" }, 404);
@@ -168,6 +181,12 @@ route.get("/api/identities/:handle", async (c) => {
   // Les disponibilités ne sont exposées qu'au propriétaire si le profil les masque.
   const showAvail = settings.public_availability || isOwner;
   const overrides = showAvail ? await getOverrides(id.id) : [];
+  // Features Premium publiques (P4/P5) : couverture + boutons — uniquement si Premium.
+  const premium = await isPremium(id.id);
+  const cover =
+    premium && id.cover_file
+      ? { url: `/api/identities/${encodeURIComponent(id.handle)}/cover`, type: id.cover_type || "image" }
+      : null;
   return c.json({
     handle: id.handle,
     fields: await getFields(id.id, level),
@@ -179,6 +198,11 @@ route.get("/api/identities/:handle", async (c) => {
     tags: await getTags(id.id),
     hasPhoto: !!id.photo_file,
     pubkey: id.pubkey,
+    // Statut d'offre, public (sans détails de facturation) : pilote l'affichage
+    // des fonctions Premium côté visiteur. La vérité reste serveur.
+    plan: premium ? "premium" : "free",
+    cover,
+    buttons: premium ? await listButtons(id.id) : [],
     // Dernière connexion (max des sessions) + présence d'une clé dans le coffre E2E.
     lastSeen: (await listSessions(id.id)).reduce((m, s) => (s.lastSeen > m ? s.lastSeen : m), ""),
     hasVault: !!(await getE2eVault(id.id)).vault,
@@ -200,13 +224,66 @@ route.get("/api/identities/:handle/photo", async (c) => {
   return servePhoto(c, id);
 });
 
+// Couverture personnalisée (Premium P4) : servie seulement si le titulaire est Premium.
+route.get("/api/identities/:handle/cover", async (c) => {
+  const id = await getIdentityByHandle(c.req.param("handle"));
+  if (!id?.cover_file || !(await isPremium(id.id))) return c.json({ error: "no cover" }, 404);
+  const p = resolve(DATA_DIR, id.cover_file);
+  if (!existsSync(p)) return c.json({ error: "no cover" }, 404);
+  const mime = [...COVER_ALLOWED.entries()].find(([, e]) => e === extname(p))?.[0] ?? "application/octet-stream";
+  c.header("Content-Type", mime);
+  c.header("Cache-Control", "public, max-age=3600");
+  return c.body(readFileSync(p));
+});
+
+// Upload de la couverture (Premium requis). Accepte image ou vidéo courte.
+route.post("/api/cover", async (c) => {
+  const id = await currentIdentity(c);
+  if (!id) return c.json({ error: "unauthorized" }, 401);
+  if (!(await isPremium(id.id))) return c.json({ error: "premium required" }, 402);
+  const body = await c.req.parseBody();
+  const file = body.cover;
+  if (!(file instanceof File)) return c.json({ error: "cover file required" }, 400);
+  const ext = COVER_ALLOWED.get(file.type);
+  if (!ext) return c.json({ error: "unsupported type" }, 415);
+  if (file.size > COVER_MAX) return c.json({ error: "max 25MB" }, 413);
+  if (id.cover_file && id.cover_file !== `cover-${id.id}${ext}`) {
+    rmSync(resolve(DATA_DIR, id.cover_file), { force: true });
+  }
+  const name = `cover-${id.id}${ext}`;
+  writeFileSync(resolve(DATA_DIR, name), Buffer.from(await file.arrayBuffer()));
+  const type = file.type.startsWith("video/") ? "video" : "image";
+  await setCoverFile(id.id, name, type);
+  return c.json({ ok: true, url: `/api/identities/${encodeURIComponent(id.handle)}/cover`, type });
+});
+
+route.delete("/api/cover", async (c) => {
+  const id = await currentIdentity(c);
+  if (!id) return c.json({ error: "unauthorized" }, 401);
+  if (id.cover_file) {
+    try { rmSync(resolve(DATA_DIR, id.cover_file)); } catch { /* ignoré */ }
+  }
+  await setCoverFile(id.id, null, "");
+  return c.json({ ok: true });
+});
+
 // Carte privée (résolue par la clé ou le cookie de session)
 route.get("/api/me", async (c) => {
   const id = await currentIdentity(c);
   if (!id) return c.json({ error: "unauthorized" }, 401);
+  // Abonnement (vue propriétaire) : statut + échéance pour l'écran « Abonnement ».
+  const sub = await getSubscription(id.id);
+  const premium = subscriptionIsPremium(sub);
   return c.json({
     handle: id.handle,
     accessKey: id.access_key,
+    plan: premium ? "premium" : "free",
+    subscription: {
+      plan: premium ? "premium" : "free",
+      status: sub?.status ?? "none",
+      premiumUntil: sub?.current_period_end ?? null,
+      cancelAtPeriodEnd: !!sub?.cancel_at_period_end,
+    },
     fields: await getFields(id.id, true),
     events: await getEvents(id.id, true),
     overrides: await getOverrides(id.id),
@@ -223,6 +300,12 @@ route.get("/api/me", async (c) => {
     pending: await pendingRequestCount(id.id),
     recoveryEmail: id.recovery_email,
     hasPhoto: !!id.photo_file,
+    // Couverture + boutons (vue propriétaire) : renvoyés tels quels pour l'édition ;
+    // l'affichage public reste conditionné au statut Premium (cf. route publique).
+    cover: id.cover_file
+      ? { url: `/api/identities/${encodeURIComponent(id.handle)}/cover`, type: id.cover_type || "image" }
+      : null,
+    buttons: await listButtons(id.id),
     settings: parseSettings(id.settings),
     private: true,
     publicUrl: `/@${id.handle}`,

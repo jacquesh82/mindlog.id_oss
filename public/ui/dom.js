@@ -60,8 +60,13 @@ export function promptPassphrase(title, { generate = false } = {}) {
     overlay.querySelector("#pp-x").onclick = () => done(null);
     overlay.querySelector("#pp-cancel").onclick = () => done(null);
     overlay.addEventListener("click", (e) => e.target === overlay && done(null));
-    overlay.querySelector("#pp-ok").onclick = () => done(overlay.querySelector("#pp-in").value.trim());
+    const ppSubmit = () => done(overlay.querySelector("#pp-in").value.trim());
+    overlay.querySelector("#pp-ok").onclick = ppSubmit;
     const inp = overlay.querySelector("#pp-in");
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); ppSubmit(); }
+      if (e.key === "Escape") done(null);
+    });
     inp.focus();
     inp.select();
   });
@@ -72,39 +77,55 @@ export function promptPin(title, { confirm = false, sub = "" } = {}) {
     const overlay = document.createElement("div");
     overlay.className = "overlay";
     const confirmHtml = confirm
-      ? `<input id="pin-confirm" type="tel" inputmode="numeric" autocomplete="off" placeholder="Confirmer le code" style="width:100%;margin-top:.5rem;letter-spacing:.2em;font-size:1.3rem;text-align:center" />`
+      ? `<div class="group">
+          <label for="pin-confirm">Confirmer le code</label>
+          <input id="pin-confirm" class="pin-input" type="tel" inputmode="numeric" autocomplete="off" placeholder="••••" />
+        </div>`
       : "";
     const subText = sub || (confirm
       ? "Choisissez un code PIN (4 chiffres min). Il protège votre clé de chiffrement — ne l'oubliez pas."
       : "Saisissez votre code PIN pour déverrouiller votre clé.");
     overlay.innerHTML = `
-      <div class="panel" role="dialog" aria-modal="true" style="max-width:360px">
+      <div class="panel" role="dialog" aria-modal="true" aria-labelledby="pin-title" style="max-width:360px">
         <button type="button" class="close" id="pin-x" aria-label="Fermer">✕</button>
-        <h2 style="text-align:center">${esc(title)}</h2>
-        <p class="sub" style="text-align:center">${esc(subText)}</p>
-        <input id="pin-in" type="tel" inputmode="numeric" autocomplete="off" placeholder="Code PIN" style="width:100%;letter-spacing:.2em;font-size:1.5rem;text-align:center" />
+        <h2 id="pin-title">${esc(title)}</h2>
+        <p class="sub">${esc(subText)}</p>
+        <div class="group">
+          <label for="pin-in">Code PIN</label>
+          <input id="pin-in" class="pin-input" type="tel" inputmode="numeric" autocomplete="off" placeholder="••••" />
+        </div>
         ${confirmHtml}
-        <p id="pin-err" class="lbl-sm" style="color:var(--danger);min-height:1.2em;text-align:center;margin-top:.4rem"></p>
-        <div class="actions" style="margin-top:.6rem">
+        <p id="pin-err" class="err" role="alert"></p>
+        <div class="actions">
           <button type="button" class="btn" id="pin-cancel">Annuler</button>
           <button type="button" class="btn primary" id="pin-ok">Valider</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
     const done = (v) => { overlay.remove(); resolve(v); };
-    const err = (m) => { overlay.querySelector("#pin-err").textContent = m; };
+    const err = (m, focusSel) => {
+      overlay.querySelector("#pin-err").textContent = m;
+      overlay.querySelector(focusSel)?.focus(); // ramène le focus sur le champ fautif (a11y)
+    };
     overlay.querySelector("#pin-x").onclick = () => done(null);
     overlay.querySelector("#pin-cancel").onclick = () => done(null);
     overlay.addEventListener("click", (e) => e.target === overlay && done(null));
-    overlay.querySelector("#pin-ok").onclick = () => {
+    const submit = () => {
       const val = overlay.querySelector("#pin-in").value.trim();
-      if (val.length < 4) { err("Code PIN trop court (4 chiffres min)."); return; }
+      if (val.length < 4) { err("Code PIN trop court (4 chiffres min).", "#pin-in"); return; }
       if (confirm) {
         const val2 = overlay.querySelector("#pin-confirm").value.trim();
-        if (val !== val2) { err("Les codes PIN ne correspondent pas."); return; }
+        if (val !== val2) { err("Les codes PIN ne correspondent pas.", "#pin-confirm"); return; }
       }
       done(val);
     };
+    overlay.querySelector("#pin-ok").onclick = submit;
+    overlay.querySelectorAll("#pin-in, #pin-confirm").forEach((inp) => {
+      inp.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); submit(); }
+        if (e.key === "Escape") done(null);
+      });
+    });
     overlay.querySelector("#pin-in").focus();
   });
 }

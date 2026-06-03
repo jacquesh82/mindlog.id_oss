@@ -113,3 +113,15 @@ export async function setPhotoFile(identityId: number, file: string | null): Pro
   await db.update(identities).set({ photo_file: file }).where(eq(identities.id, identityId));
 }
 
+/** Couverture personnalisée (Premium P4) : fichier + type ('image' | 'video'). */
+export async function setCoverFile(
+  identityId: number,
+  file: string | null,
+  type: "image" | "video" | "" = ""
+): Promise<void> {
+  await db
+    .update(identities)
+    .set({ cover_file: file, cover_type: file ? type : "" })
+    .where(eq(identities.id, identityId));
+}
+

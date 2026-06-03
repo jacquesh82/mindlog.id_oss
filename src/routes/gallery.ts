@@ -12,9 +12,11 @@ import {
   getOwnedGalleryPhotoFile,
   setGalleryFilename,
   galleryPhotoExists,
+  setGalleryLink,
 } from "../db.js";
 import { getIdentityByHandle } from "../store.js";
-import { currentIdentity } from "./_ctx.js";
+import { isPremium, sanitizeButtonUrl } from "../premium-api.js";
+import { currentIdentity, readBody } from "./_ctx.js";
 import { ALLOWED, DATA_DIR } from "./identity.js";
 
 const route = new Hono();
@@ -24,15 +26,33 @@ route.get("/api/gallery/:handle", async (c) => {
   if (!id) return c.json({ error: "not found" }, 404);
   const viewer = await currentIdentity(c);
   const fingerprint = c.req.header("x-fingerprint") ?? "";
+  const mine = viewer?.id === id.id;
+  // Lien cliquable (Premium P6) : exposé au public seulement si le titulaire est
+  // Premium ; toujours visible pour le propriétaire (édition).
+  const premium = await isPremium(id.id);
   const photos = await Promise.all(
     (await getGallery(id.id)).map(async (p) => ({
       ...p,
+      link_url: premium || mine ? p.link_url : "",
       url: `/api/gallery/photo/${p.id}`,
       liked: fingerprint ? await hasGalleryLike(p.id, fingerprint) : false,
-      mine: viewer?.id === id.id,
+      mine,
     }))
   );
   return c.json({ photos });
+});
+
+// Définit/efface le lien cliquable d'une photo (Premium requis).
+route.patch("/api/gallery/:id/link", async (c) => {
+  const id = await currentIdentity(c);
+  if (!id) return c.json({ error: "unauthorized" }, 401);
+  if (!(await isPremium(id.id))) return c.json({ error: "premium required" }, 402);
+  const { link_url } = await readBody<{ link_url: string }>(c);
+  const raw = typeof link_url === "string" ? link_url.trim() : "";
+  const url = raw ? sanitizeButtonUrl(raw) : ""; // "" = effacer le lien
+  if (url === null) return c.json({ error: "URL invalide" }, 400);
+  const ok = await setGalleryLink(Number(c.req.param("id")), id.id, url);
+  return ok ? c.json({ ok: true, link_url: url }) : c.json({ error: "not found" }, 404);
 });
 
 route.get("/api/gallery/photo/:id", async (c) => {

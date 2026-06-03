@@ -81,6 +81,14 @@ export function setupDeck({ animateIntro = true } = {}) {
   }
 
   deckState.go = go;
+  // Navigation par label, sur le closure `cols`/`go` courant (jamais périmé) :
+  // utilisée par les tests e2e et pratique au débogage. Inoffensif en prod.
+  deckState.goLabel = (label) => {
+    const i = cols.findIndex((c) => c.dataset.deckLabel === label);
+    if (i >= 0) go(i);
+    return i >= 0;
+  };
+  if (typeof window !== "undefined") window.__deckGoLabel = deckState.goLabel;
 
   function reset() {
     go(clamp(deckState.index), false);

@@ -8,6 +8,7 @@ import {
 import { Identity } from "./shared.js";
 import { setRecoveryEmail } from "./notifications.js";
 import { upsertField } from "./cardFields.js";
+import { addTag } from "./tags.js";
 
 /* ------------------------------- Identities ------------------------------ */
 
@@ -135,21 +136,27 @@ export async function listIdentities(): Promise<{ handle: string; created_at: st
 
 // Profil mascotte public @milo (easter egg), créé une seule fois.
 export const MILO_BIO =
-  "Je m'adapte à toutes les couleurs. Mascotte officielle de mindlog · id — clique-moi pour changer de couleur !";
+  "Caméléon des forêts tropicales de Madagascar. Je change de couleur selon mes humeurs et mes rencontres — ici, selon tes préférences d'interface. Cliquez sur ma palette pour changer l'accent de l'app. Mascotte officielle de mindlog · id.";
 export const MILO_EMAIL = "milo@mindlog.today";
 export async function ensureMilo(): Promise<void> {
   const existing = await getIdentityByHandle("milo");
+  const miloBio = { key: "bio", label: "À propos", value: MILO_BIO };
   if (existing) {
-    await upsertField(existing.id, { key: "bio", value: MILO_BIO });
+    await upsertField(existing.id, miloBio);
     await upsertField(existing.id, { key: "email", value: MILO_EMAIL });
     await setRecoveryEmail(existing.id, MILO_EMAIL);
     return;
   }
   const id = await createIdentity("milo", "Milo", MILO_EMAIL);
-  await upsertField(id.id, { key: "title", value: "Mascotte caméléon 🦎" });
-  await upsertField(id.id, { key: "bio", value: MILO_BIO });
+  await upsertField(id.id, { key: "display_name", label: "Nom", value: "Milo" });
+  await upsertField(id.id, { key: "title", label: "Rôle", value: "Mascotte officielle" });
+  await upsertField(id.id, miloBio);
   await upsertField(id.id, { key: "email", value: MILO_EMAIL });
-  await upsertField(id.id, { key: "website", value: "https://id.mindlog.today" });
-  await upsertField(id.id, { key: "location", value: "Quelque part sur une branche" });
+  await upsertField(id.id, { key: "website", label: "Site", value: "https://id.mindlog.today" });
+  await upsertField(id.id, { key: "location", label: "Lieu", value: "Forêt tropicale, Madagascar" });
+  await upsertField(id.id, { key: "company", label: "Projet", value: "mindlog · id" });
+  for (const tag of ["caméléon", "nature", "photographie", "open-source", "mindlog"]) {
+    await addTag(id.id, tag).catch(() => {});
+  }
 }
 

@@ -21,6 +21,9 @@ export const identities = pgTable("identities", {
   handle: text("handle").notNull().unique(),
   access_key: text("access_key").notNull().unique(),
   photo_file: text("photo_file"),
+  // Couverture personnalisée (Premium, P4) : fichier + type ('image' | 'video').
+  cover_file: text("cover_file"),
+  cover_type: text("cover_type").notNull().default(""),
   recovery_email: text("recovery_email").notNull().default(""),
   pubkey: text("pubkey").notNull().default(""), // clé publique E2E (ECDH)
   // Préférences du compte (onglet « Options ») au format JSON. Voir DEFAULT_SETTINGS
@@ -28,6 +31,93 @@ export const identities = pgTable("identities", {
   settings: text("settings").notNull().default("{}"),
   created_at: text("created_at").notNull().$defaultFn(nowIso),
 });
+
+// ── Abonnement Premium (P1, cf. docs/premium-offer-plan.md) ───────────────
+// Une ligne par identité (PK = identity_id). Source de vérité = le prestataire
+// (Stripe), reflétée ici par les webhooks. L'entitlement effectif se calcule via
+// `isPremium()` (src/store/subscriptions.ts) — jamais côté client.
+export const subscriptions = pgTable(
+  "subscriptions",
+  {
+    identity_id: integer("identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull().default("stripe"),
+    customer_id: text("customer_id").notNull().default(""), // ex. Stripe customer
+    subscription_id: text("subscription_id").notNull().default(""), // ex. Stripe subscription
+    // none | incomplete | trialing | active | past_due | canceled
+    status: text("status").notNull().default("none"),
+    price_id: text("price_id").notNull().default(""),
+    current_period_end: text("current_period_end"), // iso, null si inconnu
+    cancel_at_period_end: integer("cancel_at_period_end").notNull().default(0),
+    updated_at: text("updated_at").notNull().$defaultFn(nowIso),
+  },
+  (t) => [
+    primaryKey({ columns: [t.identity_id] }),
+    index("idx_sub_customer").on(t.customer_id),
+    index("idx_sub_subscription").on(t.subscription_id),
+  ]
+);
+
+// Idempotence des webhooks (P9) : un event prestataire n'est appliqué qu'une fois
+// (Stripe peut re-livrer). PK = identifiant d'événement.
+export const billingEvents = pgTable("billing_events", {
+  event_id: text("event_id").primaryKey(),
+  type: text("type").notNull().default(""),
+  created_at: text("created_at").notNull().$defaultFn(nowIso),
+});
+
+// ── Marketplace page payante (P7, Stripe Connect) ─────────────────────────
+// Compte connecté du créateur (reçoit les paiements, commission plateforme 30 %).
+export const connectAccounts = pgTable(
+  "connect_accounts",
+  {
+    identity_id: integer("identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    stripe_account_id: text("stripe_account_id").notNull().default(""),
+    charges_enabled: integer("charges_enabled").notNull().default(0),
+    payouts_enabled: integer("payouts_enabled").notNull().default(0),
+    updated_at: text("updated_at").notNull().$defaultFn(nowIso),
+  },
+  (t) => [primaryKey({ columns: [t.identity_id] }), index("idx_connect_account").on(t.stripe_account_id)]
+);
+
+// Page dont l'accès est payant : prix fixé par le créateur, contenu déverrouillé après achat.
+export const paidPages = pgTable(
+  "paid_pages",
+  {
+    id: serial("id").primaryKey(),
+    identity_id: integer("identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    slug: text("slug").notNull(),
+    title: text("title").notNull(),
+    content: text("content").notNull().default(""),
+    price_cents: integer("price_cents").notNull(),
+    currency: text("currency").notNull().default("eur"),
+    published: integer("published").notNull().default(0),
+    created_at: text("created_at").notNull().$defaultFn(nowIso),
+  },
+  (t) => [unique("uq_paid_page_slug").on(t.identity_id, t.slug), index("idx_paid_pages_identity").on(t.identity_id)]
+);
+
+// Accès acheté (one-time = perpétuel). Un acheteur (compte mindlog) par page.
+export const pageAccess = pgTable(
+  "page_access",
+  {
+    id: serial("id").primaryKey(),
+    page_id: integer("page_id")
+      .notNull()
+      .references(() => paidPages.id, { onDelete: "cascade" }),
+    buyer_identity_id: integer("buyer_identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    status: text("status").notNull().default("active"),
+    granted_at: text("granted_at").notNull().$defaultFn(nowIso),
+  },
+  (t) => [unique("uq_page_access").on(t.page_id, t.buyer_identity_id)]
+);
 
 // ── Multi-appareils E2E (P0, cf. docs/multidevice-proposal.md) ────────────
 // Un compte (identité) peut lier plusieurs appareils, chacun avec sa PROPRE clé
@@ -398,10 +488,30 @@ export const gallery = pgTable(
       .notNull()
       .references(() => identities.id, { onDelete: "cascade" }),
     filename: text("filename").notNull(),
+    // Lien cliquable optionnel (Premium, P6) : la vignette renvoie vers cette URL.
+    link_url: text("link_url").notNull().default(""),
     position: integer("position").notNull().default(0),
     created_at: text("created_at").notNull().$defaultFn(nowIso),
   },
   (t) => [index("idx_gallery_identity").on(t.identity_id, t.position)]
+);
+
+// Boutons personnalisés de la page publique (Premium, P5) : libellé + URL +
+// icône + position. Édition réservée au titulaire Premium ; lecture publique.
+export const pageButtons = pgTable(
+  "page_buttons",
+  {
+    id: serial("id").primaryKey(),
+    identity_id: integer("identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    url: text("url").notNull(),
+    icon: text("icon").notNull().default(""),
+    position: integer("position").notNull().default(0),
+    created_at: text("created_at").notNull().$defaultFn(nowIso),
+  },
+  (t) => [index("idx_page_buttons_identity").on(t.identity_id, t.position)]
 );
 
 export const galleryLikes = pgTable(

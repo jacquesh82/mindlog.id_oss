@@ -127,9 +127,10 @@ export const scenarios = [
         if (vaultPut >= 400) throw new Error("PUT /api/e2e/vault -> " + vaultPut);
       }
 
-      // 2) navigation deck via une entrée du Menu (#menu-nav, handler délégué) →
-      // la colonne Identité devient active
-      await page.click('#menu-nav [data-goto="Identité"]');
+      // 2) navigation deck vers Identité via le hook de label du deck (closure
+      // cols/go courant — deck.js). L'ancienne pile de liens #menu-nav de l'aperçu
+      // a été retirée ; ce hook teste la vraie navigation par label du deck.
+      await page.evaluate(() => window.__deckGoLabel && window.__deckGoLabel("Identité"));
       await page.waitForTimeout(900);
       const active = await page.evaluate(() => {
         const c = [...document.querySelectorAll(".col")].find((x) => x.classList.contains("active"));

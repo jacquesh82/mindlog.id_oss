@@ -12,6 +12,8 @@ export interface Identity {
   handle: string;
   access_key: string;
   photo_file: string | null;
+  cover_file: string | null; // couverture Premium (P4)
+  cover_type: string; // 'image' | 'video' | ''
   recovery_email: string;
   pubkey: string;
   settings: string; // JSON (préférences) — voir Settings / parseSettings

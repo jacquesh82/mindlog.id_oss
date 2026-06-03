@@ -272,14 +272,33 @@ const MCP_CONFIGS = { cloud: MCP_CONFIG_CLOUD, self: MCP_CONFIG_SELF };
 // Bloc compte unifié, présent dans le header de tous les écrans :
 // chip profil (lien vers /me) + bouton de déconnexion quand on est connecté.
 // opts.photoSrc / opts.name : enrichissent le chip (utilisé par l'éditeur).
-function headerAccount() {
+function headerAccount(unread = 0) {
   const h = myHandle();
   if (!(isLoggedIn() && h)) return "";
   const photoSrc = appState.me.hasPhoto
     ? `/api/identities/${encodeURIComponent(h)}/photo?ts=${appState.me.photoTs}`
     : null;
-  return `${profileChipHtml(h, { photoSrc, name: appState.me.name, linkTo: "/me" })}
-    <button class="btn sm" data-action="logout" title="${t("nav_logout")}">${icon("key", 14)} ${t("nav_logout")}</button>`;
+  const initial = (h[0] || "?").toUpperCase();
+  const avHtml = photoSrc
+    ? `<img class="profile-chip-av" src="${esc(photoSrc)}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" /><div class="profile-chip-av profile-chip-svg" style="display:none">${genericAvatarSvg(h, initial)}</div>`
+    : `<div class="profile-chip-av profile-chip-svg">${genericAvatarSvg(h, initial)}</div>`;
+  return `<div class="profile-menu-wrap">
+    <button class="profile-chip" id="profile-menu-btn" type="button" aria-expanded="false" aria-haspopup="menu">
+      ${avHtml}
+      <div class="profile-chip-info">
+        <span class="profile-chip-handle">@${esc(h)}</span>
+        ${appState.me.name ? `<span class="profile-chip-name">${esc(appState.me.name)}</span>` : ""}
+      </div>
+      <span class="chip-notif-dot" id="chip-notif-dot" ${unread ? "" : "hidden"}>${unread || ""}</span>
+    </button>
+    <div class="profile-menu" id="profile-menu" role="menu">
+      <a class="pmenu-item" href="/me" role="menuitem">${icon("user", 15)} Mon profil</a>
+      <button class="pmenu-item" id="pmenu-theme" role="menuitem" type="button">${icon("sun", 15)} Thème</button>
+      <button class="pmenu-item" id="pmenu-notifs" role="menuitem" type="button">${icon("bell", 15)} Notifications</button>
+      <div class="pmenu-sep" role="separator"></div>
+      <button class="pmenu-item pmenu-danger" data-action="logout" role="menuitem" type="button">${icon("key", 15)} ${t("nav_logout")}</button>
+    </div>
+  </div>`;
 }
 
 // Déconnexion câblée une seule fois, en délégation : fonctionne pour tout
@@ -301,6 +320,41 @@ function wireGlobalLogout() {
     appState.auth = null;
     appState.authPromise = null;
     location.assign("/");
+  });
+}
+
+const _pmenu = {
+  getWrap:  () => document.querySelector(".profile-menu-wrap"),
+  getBtn:   () => document.getElementById("profile-menu-btn"),
+  isOpen:   () => !!document.querySelector(".profile-menu-wrap.open"),
+  open()  { this.getWrap()?.classList.add("open");    this.getBtn()?.setAttribute("aria-expanded", "true");  },
+  close() { this.getWrap()?.classList.remove("open"); this.getBtn()?.setAttribute("aria-expanded", "false"); },
+  toggle(){ this.isOpen() ? this.close() : this.open(); },
+};
+
+let _profileMenuWired = false;
+function wireProfileMenu() {
+  if (_profileMenuWired) return;
+  _profileMenuWired = true;
+
+  // capture:true → avant tout stopPropagation des listeners enfants
+  document.addEventListener("click", (e) => {
+    if (e.target.closest("#profile-menu-btn")) { _pmenu.toggle(); return; }
+    if (e.target.closest("#pmenu-theme"))  { toggleTheme(); _pmenu.close(); return; }
+    if (e.target.closest("#pmenu-notifs")) { document.getElementById("notif-bell")?.click(); _pmenu.close(); return; }
+    if (!e.target.closest(".profile-menu-wrap")) _pmenu.close();
+  }, true);
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && _pmenu.isOpen()) { _pmenu.close(); _pmenu.getBtn()?.focus(); }
+  });
+}
+
+// Câble le bouton directement après chaque rendu (fallback si delegation bloquée)
+function wireProfileMenuBtn() {
+  document.getElementById("profile-menu-btn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    _pmenu.toggle();
   });
 }
 
@@ -2087,7 +2141,7 @@ async function renderPaidPage(handle, slug) {
   const price = `${(data.price_cents / 100).toFixed(2)} ${(data.currency || "eur").toUpperCase()}`;
   app.innerHTML = `
     ${siteHeader({
-      right: `<button class="theme-toggle theme-toggle-header" id="theme-toggle-header" type="button" aria-label="Changer de thème"></button>${headerAccount()}`,
+      right: headerAccount(),
     })}
     <div class="card pp-view" style="max-width:680px;margin:1.5rem auto">
       <a class="lbl-sm" href="/@${esc(handle)}">← @${esc(handle)}</a>
@@ -2101,7 +2155,6 @@ async function renderPaidPage(handle, slug) {
            </div>`}
     </div>`;
   footer.innerHTML = `<a class="brand" href="/" style="justify-content:center"><span class="brand-milo">${miloSvg(40)}</span> mindlog · id</a>`;
-  app.querySelector("#theme-toggle-header")?.addEventListener("click", toggleTheme);
   applyTheme(storedTheme() || "dark");
   app.querySelector("#pp-buy")?.addEventListener("click", async () => {
     if (!isLoggedIn()) {
@@ -2171,19 +2224,24 @@ async function renderPublicProfile(handle) {
           ${_canCall ? `<button class="btn sm" id="call-btn" title="Appel pair-à-pair"${data.pubkey ? "" : " disabled"}>${icon("camera", 15)} Appel</button>` : ""}
         </div>`
       : "";
+  const LOG_OUT_SVG = `<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>`;
   const _profileActions = {
-    left: `<button class="btn sm" id="qr-btn" aria-label="QR code">${icon("qr", 18)}</button>${relBtnHtml()}`,
+    isSelf,
+    topLeft: [
+      `<button class="btn sm" id="cv-back-btn" aria-label="Retour à l'application">${icon("home", 18)}</button>`,
+      `<button class="btn sm" id="cv-search-btn" aria-label="Rechercher un profil">${icon("search", 18)}</button>`,
+      loggedIn ? `<button class="btn sm" id="cv-logout-btn" aria-label="Se déconnecter"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${LOG_OUT_SVG}</svg></button>` : "",
+    ].join(""),
+    left: `<button class="btn sm" id="qr-btn" aria-label="QR code">${icon("qr", 18)}</button>
+           <button class="btn sm theme-toggle" id="cv-theme-btn" type="button" aria-label="Changer le thème"></button>
+           ${relBtnHtml()}`,
     right: "",
     contact: _contactActions,
   };
   app.innerHTML = `
     ${siteHeader({
       center: headerSearchHtml(),
-      // Même en-tête qu'en mode connecté : bascule thème intégrée à la barre
-      // (le toggle flottant #theme-toggle-fixed est masqué en vue profil via CSS).
-      right: `<button class="theme-toggle theme-toggle-header" id="theme-toggle-header" type="button" aria-label="Changer de thème"></button>
-        ${loggedIn ? "" : `<a class="btn sm" href="/">Créer ma page</a>`}
-        ${headerAccount()}`,
+      right: `${loggedIn ? "" : `<a class="btn sm" href="/">Créer ma page</a>`}${headerAccount()}`,
     })}
     ${cardViewHtml(data, false, _profileActions)}`;
   footer.innerHTML = `<a class="brand" href="/" style="justify-content:center"><span class="brand-milo">${miloSvg(40)}</span> mindlog · id</a><p style="margin:.5rem 0 0">${CREDIT()}</p>`;
@@ -2196,23 +2254,25 @@ async function renderPublicProfile(handle) {
   Promise.resolve(galleryP)
     .then((ok) => {
       if (ok) {
-        app.querySelector("#pub-gallery-slot")?.removeAttribute("hidden");
-        // Copie compacte (max 10 photos) dans le slot inline du panel À propos.
-        host.gallery?.mountPublic(app.querySelector("#pub-about-gallery"), data.handle);
+        // Galerie uniquement dans pub-gallery-slot (pas d'inline dans pub-about)
       } else {
-        // Galerie placeholder : 10 carrés colorés avec lightbox plein écran
+        // Galerie placeholder : 9 carrés colorés (3×3) avec lightbox plein écran
         const PH_COLORS = ["#e74c3c","#e67e22","#f1c40f","#2ecc71","#1abc9c",
-                           "#3498db","#9b59b6","#e91e63","#00bcd4","#8bc34a"];
+                           "#3498db","#9b59b6","#e91e63","#00bcd4"];
         const mkGrid = () => `<div class="gal-ph-grid">${
           PH_COLORS.map((c, i) =>
             `<button class="gal-ph" type="button" style="--ph-c:${c}" data-idx="${i}" aria-label="Image ${i+1}"></button>`
           ).join("")
         }</div>`;
-        // Inline About : on supprime la section (galerie uniquement dans l'onglet dédié)
-        app.querySelector("#pub-about-gallery")?.closest(".pub-section-h")?.remove();
-        app.querySelector("#pub-about-gallery")?.remove();
+        // Inline About : on supprime le titre "Galerie" (frère précédent) + le conteneur
+        const _inlineGal = app.querySelector("#pub-about-gallery");
+        if (_inlineGal) {
+          const prev = _inlineGal.previousElementSibling;
+          if (prev?.classList.contains("pub-section-h")) prev.remove();
+          _inlineGal.remove();
+        }
         const slot = app.querySelector("#pub-gallery-slot");
-        if (slot) { slot.innerHTML = mkGrid(); slot.removeAttribute("hidden"); }
+        if (slot) slot.innerHTML = mkGrid();
         // Wiring lightbox sur tous les carrés
         app.querySelectorAll(".gal-ph").forEach(btn =>
           btn.addEventListener("click", () => openGalLightbox(app, PH_COLORS, +btn.dataset.idx))
@@ -2234,8 +2294,6 @@ async function renderPublicProfile(handle) {
 
   // Bascule thème de l'en-tête (icône posée par applyTheme, comme en connecté).
   applyTheme(storedTheme() || "dark");
-  app.querySelector("#theme-toggle-header")?.addEventListener("click", toggleTheme);
-
   app.querySelector("#qr-btn")?.addEventListener("click", () =>
     openQR(`${location.origin}/@${data.handle}`, `@${data.handle}`)
   );
@@ -2282,8 +2340,151 @@ async function renderPublicProfile(handle) {
     });
   }
 
+  // ── Boutons cover haut-gauche ──────────────────────────────────────────────
+  app.querySelector("#cv-back-btn")?.addEventListener("click", () => location.assign(loggedIn ? "/me" : "/"));
+  app.querySelector("#cv-search-btn")?.addEventListener("click", openSpotlightSearch);
+  // Raccourci "/" sur la page profil (header masqué → pas de hdr-q)
+  if (!document.body.dataset.spotlightBound) {
+    document.body.dataset.spotlightBound = "1";
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = document.activeElement;
+      if (el?.tagName === "INPUT" || el?.tagName === "TEXTAREA" || el?.isContentEditable) return;
+      if (document.querySelector('[data-view="profile"]')) { e.preventDefault(); openSpotlightSearch(); }
+    });
+  }
+  app.querySelector("#cv-theme-btn")?.addEventListener("click", toggleTheme);
+  app.querySelector("#cv-logout-btn")?.addEventListener("click", async () => {
+    try { await api("/api/auth/logout", { method: "POST", headers: jsonAuth() }); } catch {}
+    localStorage.removeItem("mindlog.key"); localStorage.removeItem("mindlog.handle");
+    location.assign("/");
+  });
+
+  // ── Avatar upload (isSelf) ─────────────────────────────────────────────────
+  const avFile = app.querySelector("#pub-av-file");
+  if (avFile) {
+    // Taille d'affichage : S / L / XL
+    const avSizeKey = `mindlog.av_size.${data.handle}`;
+    const applyAvSize = (s) => {
+      app.querySelector(".pub-av-wrap")?.setAttribute("data-size", s || "l");
+      localStorage.setItem(avSizeKey, s);
+      app.querySelectorAll(".pub-av-size-btn").forEach(b => b.classList.toggle("active", b.dataset.size === s));
+    };
+    applyAvSize(localStorage.getItem(avSizeKey) || "l");
+    app.querySelectorAll(".pub-av-size-btn").forEach(b => b.addEventListener("click", () => applyAvSize(b.dataset.size)));
+
+    avFile.addEventListener("change", async () => {
+      const file = avFile.files?.[0]; if (!file) return;
+      const fd = new FormData(); fd.append("photo", file);
+      try {
+        await api("/api/photo", { method: "POST", headers: viewerHeaders(), body: fd });
+        const ts = Date.now();
+        const newSrc = `/api/identities/${encodeURIComponent(data.handle)}/photo?ts=${ts}`;
+        // Mise à jour immédiate de tous les avatars affichés (cover + mobile cover-about)
+        app.querySelectorAll(".pub-cover-av, .pub-cover-av-milo, .pub-cover-av-gen").forEach(el => {
+          if (el.tagName === "IMG") { el.src = newSrc; }
+          else {
+            // Remplace le div générique par une vraie photo
+            const newImg = document.createElement("img");
+            newImg.className = "pub-cover-av"; newImg.alt = `Photo de @${data.handle}`;
+            newImg.src = newSrc;
+            el.replaceWith(newImg);
+          }
+        });
+      } catch (e) { toast(e.message); }
+      avFile.value = "";
+    });
+  }
+
+  // ── Galerie éditable (isSelf) : re-rendu complet depuis l'API à chaque changement ──
+  if (isSelf) {
+    const PH_COLORS = ["#e74c3c","#e67e22","#f1c40f","#2ecc71","#1abc9c","#3498db","#9b59b6","#e91e63","#00bcd4"];
+    const ADD_SVG = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+
+    const renderGallery = async () => {
+      const container = app.querySelector("#pub-gallery-slot");
+      if (!container) return;
+      let existing = [];
+      try { existing = (await api(`/api/gallery/${encodeURIComponent(data.handle)}`, { headers: viewerHeaders() })).photos || []; } catch {}
+
+      // 9 slots : photos réelles + cases vides
+      const html = PH_COLORS.map((c, i) => {
+        const p = existing[i];
+        return p
+          ? `<div class="gal-ph gal-filled" data-photo-id="${p.id}" style="background:url('${p.url}') center/cover no-repeat"></div>`
+          : `<div class="gal-ph" style="--ph-c:${c}"></div>`;
+      }).join("");
+      container.innerHTML = `<div class="gal-ph-grid">${html}</div>`;
+      // Ne pas toucher à hidden : le système de tabs gère la visibilité
+
+      // Wiring de chaque slot
+      container.querySelectorAll(".gal-ph").forEach((slot) => {
+        if (slot.classList.contains("gal-filled")) {
+          // Bouton supprimer
+          const del = document.createElement("button");
+          del.className = "gal-slot-del"; del.type = "button"; del.title = "Supprimer";
+          del.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+          slot.appendChild(del);
+          del.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            try { await api(`/api/gallery/${slot.dataset.photoId}`, { method: "DELETE", headers: viewerHeaders() }); renderGallery(); }
+            catch (e) { toast(e.message); }
+          });
+          // Lightbox sur clic photo
+          slot.addEventListener("click", (e) => {
+            if (e.target.closest(".gal-slot-del")) return;
+            const filled = [...container.querySelectorAll(".gal-ph.gal-filled")];
+            const idx = filled.indexOf(slot);
+            const items = filled.map(s => s.style.backgroundImage.match(/url\(['"]?(.+?)['"]?\)/)?.[1] || "");
+            openGalLightbox(app, items, idx);
+          });
+        } else {
+          // Bouton upload
+          const lbl = document.createElement("label");
+          lbl.className = "gal-slot-upload"; lbl.title = "Ajouter une image";
+          lbl.innerHTML = `<input type="file" accept="image/jpeg,image/png,image/webp" style="display:none">${ADD_SVG}`;
+          slot.appendChild(lbl);
+          const inp = lbl.querySelector("input");
+          const upload = async (file) => {
+            const fd = new FormData(); fd.append("photos", file);
+            try { await api("/api/gallery", { method: "POST", headers: viewerHeaders(), body: fd }); renderGallery(); }
+            catch (e) { toast(e.message); }
+          };
+          inp.addEventListener("change", () => { if (inp.files?.[0]) upload(inp.files[0]); inp.value = ""; });
+          slot.addEventListener("dragover", (e) => { e.preventDefault(); slot.classList.add("gal-drag"); });
+          slot.addEventListener("dragleave", () => slot.classList.remove("gal-drag"));
+          slot.addEventListener("drop", (e) => { e.preventDefault(); slot.classList.remove("gal-drag"); const f = e.dataTransfer.files[0]; if (f) upload(f); });
+        }
+      });
+    };
+    setTimeout(renderGallery, 100);
+  }
+
   host.calendar.wire(app.querySelector(".calendar"), data.overrides || {}, false, data.handle, undefined, !isSelf);
   app.querySelector("#ask-rdv")?.addEventListener("click", () => host.calendar.openBooking(data.handle, null));
+
+  // Bio inline éditable (isSelf uniquement)
+  const bioEdit = app.querySelector("#pub-bio-edit");
+  if (bioEdit) {
+    const resize = () => { bioEdit.style.height = "auto"; bioEdit.style.height = bioEdit.scrollHeight + "px"; };
+    resize();
+    bioEdit.addEventListener("input", resize);
+
+    let _bioTimer = null;
+    const saveBio = async () => {
+      clearTimeout(_bioTimer);
+      const value = bioEdit.value;
+      try {
+        await api("/api/card/field", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", ...viewerHeaders() },
+          body: JSON.stringify({ key: "bio", value }),
+        });
+      } catch (e) { toast(e.message); }
+    };
+    bioEdit.addEventListener("blur", saveBio);
+    bioEdit.addEventListener("input", () => { clearTimeout(_bioTimer); _bioTimer = setTimeout(saveBio, 1500); });
+  }
 
 }
 
@@ -2523,11 +2724,31 @@ function cardViewHtml(data, editable, profileActions = "") {
         ${coverIsVideo
           ? `<video class="pub-cover-bg pub-cover-video" src="${esc(coverMedia.url)}" autoplay muted loop playsinline disablepictureinpicture aria-label="Couverture de @${esc(data.handle)}"></video>`
           : `<div class="pub-cover-bg" style="background-image:url('${esc(coverUrl)}')" role="img" aria-label="Couverture de @${esc(data.handle)}"></div>`}
+        <!-- Boutons haut-gauche : retour, recherche, déconnexion -->
+        <div class="pub-cover-top-left">
+          ${profileActions?.topLeft || ""}
+        </div>
+        <!-- Boutons haut-droite : QR, thème, relation -->
         <div class="pub-cover-top">
           ${profileActions?.left || ""}
         </div>
         <div class="pub-cover-identity">
-          ${coverAv}${vaultBadge}
+          <div class="pub-av-wrap${profileActions?.isSelf ? " pub-av-editable" : ""}">
+            <div class="pub-av-photo">
+              ${coverAv}${vaultBadge}
+              ${profileActions?.isSelf ? `
+                <label class="pub-av-upload-btn" id="pub-av-upload" title="Changer la photo" aria-label="Changer la photo de profil">
+                  <input type="file" id="pub-av-file" accept="image/jpeg,image/png,image/webp,image/gif" style="display:none">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                </label>` : ""}
+            </div>
+            ${profileActions?.isSelf ? `
+              <div class="pub-av-sizes" id="pub-av-sizes">
+                <button class="pub-av-size-btn" data-size="s" type="button">S</button>
+                <button class="pub-av-size-btn" data-size="l" type="button">L</button>
+                <button class="pub-av-size-btn" data-size="xl" type="button">XL</button>
+              </div>` : ""}
+          </div><!-- /pub-av-wrap -->
           <div class="pub-cover-names">
             <h1 class="pub-cover-name">${esc(name)}</h1>
             <p class="pub-cover-handle">@${esc(data.handle)}</p>
@@ -2572,8 +2793,9 @@ function cardViewHtml(data, editable, profileActions = "") {
 
         <div class="pub-tab-body" id="pub-tab-body">
           <section id="pub-about" class="pub-tab-panel is-on" role="tabpanel" tabindex="0">
-            ${isSelf ? `<a class="btn sm pub-edit-btn" id="pub-edit-btn" href="${storedKey() ? `/k/${encodeURIComponent(storedKey())}` : "/me"}">${icon("user", 14)} Modifier le profil</a>` : ""}
-            ${bio ? `<p class="pub-bio">${esc(bio)}</p>` : ""}
+            ${isSelf
+              ? `<textarea id="pub-bio-edit" class="pub-bio-edit" placeholder="Décrivez-vous en quelques mots…" rows="3">${esc(bio)}</textarea>`
+              : bio ? `<p class="pub-bio">${esc(bio)}</p>` : ""}
             ${tags}
             ${buttonsHtml}
             ${socials ? `<div class="pub-socials">${socials}</div>` : ""}
@@ -2581,8 +2803,6 @@ function cardViewHtml(data, editable, profileActions = "") {
               `<li class="field"><span class="k">${esc(f.label || f.key)}</span>${valueHtml(f.key, f.value)}</li>`
             ).join("")}</ul>` : ""}
             ${rel1.length ? `<div class="pub-section-h first">${icon("users", 14)} Relations</div><ul class="rels">${relationsListHtml(rel1, false)}</ul>` : ""}
-            ${data.hasGallery !== false ? `<div class="pub-section-h">${icon("image", 14)} Galerie</div>
-              <div id="pub-about-gallery" class="pub-inline-gallery"></div>` : ""}
           </section>
 
           <section id="pub-agenda" class="pub-tab-panel" role="tabpanel" tabindex="-1" hidden>
@@ -2602,6 +2822,67 @@ function cardViewHtml(data, editable, profileActions = "") {
         </div>
       </div>
     </div>`;
+}
+
+// Spotlight search — overlay centré, déclenché par bouton ou "/" ─────────────
+function openSpotlightSearch() {
+  if (document.getElementById("cv-search-overlay")) return;
+  const el = document.createElement("div");
+  el.id = "cv-search-overlay";
+  el.setAttribute("role", "dialog"); el.setAttribute("aria-modal", "true");
+  el.innerHTML = `
+    <div class="cv-sb-bg"></div>
+    <div class="cv-sb-modal">
+      <form class="cv-sb-form" autocomplete="off">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <input id="cv-sb-q" type="search" placeholder="Rechercher une identité…" autocomplete="off" spellcheck="false"/>
+        <kbd class="cv-sb-esc">Esc</kbd>
+      </form>
+      <div class="cv-sb-results" id="cv-sb-results" hidden></div>
+    </div>`;
+  document.body.appendChild(el);
+  const inp = el.querySelector("#cv-sb-q");
+  const res = el.querySelector("#cv-sb-results");
+  requestAnimationFrame(() => inp.focus());
+
+  let timer;
+  inp.addEventListener("input", () => {
+    clearTimeout(timer);
+    const q = inp.value.trim();
+    if (!q) { res.hidden = true; return; }
+    timer = setTimeout(async () => {
+      try {
+        const { results: list } = await api(`/api/search?q=${encodeURIComponent(q)}`);
+        res.innerHTML = list.length
+          ? list.map(r => `<a class="cv-sb-result" href="/@${encodeURIComponent(r.handle)}">
+              ${avatarHtml(r.handle, r.has_photo, "av")}
+              <span class="meta">
+                <span class="nm">${esc(r.display_name || r.handle)}</span>
+                <span class="hd">@${esc(r.handle)}${r.title ? " · " + esc(r.title) : ""}</span>
+              </span></a>`).join("")
+          : `<div class="cv-sb-empty">Aucun résultat</div>`;
+        res.hidden = false;
+      } catch { /* silent */ }
+    }, 200);
+  });
+  el.querySelector("form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    el.querySelector(".cv-sb-result")?.click();
+  });
+
+  const close = () => { el.remove(); document.removeEventListener("keydown", onKey); };
+  el.querySelector(".cv-sb-bg").addEventListener("click", close);
+  const onKey = (e) => {
+    if (e.key === "Escape") close();
+    if (e.key === "ArrowDown") { e.preventDefault(); (res.querySelector(".cv-sb-result") || inp).focus(); }
+  };
+  document.addEventListener("keydown", onKey);
+  // Navigation clavier dans les résultats
+  res.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); (e.target.nextElementSibling || inp).focus(); }
+    if (e.key === "ArrowUp")   { e.preventDefault(); (e.target.previousElementSibling || inp).focus(); }
+    if (e.key === "Escape") close();
+  });
 }
 
 // Lightbox plein écran pour la galerie placeholder (et future galerie réelle).
@@ -3048,11 +3329,11 @@ onSSE("notif", (d) => {
   } else if (d?.text) {
     toast("🔔 " + d.text);
   }
-  const badge = document.getElementById("notif-badge");
-  if (badge) {
+  [document.getElementById("notif-badge"), document.getElementById("chip-notif-dot")].forEach((badge) => {
+    if (!badge) return;
     badge.hidden = false;
     badge.textContent = String((parseInt(badge.textContent || "0", 10) || 0) + 1);
-  }
+  });
   const list = document.getElementById("notif-list");
   if (list) {
     if (list.querySelector(".empty")) list.innerHTML = "";
@@ -3220,6 +3501,7 @@ function initGdprBanner() {
   }
   _plugins.forEach((p) => p.init && p.init(host));
   wireGlobalLogout();
+  wireProfileMenu();
   route();
 })();
 
@@ -3234,4 +3516,4 @@ function initGdprBanner() {
 
 
 // Builders de vue + utilitaires partagés, consommés par editor/index.js (cycle assumé).
-export { PENDING_INVITE, connectSSE, eventsHtml, footer, headerAccount, headerSearchHtml, notifItemHtml, openMiloTourPicker, openQR, periodsListHtml, profileCardHtml, relItemHtml, relationsListHtml, tagChipsHtml, wireHeaderSearch };
+export { PENDING_INVITE, connectSSE, eventsHtml, footer, headerAccount, headerSearchHtml, notifItemHtml, openMiloTourPicker, openQR, periodsListHtml, profileCardHtml, relItemHtml, relationsListHtml, tagChipsHtml, wireHeaderSearch, wireProfileMenuBtn };
