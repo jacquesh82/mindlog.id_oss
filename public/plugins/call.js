@@ -1,0 +1,346 @@
+/* ============================================================================
+ * Plugin : Appel audio/vidéo PAIR-À-PAIR (WebRTC)
+ * ----------------------------------------------------------------------------
+ * Le média (audio + vidéo) circule en P2P DIRECT entre les deux navigateurs :
+ * il ne traverse jamais le serveur. Seule la SIGNALISATION (offer/answer/ICE)
+ * passe par le serveur, et uniquement sous forme de blobs chiffrés de bout en
+ * bout (même clé partagée ECDH que le chat) — le serveur ne peut donc rien lire
+ * ni de la signalisation ni du média. Aucun blob n'est stocké : le serveur n'est
+ * qu'un tuyau temps réel (bus SSE, événement « signal »).
+ *
+ * Traversée de NAT : STUN public seulement (découverte d'IP, aucun relais de
+ * média) → reste strictement P2P. Échoue sur NAT symétrique (comportement
+ * assumé, faute de TURN).
+ *
+ * S'enregistre via le registre de plugins de app.js et expose `host.call.start`,
+ * appelé par le bouton 📞/🎥 de la fenêtre de chat. Les appels ENTRANTS sont
+ * captés globalement via onSSE(« signal ») dès la connexion.
+ * ========================================================================== */
+
+const ICE = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+  ],
+};
+
+export default function register(host) {
+  const { esc, api, toast, onSSE, ensureE2E, e2eEncrypt, e2eDecrypt, avatarHtml } = host;
+
+  // Clé d'accès / handle du compte courant (éditeur d'abord, visiteur ensuite).
+  const myKey = () => host.currentKey() || host.myKey();
+  const myHandle = () => host.myHandle();
+
+  // Un seul appel à la fois. `call` = état courant ou null.
+  let call = null;
+
+  // Historique d'appel : l'APPELANT journalise l'appel dans la conversation en fin
+  // d'appel, sous forme de message E2E (sentinel call:) — passe par le fan-out
+  // (sync tous mes appareils + le pair), rendu comme une ligne d'info par le chat.
+  const CALL_PREFIX = "call:";
+  async function sendCallLog(handle, peerPub, info) {
+    try {
+      const text = CALL_PREFIX + JSON.stringify(info);
+      let body = null;
+      if (host.md) {
+        const fo = await host.md.fanoutEncrypt(myHandle(), myKey(), handle, text).catch(() => null);
+        if (fo) body = { clientMsgId: fo.clientMsgId, envelopes: fo.envelopes };
+      }
+      if (!body) {
+        const enc = await e2eEncrypt(peerPub, text);
+        body = { ...enc, senderPub: host.e2e?.myPub?.() || "", recipientPub: peerPub };
+      }
+      await api(`/api/messages/${encodeURIComponent(handle)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-access-key": myKey(), ...(host.md ? { "x-device-id": host.md.deviceId() } : {}) },
+        body: JSON.stringify(body),
+      });
+    } catch { /* best-effort : l'appel reste fonctionnel sans historique */ }
+  }
+
+  /* ----------------------- Signalisation chiffrée ------------------------ */
+  async function sendSignal(handle, peerPub, obj) {
+    const enc = await e2eEncrypt(peerPub, JSON.stringify(obj)); // chiffré dans le navigateur
+    await api(`/api/signal/${encodeURIComponent(handle)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-access-key": myKey() },
+      body: JSON.stringify(enc),
+    });
+  }
+
+  /* ----------------------------- Sonnerie -------------------------------- */
+  // Bip discret en boucle via WebAudio (aucun fichier à charger).
+  function makeRinger() {
+    let ctx = null, timer = null;
+    return {
+      start() {
+        try {
+          ctx = new (window.AudioContext || window.webkitAudioContext)();
+        } catch { return; }
+        const beep = () => {
+          if (!ctx) return;
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.frequency.value = 520;
+          o.connect(g);
+          g.connect(ctx.destination);
+          g.gain.setValueAtTime(0.0001, ctx.currentTime);
+          g.gain.exponentialRampToValueAtTime(0.15, ctx.currentTime + 0.05);
+          g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.5);
+          o.start();
+          o.stop(ctx.currentTime + 0.5);
+        };
+        beep();
+        timer = setInterval(beep, 1800);
+      },
+      stop() {
+        clearInterval(timer);
+        timer = null;
+        if (ctx) { ctx.close().catch(() => {}); ctx = null; }
+      },
+    };
+  }
+
+  /* --------------------------- Connexion WebRTC -------------------------- */
+  function makePC() {
+    const pc = new RTCPeerConnection(ICE);
+    pc.onicecandidate = (e) => {
+      if (e.candidate && call) sendSignal(call.handle, call.peerPub, { k: "ice", cand: e.candidate }).catch(() => {});
+    };
+    pc.ontrack = (e) => {
+      if (!call) return;
+      call.remoteStream = e.streams[0];
+      const v = call.overlay?.querySelector("#call-remote");
+      if (v && v.srcObject !== call.remoteStream) v.srcObject = call.remoteStream;
+      setStage("connected");
+    };
+    pc.oniceconnectionstatechange = () => {
+      const s = pc.iceConnectionState;
+      if (s === "connected" || s === "completed") setStage("connected");
+      else if (s === "failed") { toast("Connexion P2P impossible (NAT). Appel terminé."); endCall(false); }
+      else if (s === "disconnected") setStage("disconnected");
+    };
+    return pc;
+  }
+
+  // Applique les candidats ICE reçus avant la description distante.
+  async function flushPendingIce() {
+    if (!call?.pc || !call.pendingIce.length) return;
+    for (const cand of call.pendingIce) {
+      try { await call.pc.addIceCandidate(cand); } catch { /* ignoré */ }
+    }
+    call.pendingIce = [];
+  }
+
+  /* ------------------------------- UI ------------------------------------ */
+  function callOverlayHtml(handle, ringing, outgoing) {
+    const status = ringing
+      ? (outgoing ? "Appel en cours…" : "Appel entrant")
+      : "Connexion…";
+    return `
+      <div class="panel call-panel" role="dialog" aria-label="Appel avec @${esc(handle)}">
+        <div class="call-stage" data-stage="${ringing ? "ringing" : "connecting"}">
+          <video id="call-remote" class="call-video" autoplay playsinline></video>
+          <video id="call-self" class="call-self" autoplay playsinline muted></video>
+          <div class="call-ring">
+            ${avatarHtml(handle, false, "call-av")}
+            <span class="call-name">@${esc(handle)}</span>
+            <span class="call-status">${esc(status)}</span>
+            <span class="call-e2e">🔒 pair-à-pair chiffré</span>
+            ${!ringing || outgoing ? "" : `
+              <div class="call-ring-actions">
+                <button type="button" class="btn call-accept" id="call-accept">Accepter 🎥</button>
+                <button type="button" class="btn danger" id="call-decline">Refuser</button>
+              </div>`}
+          </div>
+        </div>
+        <div class="call-controls">
+          <button type="button" class="btn call-ctl" id="call-mic" title="Micro" aria-label="Couper le micro">🎙️</button>
+          <button type="button" class="btn call-ctl" id="call-cam" title="Caméra" aria-label="Couper la caméra">🎥</button>
+          <button type="button" class="btn danger call-ctl" id="call-hangup" title="Raccrocher" aria-label="Raccrocher">📞</button>
+        </div>
+      </div>`;
+  }
+
+  function setStage(stage) {
+    const el = call?.overlay?.querySelector(".call-stage");
+    if (!el) return;
+    if (stage === "connected") {
+      if (call && !call.connectedAt) call.connectedAt = Date.now(); // début de communication (durée)
+      el.dataset.stage = "connected";
+      const st = call.overlay.querySelector(".call-status");
+      if (st) st.textContent = "En communication";
+    } else if (stage === "disconnected") {
+      const st = call.overlay.querySelector(".call-status");
+      if (st) st.textContent = "Reconnexion…";
+    }
+  }
+
+  function mountOverlay(handle, ringing, outgoing) {
+    const overlay = document.createElement("aside");
+    overlay.className = "call-dock";
+    overlay.innerHTML = callOverlayHtml(handle, ringing, outgoing);
+    document.body.appendChild(overlay);
+    overlay.querySelector("#call-hangup").addEventListener("click", () => endCall(true));
+    overlay.querySelector("#call-mic").addEventListener("click", () => toggleTrack("audio"));
+    overlay.querySelector("#call-cam").addEventListener("click", () => toggleTrack("video"));
+    overlay.querySelector("#call-accept")?.addEventListener("click", () => acceptIncoming());
+    overlay.querySelector("#call-decline")?.addEventListener("click", () => {
+      sendSignal(handle, call.peerPub, { k: "decline" }).catch(() => {});
+      endCall(false);
+    });
+    return overlay;
+  }
+
+  function toggleTrack(kind) {
+    if (!call?.localStream) return;
+    const tracks = kind === "audio" ? call.localStream.getAudioTracks() : call.localStream.getVideoTracks();
+    if (!tracks.length) return;
+    const on = !tracks[0].enabled;
+    tracks.forEach((t) => (t.enabled = on));
+    const btn = call.overlay.querySelector(kind === "audio" ? "#call-mic" : "#call-cam");
+    if (btn) btn.classList.toggle("off", !on);
+  }
+
+  async function getMedia(wantVideo = true) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ audio: true, video: wantVideo });
+    } catch (e) {
+      // Repli audio seul si pas/refus de caméra.
+      try { return await navigator.mediaDevices.getUserMedia({ audio: true, video: false }); }
+      catch { throw e; }
+    }
+  }
+
+  function attachLocal() {
+    const v = call.overlay?.querySelector("#call-self");
+    if (v) v.srcObject = call.localStream;
+  }
+
+  /* --------------------------- Cycle de vie ------------------------------ */
+  function endCall(notifyPeer) {
+    if (!call) return;
+    const { pc, localStream, ringer, handle, peerPub, role, wantVideo, connectedAt, declined } = call;
+    if (notifyPeer) sendSignal(handle, peerPub, { k: "hangup" }).catch(() => {});
+    ringer?.stop();
+    try { pc?.close(); } catch { /* ignoré */ }
+    localStream?.getTracks().forEach((t) => t.stop());
+    // L'APPELANT journalise l'appel (un seul côté écrit → pas de doublon ; le pair le voit).
+    if (role === "caller") {
+      const status = connectedAt ? "answered" : (declined ? "declined" : "missed");
+      const dur = connectedAt ? Math.round((Date.now() - connectedAt) / 1000) : 0;
+      sendCallLog(handle, peerPub, { k: wantVideo ? "video" : "audio", s: status, d: dur });
+    }
+    call.overlay?.remove();
+    call = null;
+  }
+
+  // APPEL SORTANT (déclenché depuis la fenêtre de chat).
+  // opts.video = false → appel audio seul (préférence « Vidéo » du correspondant).
+  async function startCall(handle, peerPub, opts = {}) {
+    if (call) { toast("Un appel est déjà en cours."); return; }
+    if (!peerPub) { toast("Ce contact n'a pas encore activé la messagerie chiffrée."); return; }
+    const wantVideo = opts.video !== false;
+    call = { handle, peerPub, role: "caller", pendingIce: [], remoteDescSet: false, ringer: makeRinger(), wantVideo };
+    call.overlay = mountOverlay(handle, true, true);
+    if (!wantVideo) call.overlay.querySelector("#call-cam")?.setAttribute("hidden", "");
+    try {
+      call.localStream = await getMedia(wantVideo);
+      attachLocal();
+      call.pc = makePC();
+      call.localStream.getTracks().forEach((t) => call.pc.addTrack(t, call.localStream));
+      const offer = await call.pc.createOffer();
+      await call.pc.setLocalDescription(offer);
+      await sendSignal(handle, peerPub, { k: "offer", sdp: offer });
+      call.ringer.start();
+    } catch (e) {
+      toast("Impossible de démarrer l'appel : " + (e?.message || e));
+      endCall(false);
+    }
+  }
+
+  // ACCEPTATION d'un appel ENTRANT.
+  async function acceptIncoming() {
+    if (!call || call.role !== "callee" || !call.pendingOffer) return;
+    call.ringer?.stop();
+    try {
+      call.localStream = await getMedia(!!call.wantVideo); // respecte audio vs vidéo de l'offre
+      attachLocal();
+      call.pc = makePC();
+      call.localStream.getTracks().forEach((t) => call.pc.addTrack(t, call.localStream));
+      await call.pc.setRemoteDescription(call.pendingOffer);
+      call.remoteDescSet = true;
+      await flushPendingIce();
+      const answer = await call.pc.createAnswer();
+      await call.pc.setLocalDescription(answer);
+      await sendSignal(call.handle, call.peerPub, { k: "answer", sdp: answer });
+      setStage("connecting");
+      const ringEl = call.overlay.querySelector(".call-ring-actions");
+      if (ringEl) ringEl.remove();
+    } catch (e) {
+      toast("Échec de l'acceptation : " + (e?.message || e));
+      endCall(false);
+    }
+  }
+
+  /* --------------------- Réception de la signalisation ------------------- */
+  onSSE("signal", async (d) => {
+    if (!d || !d.from || !d.iv || !d.ciphertext) return;
+    // E2E doit être prêt pour déchiffrer (utile si aucun chat n'est ouvert).
+    await ensureE2E(myHandle(), myKey()).catch(() => {});
+    const plain = await e2eDecrypt(d.pub, d.iv, d.ciphertext);
+    if (plain === null) return; // indéchiffrable → on ignore
+    let msg;
+    try { msg = JSON.parse(plain); } catch { return; }
+
+    // OFFRE entrante.
+    if (msg.k === "offer") {
+      if (call) { // déjà en appel → occupé
+        sendSignal(d.from, d.pub, { k: "decline" }).catch(() => {});
+        return;
+      }
+      // Audio seul vs vidéo : déduit de l'offre (présence d'un média m=video). On ne doit
+      // PAS ouvrir la caméra pour répondre à un appel audio (sinon audio == vidéo).
+      const hasVideo = typeof msg.sdp?.sdp === "string" && msg.sdp.sdp.includes("m=video");
+      call = {
+        handle: d.from, peerPub: d.pub, role: "callee",
+        pendingIce: [], pendingOffer: msg.sdp, remoteDescSet: false, ringer: makeRinger(),
+        wantVideo: hasVideo,
+      };
+      call.overlay = mountOverlay(d.from, true, false);
+      if (!hasVideo) call.overlay.querySelector("#call-cam")?.setAttribute("hidden", "");
+      call.ringer.start();
+      return;
+    }
+
+    // Les autres messages ne concernent que l'appel courant avec ce pair.
+    if (!call || d.from !== call.handle) return;
+
+    if (msg.k === "answer" && call.role === "caller") {
+      call.ringer?.stop();
+      try {
+        await call.pc.setRemoteDescription(msg.sdp);
+        call.remoteDescSet = true;
+        await flushPendingIce();
+        setStage("connecting");
+      } catch { /* ignoré */ }
+    } else if (msg.k === "ice") {
+      if (call.pc && call.remoteDescSet) {
+        try { await call.pc.addIceCandidate(msg.cand); } catch { /* ignoré */ }
+      } else {
+        call.pendingIce.push(msg.cand);
+      }
+    } else if (msg.k === "hangup") {
+      toast(`@${call.handle} a raccroché.`);
+      endCall(false);
+    } else if (msg.k === "decline") {
+      toast(`@${call.handle} a refusé l'appel.`);
+      call.declined = true; // distingue « refusé » de « sans réponse » dans l'historique
+      endCall(false);
+    }
+  });
+
+  host.call = { start: startCall };
+
+  host.registerPlugin({ name: "call" });
+}

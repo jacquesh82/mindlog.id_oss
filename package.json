@@ -1,0 +1,48 @@
+{
+  "name": "id-mindlog-today",
+  "version": "0.6.3",
+  "private": true,
+  "type": "module",
+  "description": "Carte d'identité en ligne, ultra simple : 1 page + API + MCP.",
+  "scripts": {
+    "dev": "DATABASE_DRIVER=pglite PGLITE_PATH=./data/dev-pglite tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "DATABASE_DRIVER=pglite node --import tsx --test test/*.test.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx -e \"import('./src/db.ts').then(m => m.initDb()).then(() => { console.log('migrations appliquees'); process.exit(0); })\"",
+    "db:migrate-from-sqlite": "tsx scripts/migrate-to-postgres.ts",
+    "db:reset": "tsx scripts/reset-db.ts",
+    "db:clear-messages": "tsx scripts/delete-messages.ts",
+    "test:e2e": "node e2e/run.mjs"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.4.5",
+    "@hono/node-server": "^1.13.7",
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "@simplewebauthn/server": "^13.3.0",
+    "better-sqlite3": "^11.7.0",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.6.14",
+    "mjml": "^5.2.2",
+    "nodemailer": "^8.0.8",
+    "pg": "^8.21.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.2",
+    "@types/nodemailer": "^8.0.0",
+    "@types/pg": "^8.20.0",
+    "drizzle-kit": "^0.31.10",
+    "eslint": "^10.4.0",
+    "globals": "^17.6.0",
+    "playwright": "^1.60.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.59.4"
+  }
+}

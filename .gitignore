@@ -1,0 +1,23 @@
+node_modules/
+/data/
+*.log
+.DS_Store
+.screenshots/
+.env
+certs/
+.dual-graph/
+.claude/
+CLAUDE.md
+CONTEXT.md
+ruvector.db
+
+# Tauri desktop — artefacts de build
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+
+# Screenshots de validation (artefacts de test)
+test/validation-screenshots/
+
+# LaTeX — artefacts générés
+docs/whitepaper/*.aux
+docs/whitepaper/*.pdf

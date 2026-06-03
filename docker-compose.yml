@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: mindlog-id_db
+    environment:
+      POSTGRES_USER: mindlog
+      POSTGRES_PASSWORD: mindlog
+      POSTGRES_DB: mindlog
+    ports:
+      - "5432:5432" # exposé pour `npm run dev` en local
+    volumes:
+      - mindlog-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mindlog"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    build: .
+    image: mindlog-id
+    container_name: mindlog-id_app
+    ports:
+      - "8787:8787"
+    volumes:
+      - mindlog-data:/app/data # photos & galerie (fichiers)
+    environment:
+      PORT: "8787"
+      # Les migrations Drizzle sont appliquées automatiquement au démarrage.
+      DATABASE_URL: postgres://mindlog:mindlog@db:5432/mindlog
+      # APP_URL: https://id.mindlog.today
+      # SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, MAIL_FROM…
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mindlog-data:
+  mindlog-pgdata:

@@ -1,0 +1,31 @@
+# Environnement de DÉVELOPPEMENT en HTTPS.
+#
+# Ce compose ne lance QUE le reverse proxy TLS. Le serveur applicatif tourne sur
+# l'hôte via `npm run dev` (HTTP, port 8787) et Postgres via le `docker-compose.yml`
+# principal. Caddy termine le TLS pour https://id.mindlog.localhost avec un cert
+# mkcert (CA locale de confiance) et proxifie vers l'hôte.
+#
+# Pré-requis :
+#   1. /etc/hosts (Linux) :  192.168.1.170 id.mindlog.localhost
+#   2. certs/ généré :  mkcert -cert-file certs/id.mindlog.localhost.pem \
+#                              -key-file  certs/id.mindlog.localhost-key.pem \
+#                              id.mindlog.localhost localhost 192.168.1.170 127.0.0.1 10.0.2.2
+#   3. APP_URL=https://id.mindlog.localhost dans .env
+#
+# Lancer :
+#   docker compose up -d db                       # Postgres
+#   npm run dev                                   # app HTTP 8787
+#   docker compose -f docker-compose.dev.yml up   # TLS 443 → 8787
+services:
+  caddy-dev:
+    image: caddy:2-alpine
+    container_name: mindlog-id_caddy_dev
+    ports:
+      - "443:443"
+    extra_hosts:
+      # Permet à Caddy (dans le conteneur) de joindre `npm run dev` sur l'hôte.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./Caddyfile.dev:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro
+    restart: unless-stopped

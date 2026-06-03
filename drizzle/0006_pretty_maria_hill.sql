@@ -1,0 +1,1 @@
+ALTER TABLE "identities" ADD COLUMN "settings" text DEFAULT '{}' NOT NULL;

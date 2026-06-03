@@ -1,0 +1,18 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+# Dossiers de build de tous les modules (app/build, core/*/build, …).
+build/
+# Cache du démon Kotlin (sessions de compilation).
+.kotlin/
+# Artefacts locaux (APK téléchargés, captures d'écran de test).
+/dist
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+/app/release
+*.keystore
+*.jks

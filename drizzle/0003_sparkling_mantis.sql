@@ -1,0 +1,1 @@
+ALTER TABLE "requests" ADD COLUMN "reminders_sent" text DEFAULT '' NOT NULL;

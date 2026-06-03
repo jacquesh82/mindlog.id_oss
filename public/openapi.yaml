@@ -1,0 +1,1166 @@
+openapi: 3.1.0
+info:
+  title: mindlog · id — API
+  version: 0.2.2
+  description: |
+    Carte d'identité en ligne (1 page + API + MCP).
+
+    ## Authentification
+    Deux mécanismes, résolus par `currentIdentity()` :
+    1. **Cookie de session** `mindlog_session` (HttpOnly, Secure, SameSite=Lax) —
+       posé après login passkey ou échange clé→session. Préféré pour le navigateur.
+       Pour les méthodes non sûres (POST/PUT/PATCH/DELETE), l'en-tête `Origin` est
+       vérifié quand il est présent (protection CSRF).
+    2. **Clé d'accès** — secret de 24 octets (base64url). Transmis soit par l'en-tête
+       `X-Access-Key`, soit par le paramètre de requête `?key=...`. Utilisé par les
+       liens privés `/k/{clé}`, le serveur MCP et le flux SSE.
+
+    Les routes « contacts » exigent une relation **réciproque** entre les deux handles.
+    Les routes « publiques » n'exigent rien (un viewer authentifié élargit la réponse).
+
+    ## Sécurité transverse
+    - **Rate-limiting** (par IP) : `429 Too Many Requests` + `Retry-After`.
+      Backstop global de 300 req/min sur `/api/*` ; limites strictes sur
+      `POST /api/identities` (10/h), `POST /api/recover` (5/15 min),
+      `POST /api/passkeys/auth/*` (20/15 min), `GET /api/search` (60/min).
+    - **Taille du corps** : `413` au-delà de 256 Ko (JSON) ou 55 Mo (multipart).
+    - **CSRF** : pour une mutation authentifiée par cookie, l'`Origin` (ou à
+      défaut le `Referer`) doit correspondre à l'origine de l'app.
+    - **En-têtes** : CSP, `X-Frame-Options: DENY`, `X-Content-Type-Options`,
+      `Referrer-Policy: strict-origin-when-cross-origin`, HSTS (hors localhost).
+servers:
+  - url: https://id.mindlog.today
+    description: Production
+  - url: http://localhost:8787
+    description: Développement local
+
+tags:
+  - name: Identités
+  - name: Auth & Sessions
+  - name: Passkeys
+  - name: Carte (champs)
+  - name: Agenda & Disponibilité
+  - name: Relations
+  - name: Demandes de RDV
+  - name: Messagerie (E2E)
+  - name: Photo & Galerie
+  - name: Notifications & Temps réel
+  - name: Système
+  - name: MCP
+  - name: OAuth 2.1
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: mindlog_session
+    accessKeyHeader:
+      type: apiKey
+      in: header
+      name: X-Access-Key
+    accessKeyQuery:
+      type: apiKey
+      in: query
+      name: key
+    oauth2:
+      type: oauth2
+      description: OAuth 2.1 (Authorization Code + PKCE S256, DCR). mindlog est AS + RS.
+      flows:
+        authorizationCode:
+          authorizationUrl: https://id.mindlog.today/oauth/authorize
+          tokenUrl: https://id.mindlog.today/oauth/token
+          refreshUrl: https://id.mindlog.today/oauth/token
+          scopes:
+            "mindlog:identity": Gérer la carte d'identité du compte connecté
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+    Ok:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+    CardField:
+      type: object
+      properties:
+        key: { type: string }
+        label: { type: string }
+        value: { type: string }
+        is_custom: { type: integer, enum: [0, 1] }
+        is_public: { type: integer, enum: [0, 1] }
+        visibility: { type: string, enum: [public, contact, private] }
+        position: { type: integer }
+    CardEvent:
+      type: object
+      properties:
+        id: { type: integer }
+        identity_id: { type: integer }
+        title: { type: string }
+        starts_at: { type: string, format: date-time }
+        ends_at: { type: string, format: date-time, nullable: true }
+        location: { type: string }
+        notes: { type: string }
+        is_public: { type: integer, enum: [0, 1] }
+    RelationSummary:
+      type: object
+      properties:
+        handle: { type: string }
+        display_name: { type: string }
+        has_photo: { type: boolean }
+        type: { type: string, enum: [amis, pro, autre] }
+        via: { type: string }
+        mutual: { type: boolean }
+    BookingRequest:
+      type: object
+      properties:
+        id: { type: integer }
+        identity_id: { type: integer }
+        day: { type: string, nullable: true }
+        time: { type: string, nullable: true, description: 'Créneau HH:MM' }
+        name: { type: string }
+        email: { type: string }
+        message: { type: string }
+        status: { type: string, enum: [pending, accepted, declined] }
+        created_at: { type: string, format: date-time }
+    Availability:
+      type: object
+      description: Règle de disponibilité générale (défaut par jour de semaine + périodes + horaires).
+      properties:
+        weekdays:
+          type: array
+          description: 7 booléens, jours libres par défaut (index 0 = lundi … 6 = dimanche).
+          items: { type: boolean }
+        periods:
+          type: array
+          description: Périodes datées imposant un statut (vacances « off », dispo exceptionnelle « on »).
+          items:
+            type: object
+            properties:
+              from: { type: string, example: '2026-08-01' }
+              to: { type: string, example: '2026-08-15' }
+              free: { type: boolean }
+        start: { type: string, example: '09:00', description: Début de journée }
+        end: { type: string, example: '18:00', description: Fin de journée }
+        slot_minutes: { type: integer, enum: [15, 30, 60], description: Finesse des créneaux }
+    Settings:
+      type: object
+      description: Préférences du compte (onglet « Options »).
+      properties:
+        allow_chat: { type: boolean }
+        allow_call: { type: boolean }
+        allow_video: { type: boolean }
+        allow_requests: { type: boolean }
+        public_availability: { type: boolean }
+        availability: { $ref: '#/components/schemas/Availability' }
+
+security:
+  - sessionCookie: []
+  - accessKeyHeader: []
+  - accessKeyQuery: []
+
+paths:
+  /api/identities:
+    post:
+      tags: [Identités]
+      summary: Créer une identité (handle + clé d'accès)
+      security: []
+      description: Protégé par Cloudflare Turnstile en production (sauf localhost).
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [handle]
+              properties:
+                handle: { type: string, pattern: '^[a-z0-9][a-z0-9_-]{1,29}$' }
+                display_name: { type: string }
+                email: { type: string, format: email }
+                autoCreated: { type: boolean }
+                turnstileToken: { type: string }
+      responses:
+        '201':
+          description: Identité créée
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  handle: { type: string }
+                  accessKey: { type: string }
+                  publicUrl: { type: string }
+                  privateUrl: { type: string }
+        '400': { description: Handle invalide ou Turnstile échoué, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: Handle déjà pris ou réservé }
+
+  /api/recover:
+    post:
+      tags: [Identités]
+      summary: Récupérer un compte par email (régénère la clé d'accès)
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [handle, email]
+              properties:
+                handle: { type: string }
+                email: { type: string, format: email }
+      responses:
+        '200':
+          description: |
+            Si l'email correspond : nouvelle clé envoyée par mail (`sent: true`).
+            Si le mail n'est pas configuré ou échoue, la clé est renvoyée en clair.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sent: { type: boolean }
+                  handle: { type: string }
+                  accessKey: { type: string }
+                  privateUrl: { type: string }
+        '400': { description: Handle/email ne correspondent à aucun compte }
+
+  /api/search:
+    get:
+      tags: [Identités]
+      summary: Rechercher des identités par handle ou nom
+      security: []
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Résultats (max 12)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        handle: { type: string }
+                        display_name: { type: string }
+                        title: { type: string }
+                        has_photo: { type: boolean }
+
+  /api/identities/{handle}:
+    get:
+      tags: [Identités]
+      summary: Carte publique d'une identité
+      security: []
+      description: Le niveau de visibilité des champs dépend du viewer (owner / contact / public).
+      parameters:
+        - { name: handle, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Carte
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  handle: { type: string }
+                  fields: { type: array, items: { $ref: '#/components/schemas/CardField' } }
+                  events: { type: array, items: { $ref: '#/components/schemas/CardEvent' } }
+                  overrides: { type: object, additionalProperties: { type: string, enum: [free, busy] } }
+                  availability:
+                    nullable: true
+                    description: Règle de dispo générale (null si le profil la garde privée).
+                    allOf: [{ $ref: '#/components/schemas/Availability' }]
+                  options:
+                    type: object
+                    description: Autorisations du profil (pour afficher/masquer les actions de contact).
+                    properties:
+                      allowChat: { type: boolean }
+                      allowCall: { type: boolean }
+                      allowVideo: { type: boolean }
+                      allowRequests: { type: boolean }
+                      publicAvailability: { type: boolean }
+                  relations: { type: object }
+                  hasPhoto: { type: boolean }
+                  pubkey: { type: string }
+                  viewer:
+                    type: object
+                    nullable: true
+                    properties:
+                      handle: { type: string }
+                      isContact: { type: boolean }
+                      isRelated: { type: boolean }
+        '404': { description: Introuvable }
+
+  /api/identities/{handle}/slots:
+    get:
+      tags: [Demandes de RDV]
+      summary: Créneaux horaires disponibles d'un profil pour un jour donné
+      security: []
+      description: >
+        Respecte la visibilité (public_availability), le statut effectif du jour
+        et la finesse (15/30/60 min) réglée par le profil. `status` vaut `free`,
+        `busy`, `private` (dispo masquée) ou `closed` (RDV désactivés).
+      parameters:
+        - { name: handle, in: path, required: true, schema: { type: string } }
+        - { name: day, in: query, required: true, schema: { type: string, example: '2026-06-03' } }
+      responses:
+        '200':
+          description: Créneaux
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  day: { type: string }
+                  status: { type: string, enum: [free, busy, private, closed] }
+                  slotMinutes: { type: integer, enum: [15, 30, 60] }
+                  slots:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        time: { type: string, example: '09:30' }
+                        taken: { type: boolean }
+        '400': { description: Jour invalide }
+        '404': { description: Identité introuvable }
+
+  /api/identities/{handle}/photo:
+    get:
+      tags: [Photo & Galerie]
+      summary: Photo de profil (binaire image)
+      security: []
+      parameters:
+        - { name: handle, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Image, content: { image/*: { schema: { type: string, format: binary } } } }
+        '404': { description: Pas de photo }
+
+  /api/identities/{handle}/requests:
+    post:
+      tags: [Demandes de RDV]
+      summary: Envoyer une demande de RDV à une identité (public)
+      security: []
+      parameters:
+        - { name: handle, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                email: { type: string }
+                message: { type: string }
+                day: { type: string, nullable: true }
+                time: { type: string, nullable: true, description: 'Créneau HH:MM (nécessite day)' }
+      responses:
+        '201': { description: Demande enregistrée }
+        '400': { description: Nom requis, ou demande à soi-même }
+        '403': { description: Le profil n'accepte pas les demandes de RDV }
+        '404': { description: Identité introuvable }
+
+  /api/me:
+    get:
+      tags: [Identités]
+      summary: Carte privée complète de l'identité authentifiée
+      responses:
+        '200': { description: Données complètes (champs, événements, relations, notifications, requests, settings…) }
+        '401': { description: Non authentifié }
+    delete:
+      tags: [Identités]
+      summary: Suppression définitive du compte (RGPD)
+      responses:
+        '200': { description: Supprimé, content: { application/json: { schema: { $ref: '#/components/schemas/Ok' } } } }
+        '401': { description: Non authentifié }
+
+  /api/me/settings:
+    patch:
+      tags: [Identités]
+      summary: Mettre à jour les préférences (onglet « Options »)
+      description: >
+        N'accepte que les clés connues (booléens d'autorisation + objet `availability`).
+        Tout champ inconnu est ignoré.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                allow_chat: { type: boolean }
+                allow_call: { type: boolean }
+                allow_video: { type: boolean }
+                allow_requests: { type: boolean }
+                public_availability: { type: boolean }
+                availability: { $ref: '#/components/schemas/Availability' }
+      responses:
+        '200':
+          description: Préférences à jour
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  settings: { $ref: '#/components/schemas/Settings' }
+        '401': { description: Non authentifié }
+
+  /api/me/export:
+    get:
+      tags: [Identités]
+      summary: Export RGPD de toutes les données (JSON téléchargeable)
+      responses:
+        '200': { description: Fichier JSON }
+        '401': { description: Non authentifié }
+
+  /api/session:
+    get:
+      tags: [Auth & Sessions]
+      summary: État d'authentification léger (pour reconnexion auto)
+      security:
+        - sessionCookie: []
+        - accessKeyQuery: []
+      responses:
+        '200':
+          description: État
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authenticated: { type: boolean }
+                  handle: { type: string }
+                  accessKey: { type: string }
+                  displayName: { type: string, nullable: true }
+                  hasPhoto: { type: boolean }
+
+  /api/auth/session-from-key:
+    post:
+      tags: [Auth & Sessions]
+      summary: Échanger une clé d'accès valide contre un cookie de session
+      responses:
+        '200': { description: Session créée }
+        '401': { description: Clé invalide }
+
+  /api/auth/pin:
+    post:
+      tags: [Auth & Sessions]
+      summary: Générer un code PIN d'appairage (usage unique, TTL 10 min) pour connecter un nouvel appareil
+      responses:
+        '200': { description: 'PIN généré : { pin, expiresAt }' }
+        '401': { description: Non authentifié }
+
+  /api/auth/redeem-pin:
+    post:
+      tags: [Auth & Sessions]
+      summary: Échanger un code PIN valide contre la clé d'accès (appareil non authentifié)
+      security: []
+      responses:
+        '200': { description: 'PIN consommé : { accessKey, handle }' }
+        '404': { description: PIN invalide ou expiré }
+        '429': { description: Trop de tentatives }
+
+  /api/auth/logout:
+    post:
+      tags: [Auth & Sessions]
+      summary: Déconnecter cet appareil (révoque la session courante)
+      security: []
+      responses:
+        '200': { description: Déconnecté }
+
+  /api/auth/logout-all:
+    post:
+      tags: [Auth & Sessions]
+      summary: Déconnecter tous les appareils
+      responses:
+        '200': { description: Toutes les sessions révoquées }
+        '401': { description: Non authentifié }
+
+  /api/sessions:
+    get:
+      tags: [Auth & Sessions]
+      summary: Lister les sessions actives
+      responses:
+        '200':
+          description: Sessions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, description: hash du token }
+                        createdAt: { type: string }
+                        lastSeen: { type: string }
+                        userAgent: { type: string, nullable: true }
+                        current: { type: boolean }
+        '401': { description: Non authentifié }
+
+  /api/sessions/{id}:
+    delete:
+      tags: [Auth & Sessions]
+      summary: Révoquer une session précise (par son hash)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Révoquée }
+        '401': { description: Non authentifié }
+
+  /api/access-key/rotate:
+    post:
+      tags: [Auth & Sessions]
+      summary: Régénérer la clé d'accès (invalide l'ancienne + toutes les sessions)
+      responses:
+        '200':
+          description: Nouvelle clé
+          content:
+            application/json:
+              schema: { type: object, properties: { accessKey: { type: string } } }
+        '401': { description: Non authentifié }
+
+  /api/recovery-email:
+    put:
+      tags: [Auth & Sessions]
+      summary: Définir/modifier l'email de récupération
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { email: { type: string } } }
+      responses:
+        '200': { description: Enregistré }
+        '401': { description: Non authentifié }
+
+  /api/passkeys:
+    get:
+      tags: [Passkeys]
+      summary: Lister les passkeys enregistrées
+      responses:
+        '200': { description: Liste }
+        '401': { description: Non authentifié }
+
+  /api/passkeys/register/begin:
+    post:
+      tags: [Passkeys]
+      summary: Démarrer l'enregistrement d'une passkey (options WebAuthn)
+      responses:
+        '200': { description: PublicKeyCredentialCreationOptions }
+        '401': { description: Non authentifié }
+
+  /api/passkeys/register/finish:
+    post:
+      tags: [Passkeys]
+      summary: Finaliser l'enregistrement d'une passkey
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [response]
+              properties:
+                name: { type: string }
+                response: { type: object, description: RegistrationResponseJSON }
+      responses:
+        '200': { description: Passkey enregistrée }
+        '400': { description: Échec de vérification }
+        '401': { description: Non authentifié }
+
+  /api/passkeys/{credId}:
+    delete:
+      tags: [Passkeys]
+      summary: Supprimer une passkey
+      parameters:
+        - { name: credId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Supprimée }
+        '401': { description: Non authentifié }
+
+  /api/passkeys/auth/begin:
+    post:
+      tags: [Passkeys]
+      summary: Démarrer l'authentification par passkey
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [handle], properties: { handle: { type: string } } }
+      responses:
+        '200': { description: PublicKeyCredentialRequestOptions }
+        '400': { description: Handle requis ou inconnu }
+
+  /api/passkeys/auth/finish:
+    post:
+      tags: [Passkeys]
+      summary: Finaliser l'authentification par passkey (ouvre une session)
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [handle, response]
+              properties:
+                handle: { type: string }
+                response: { type: object, description: AuthenticationResponseJSON }
+      responses:
+        '200': { description: Connecté (cookie posé) }
+        '401': { description: Échec d'authentification }
+
+  /api/pubkey:
+    put:
+      tags: [Messagerie (E2E)]
+      summary: Publier sa clé publique E2E (max 2000 caractères)
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { pubkey: { type: string, maxLength: 2000 } } }
+      responses:
+        '200': { description: Enregistrée }
+        '400': { description: Pubkey invalide }
+        '401': { description: Non authentifié }
+
+  /api/card/field:
+    put:
+      tags: [Carte (champs)]
+      summary: Créer ou mettre à jour un champ de la carte
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key]
+              properties:
+                key: { type: string }
+                label: { type: string }
+                value: { type: string }
+                is_custom: { type: boolean }
+                is_public: { type: boolean }
+                visibility: { type: string, enum: [public, contact, private] }
+                position: { type: integer }
+      responses:
+        '200': { description: Champ, content: { application/json: { schema: { $ref: '#/components/schemas/CardField' } } } }
+        '400': { description: key requis }
+        '401': { description: Non authentifié }
+
+  /api/card/field/{key}:
+    delete:
+      tags: [Carte (champs)]
+      summary: Supprimer un champ custom (les champs de base sont juste vidés)
+      parameters:
+        - { name: key, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Supprimé/vidé }
+        '401': { description: Non authentifié }
+        '404': { description: Introuvable }
+
+  /api/tags:
+    post:
+      tags: [Carte (champs)]
+      summary: Ajouter un tag public au profil (max 20, 30 caractères)
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [tag], properties: { tag: { type: string, maxLength: 30 } } }
+      responses:
+        '201': { description: "Liste des tags à jour", content: { application/json: { schema: { type: object, properties: { tags: { type: array, items: { type: string } } } } } } }
+        '400': { description: Tag vide ou maximum atteint }
+        '401': { description: Non authentifié }
+
+  /api/tags/{tag}:
+    delete:
+      tags: [Carte (champs)]
+      summary: Retirer un tag du profil
+      parameters:
+        - { name: tag, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Retiré }
+        '401': { description: Non authentifié }
+        '404': { description: Introuvable }
+
+  /api/agenda:
+    post:
+      tags: [Agenda & Disponibilité]
+      summary: Ajouter un événement à l'agenda
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, starts_at]
+              properties:
+                title: { type: string }
+                starts_at: { type: string, format: date-time }
+                ends_at: { type: string, nullable: true }
+                location: { type: string }
+                notes: { type: string }
+                is_public: { type: boolean }
+      responses:
+        '201': { description: Événement créé, content: { application/json: { schema: { $ref: '#/components/schemas/CardEvent' } } } }
+        '400': { description: title et starts_at requis }
+        '401': { description: Non authentifié }
+
+  /api/agenda/{id}:
+    delete:
+      tags: [Agenda & Disponibilité]
+      summary: Supprimer un événement
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: Supprimé }
+        '401': { description: Non authentifié }
+        '404': { description: Introuvable }
+
+  /api/availability/{day}:
+    put:
+      tags: [Agenda & Disponibilité]
+      summary: Définir la disponibilité d'un jour (free/busy)
+      parameters:
+        - { name: day, in: path, required: true, schema: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { status: { type: string, enum: [free, busy] } } }
+      responses:
+        '200': { description: Enregistré }
+        '400': { description: Date ou statut invalide }
+        '401': { description: Non authentifié }
+
+  /api/relations:
+    post:
+      tags: [Relations]
+      summary: Ajouter une relation (par handle)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [handle]
+              properties:
+                handle: { type: string }
+                type: { type: string, enum: [amis, pro, autre] }
+      responses:
+        '201': { description: Relation créée }
+        '400': { description: handle requis / soi-même }
+        '401': { description: Non authentifié }
+        '404': { description: Handle inconnu }
+
+  /api/relations/{handle}:
+    delete:
+      tags: [Relations]
+      summary: Supprimer une relation
+      parameters:
+        - { name: handle, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Supprimée }
+        '401': { description: Non authentifié }
+        '404': { description: Introuvable }
+
+  /api/requests/{id}:
+    patch:
+      tags: [Demandes de RDV]
+      summary: Changer le statut d'une demande de RDV
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { status: { type: string, enum: [pending, accepted, declined] } } }
+      responses:
+        '200': { description: Mis à jour }
+        '400': { description: Statut invalide }
+        '401': { description: Non authentifié }
+        '404': { description: Introuvable }
+    delete:
+      tags: [Demandes de RDV]
+      summary: Supprimer une demande de RDV
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: Supprimée }
+        '401': { description: Non authentifié }
+        '404': { description: Introuvable }
+
+  /api/messages/{handle}:
+    get:
+      tags: [Messagerie (E2E)]
+      summary: Lire la conversation avec un contact
+      parameters:
+        - { name: handle, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Messages chiffrés + pubkey du pair }
+        '403': { description: Réservé aux contacts (relation réciproque) }
+    post:
+      tags: [Messagerie (E2E)]
+      summary: Envoyer un message chiffré (iv + ciphertext)
+      parameters:
+        - { name: handle, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                iv: { type: string }
+                ciphertext: { type: string }
+      responses:
+        '201': { description: Envoyé }
+        '400': { description: Erreur de stockage }
+        '403': { description: Réservé aux contacts }
+
+  /api/messages/{handle}/ack:
+    post:
+      tags: [Messagerie (E2E)]
+      summary: Marquer les messages comme lus/non lus
+      parameters:
+        - { name: handle, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { read: { type: boolean } } }
+      responses:
+        '200': { description: OK }
+        '403': { description: Réservé aux contacts }
+
+  /api/messages/{handle}/{id}:
+    delete:
+      tags: [Messagerie (E2E)]
+      summary: Supprimer un de ses messages
+      parameters:
+        - { name: handle, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: Supprimé }
+        '403': { description: Réservé aux contacts }
+        '404': { description: Introuvable }
+
+  /api/messages/{handle}/react:
+    post:
+      tags: [Messagerie (E2E)]
+      summary: Ajouter/retirer une réaction emoji
+      parameters:
+        - { name: handle, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                messageId: { type: integer }
+                emoji: { type: string }
+      responses:
+        '200': { description: OK }
+        '400': { description: Invalide }
+        '403': { description: Réservé aux contacts }
+
+  /api/signal/{handle}:
+    post:
+      tags: [Messagerie (E2E)]
+      summary: Relayer un signal WebRTC chiffré (appel P2P)
+      description: >
+        Relais éphémère de la signalisation WebRTC (offer/answer/ICE/hangup) vers
+        un contact, poussé en temps réel via SSE (événement « signal »). Le serveur
+        ne stocke rien et ne peut pas lire le contenu (chiffré de bout en bout).
+        Le média audio/vidéo, lui, circule en P2P direct entre navigateurs.
+      parameters:
+        - { name: handle, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                iv: { type: string }
+                ciphertext: { type: string, description: "Payload SDP/ICE chiffré (max 16000 car.)" }
+      responses:
+        '200': { description: Relayé au pair }
+        '400': { description: Signal invalide }
+        '403': { description: Réservé aux contacts }
+
+  /api/e2e/vault:
+    get:
+      tags: [Messagerie (E2E)]
+      summary: Lire le coffre de clé E2E (portabilité multi-appareils)
+      description: >
+        Renvoie le coffre chiffré (JSON opaque) de l'identité connectée, ou null.
+        Contient la clé privée E2E chiffrée par une passkey (PRF) et/ou une
+        passphrase. Le serveur ne peut pas en lire le contenu.
+      responses:
+        '200': { description: "{ vault: string|null }" }
+        '401': { description: Non authentifié }
+    put:
+      tags: [Messagerie (E2E)]
+      summary: Enregistrer le coffre de clé E2E (blob chiffré opaque)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                vault: { type: string, description: "JSON chiffré (max 8000 car.)" }
+      responses:
+        '200': { description: Enregistré }
+        '400': { description: Coffre invalide }
+        '401': { description: Non authentifié }
+    delete:
+      tags: [Messagerie (E2E)]
+      summary: Supprimer le coffre de clé E2E
+      responses:
+        '200': { description: Supprimé }
+        '401': { description: Non authentifié }
+
+  /api/photo:
+    post:
+      tags: [Photo & Galerie]
+      summary: Téléverser sa photo de profil (multipart, max 5 Mo)
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                photo: { type: string, format: binary }
+      responses:
+        '200': { description: Enregistrée }
+        '400': { description: Fichier requis }
+        '401': { description: Non authentifié }
+        '413': { description: Trop volumineux (>5 Mo) }
+        '415': { description: Type non supporté (jpg/png/webp/gif) }
+
+  /api/gallery/{handle}:
+    get:
+      tags: [Photo & Galerie]
+      summary: Galerie publique d'une identité
+      security: []
+      parameters:
+        - { name: handle, in: path, required: true, schema: { type: string } }
+        - { name: x-fingerprint, in: header, schema: { type: string }, description: empreinte anonyme pour l'état « liké » }
+      responses:
+        '200': { description: Photos }
+        '404': { description: Introuvable }
+
+  /api/gallery:
+    post:
+      tags: [Photo & Galerie]
+      summary: Ajouter des photos à sa galerie (max 10, 5 Mo chacune)
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                photos: { type: array, items: { type: string, format: binary } }
+      responses:
+        '200': { description: Photos ajoutées }
+        '400': { description: Limite atteinte ou aucun fichier }
+        '401': { description: Non authentifié }
+
+  /api/gallery/photo/{id}:
+    get:
+      tags: [Photo & Galerie]
+      summary: Image d'une photo de galerie (binaire)
+      security: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: Image, content: { image/*: { schema: { type: string, format: binary } } } }
+        '404': { description: Introuvable }
+
+  /api/gallery/{id}:
+    delete:
+      tags: [Photo & Galerie]
+      summary: Supprimer une de ses photos de galerie
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: Supprimée }
+        '401': { description: Non authentifié }
+        '404': { description: Introuvable }
+
+  /api/gallery/{id}/like:
+    post:
+      tags: [Photo & Galerie]
+      summary: Liker/déliker une photo (empreinte anonyme)
+      security: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [fingerprint], properties: { fingerprint: { type: string, maxLength: 64 } } }
+      responses:
+        '200': { description: Nouvel état (likes, liked) }
+        '400': { description: fingerprint requis }
+        '404': { description: Introuvable }
+
+  /api/notifications/read:
+    post:
+      tags: [Notifications & Temps réel]
+      summary: Marquer toutes les notifications comme lues
+      responses:
+        '200': { description: OK }
+        '401': { description: Non authentifié }
+
+  /api/events:
+    get:
+      tags: [Notifications & Temps réel]
+      summary: Flux SSE temps réel (notifications + messages)
+      description: text/event-stream ; émet `ready`, `notif`, `message`, `ack`, `ping`.
+      responses:
+        '200': { description: Flux SSE, content: { text/event-stream: {} } }
+        '401': { description: Non authentifié }
+
+  /.well-known/oauth-authorization-server:
+    get:
+      tags: [OAuth 2.1]
+      summary: Métadonnées du serveur d'autorisation (RFC 8414)
+      security: []
+      responses:
+        '200': { description: Métadonnées AS (endpoints, S256, grants) }
+
+  /.well-known/oauth-protected-resource:
+    get:
+      tags: [OAuth 2.1]
+      summary: Métadonnées de la ressource protégée /mcp (RFC 9728)
+      security: []
+      responses:
+        '200': { description: "resource + authorization_servers" }
+
+  /oauth/register:
+    post:
+      tags: [OAuth 2.1]
+      summary: Enregistrement dynamique de client (RFC 7591)
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [redirect_uris]
+              properties:
+                redirect_uris: { type: array, items: { type: string, format: uri } }
+                client_name: { type: string }
+                token_endpoint_auth_method: { type: string, enum: [none, client_secret_post] }
+      responses:
+        '201': { description: client_id (+ client_secret si confidentiel) }
+        '400': { description: redirect_uris invalides }
+
+  /oauth/authorize:
+    get:
+      tags: [OAuth 2.1]
+      summary: Page de consentement (Authorization Code + PKCE S256)
+      security: []
+      parameters:
+        - { name: response_type, in: query, required: true, schema: { type: string, enum: [code] } }
+        - { name: client_id, in: query, required: true, schema: { type: string } }
+        - { name: redirect_uri, in: query, required: true, schema: { type: string } }
+        - { name: code_challenge, in: query, required: true, schema: { type: string } }
+        - { name: code_challenge_method, in: query, required: true, schema: { type: string, enum: [S256] } }
+        - { name: state, in: query, schema: { type: string } }
+        - { name: scope, in: query, schema: { type: string, example: "mindlog:identity" } }
+      responses:
+        '200': { description: Page HTML de consentement (auth par clé d'accès) }
+        '302': { description: Redirection avec erreur OAuth si paramètres invalides }
+        '400': { description: client_id ou redirect_uri invalide }
+    post:
+      tags: [OAuth 2.1]
+      summary: Décision de consentement → redirige avec un code d'autorisation
+      security: []
+      responses:
+        '302': { description: Redirection vers redirect_uri avec code+state, ou error }
+
+  /oauth/token:
+    post:
+      tags: [OAuth 2.1]
+      summary: Échange de code / refresh contre des tokens
+      security: []
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                grant_type: { type: string, enum: [authorization_code, refresh_token] }
+                code: { type: string }
+                code_verifier: { type: string }
+                refresh_token: { type: string }
+                redirect_uri: { type: string }
+                client_id: { type: string }
+                client_secret: { type: string }
+      responses:
+        '200': { description: "access_token, refresh_token, token_type, expires_in, scope" }
+        '400': { description: invalid_grant / unsupported_grant_type }
+        '401': { description: invalid_client }
+
+  /oauth/revoke:
+    post:
+      tags: [OAuth 2.1]
+      summary: Révocation d'un token (RFC 7009)
+      security: []
+      responses:
+        '200': { description: OK (toujours) }
+
+  /mcp:
+    post:
+      tags: [MCP]
+      summary: Connecteur MCP cloud (JSON-RPC 2.0, transport Streamable HTTP)
+      description: |
+        Endpoint MCP authentifié et **scopé à une seule identité**. Authentification :
+        **token OAuth 2.1** (`Authorization: Bearer`, voie standard des connecteurs)
+        ou, en repli, la **clé d'accès** brute (Bearer / `X-Access-Key` / `?key=`).
+        Transport Streamable HTTP stateless (réponses JSON), 23 outils scopés.
+        En 401, l'en-tête `WWW-Authenticate` pointe vers les métadonnées de ressource.
+      security:
+        - oauth2: []
+        - accessKeyHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Message JSON-RPC 2.0 (initialize, tools/list, tools/call…)
+              properties:
+                jsonrpc: { type: string, enum: ["2.0"] }
+                id: { type: integer }
+                method: { type: string, example: tools/list }
+                params: { type: object }
+      responses:
+        '200': { description: Réponse JSON-RPC, content: { application/json: {} } }
+        '401': { description: Clé d'accès requise ou invalide (erreur JSON-RPC -32001) }
+        '413': { description: Corps trop volumineux }
+        '429': { description: Trop de requêtes }
+
+  /privacy:
+    get:
+      tags: [Système]
+      summary: Politique de confidentialité (page HTML publique)
+      security: []
+      responses:
+        '200': { description: Page HTML, content: { text/html: {} } }
+
+  /api/status:
+    get:
+      tags: [Système]
+      summary: État des services (DB, MCP) + compteurs publics
+      security: []
+      responses:
+        '200':
+          description: Statut
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  version: { type: string }
+                  services: { type: object }
+                  mcpTools: { type: integer }
+                  counts: { type: object }
+                  uptimeSeconds: { type: integer }
+                  time: { type: string }

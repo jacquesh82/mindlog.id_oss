@@ -1,0 +1,14 @@
+{
+  "name": "mindlog-id-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Client desktop Tauri de mindlog · id (wrapper de l'app web déployée).",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

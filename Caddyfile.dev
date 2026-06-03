@@ -1,0 +1,16 @@
+# Terminaison TLS de DÉVELOPPEMENT pour https://id.mindlog.localhost.
+# Caddy écoute en 443 avec un certificat mkcert (CA locale de confiance) et
+# proxifie vers le serveur lancé sur l'hôte par `npm run dev` (port 8787).
+# Le schéma https du listener fait que Caddy ajoute X-Forwarded-Proto: https,
+# ce que le serveur lit pour émettre des cookies Secure (voir src/server.ts).
+#
+# Lancer :  docker compose -f docker-compose.dev.yml up   (+ `npm run dev` à côté)
+{
+	admin off
+	auto_https disable_redirects
+}
+
+id.mindlog.localhost {
+	tls /certs/id.mindlog.localhost.pem /certs/id.mindlog.localhost-key.pem
+	reverse_proxy host.docker.internal:8787
+}

@@ -1,0 +1,81 @@
+<!-- Milo, la mascotte caméléon — port du miloSvg() web. accent = vert #34d399 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+
+    <!-- branche -->
+    <path
+        android:pathData="M14,109 L108,109"
+        android:strokeColor="#5a6a4a"
+        android:strokeWidth="5"
+        android:strokeLineCap="round" />
+    <!-- queue enroulée -->
+    <path
+        android:pathData="M40,86 C18,84 9,100 16,110 C21,117 35,116 36,105 C36.5,98 28,95 24,101"
+        android:strokeColor="#43b58f"
+        android:strokeWidth="8"
+        android:strokeLineCap="round" />
+    <!-- pattes -->
+    <path
+        android:pathData="M64,92 C69,101 65,106 58,110"
+        android:strokeColor="#3aa17e"
+        android:strokeWidth="7"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M46,92 C41,101 47,106 53,110"
+        android:strokeColor="#3aa17e"
+        android:strokeWidth="7"
+        android:strokeLineCap="round" />
+    <!-- corps -->
+    <path
+        android:pathData="M40,93 C25,87 25,62 33,49 C41,35 58,30 76,34 C97,39 103,60 95,78 C89,92 70,97 52,96 C48,96 44,95 40,93 Z"
+        android:fillColor="#43b58f"
+        android:strokeColor="#2c7d63"
+        android:strokeWidth="2.5" />
+    <!-- ventre -->
+    <path
+        android:pathData="M32,81 a23,11 0 1,1 46,0 a23,11 0 1,1 -46,0 Z"
+        android:fillColor="#7fdcc0" />
+    <!-- crête -->
+    <path
+        android:pathData="M32,55 q4,-12 10,-9 q1,-12 9,-9 q4,-11 10,-7 q4,-10 10,-6"
+        android:strokeColor="#34d399"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <!-- bouche -->
+    <path
+        android:pathData="M62,72 q13,8 24,0"
+        android:strokeColor="#1f5546"
+        android:strokeWidth="3"
+        android:strokeLineCap="round" />
+    <!-- joue -->
+    <path
+        android:pathData="M64,66 a4,4 0 1,1 8,0 a4,4 0 1,1 -8,0 Z"
+        android:fillColor="#34d399"
+        android:fillAlpha="0.3" />
+    <!-- tête -->
+    <path
+        android:pathData="M68,44 a18,18 0 1,1 36,0 a18,18 0 1,1 -36,0 Z"
+        android:fillColor="#50c79c"
+        android:strokeColor="#2c7d63"
+        android:strokeWidth="2.5" />
+    <!-- blanc de l'œil -->
+    <path
+        android:pathData="M75.5,44 a12.5,12.5 0 1,1 25,0 a12.5,12.5 0 1,1 -25,0 Z"
+        android:fillColor="#f4f8ff" />
+    <!-- iris -->
+    <path
+        android:pathData="M83,45 a7,7 0 1,1 14,0 a7,7 0 1,1 -14,0 Z"
+        android:fillColor="#34d399" />
+    <!-- pupille -->
+    <path
+        android:pathData="M87.8,45 a3.2,3.2 0 1,1 6.4,0 a3.2,3.2 0 1,1 -6.4,0 Z"
+        android:fillColor="#10141d" />
+    <!-- reflet -->
+    <path
+        android:pathData="M85.4,41.3 a2,2 0 1,1 4,0 a2,2 0 1,1 -4,0 Z"
+        android:fillColor="#ffffff" />
+</vector>

@@ -1,0 +1,65 @@
+# Déploiement de production (str01). L'app n'est PAS construite ici : l'image est
+# tirée depuis GitHub Container Registry (poussée par la CI au tag vX.Y.Z).
+# Le reverse proxy TLS existant route id.mindlog.today vers le port 8787.
+#
+# Pré-requis sur str01 : un fichier .env à côté de ce compose (au minimum
+# APP_URL=https://id.mindlog.today ; éventuellement TURNSTILE_*, SMTP_*, et des
+# identifiants Postgres forts via POSTGRES_PASSWORD / DATABASE_URL).
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: mindlog-id_db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mindlog}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mindlog}
+      POSTGRES_DB: ${POSTGRES_DB:-mindlog}
+    volumes:
+      - mindlog-pgdata:/var/lib/postgresql/data
+    # Pas de port exposé : la base n'est joignable que par le réseau interne.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mindlog}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    image: ghcr.io/jacquesh82/mindlog.id:latest
+    container_name: mindlog-id_app
+    ports:
+      # Lié à la loopback uniquement : seul le reverse proxy de l'hôte y accède.
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - mindlog-data:/app/data # photos & galerie (fichiers)
+    environment:
+      PORT: "8787"
+      # Migrations Drizzle appliquées automatiquement au démarrage.
+      DATABASE_URL: ${DATABASE_URL:-postgres://mindlog:mindlog@db:5432/mindlog}
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Terminaison TLS pour id.mindlog.today (cert Let's Encrypt auto via TLS-ALPN-01).
+  # Le routeur SNI de l'hôte route le flux 443 de ce domaine vers 127.0.0.1:9543.
+  caddy:
+    image: caddy:2-alpine
+    container_name: mindlog-id_caddy
+    ports:
+      - "127.0.0.1:9543:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  mindlog-data:
+  mindlog-pgdata:
+  caddy-data:
+  caddy-config:

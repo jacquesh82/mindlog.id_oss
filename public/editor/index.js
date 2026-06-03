@@ -1,0 +1,1848 @@
+// editor/index.js — éditeur privé : orchestrateur (renderPrivate) + rendu
+// (renderEditor) + câblage (wireEditor) + colonne contact + aides internes.
+// Importe le socle (core/state/deck/host/ui/crypto) ; quelques builders de vue
+// partagés avec landing/profil viennent de ../app.js (cycle assumé, usage runtime).
+// Extrait verbatim de app.js. cf. docs/web-app-split-proposal.md
+import { PENDING_INVITE, connectSSE, eventsHtml, footer, headerAccount, headerSearchHtml, notifItemHtml, openMiloTourPicker, openQR, periodsListHtml, profileCardHtml, relItemHtml, relationsListHtml, tagChipsHtml, wireHeaderSearch } from "../app.js";
+import { DEFAULT_SETTINGS, DOW_LETTERS, DOW_NAMES, TOUR_SEEN_KEY, app, myHandle, myKey, normalizeAvailability, pick, relDate, setLastHandle, setMeProfile, setSessionHint, setStoredHandle, setStoredKey, storedHandle, storedKey, viewerHeaders } from "../core.js";
+import { e2eDecrypt, e2eEncrypt, ensureE2E } from "../crypto/e2e.js";
+import { mdDeviceId } from "../crypto/multidevice.js";
+import { ratchetEnsurePrekeys } from "../crypto/ratchet.js";
+import { E2E } from "../crypto/state.js";
+import { e2eSaveVault, e2eVaultGet } from "../crypto/vault.js";
+import { host } from "../host.js";
+import { CREDIT, t } from "../i18n.js";
+import { api, authHeaders, jsonAuth, setAccessKey } from "../net.js";
+import { appState } from "../state.js";
+import { applyTheme, toggleTheme } from "../theme.js";
+import { confirmDialog, copyText, esc, promptPassphrase, promptPin, toast } from "../ui/dom.js";
+import { SOCIALS, SOCIAL_BY_KEY, avatarHtml, genericAvatarSvg, icon, isSocialKey, miloSvg, siteHeader, socialFieldKey, socialIcon, socialUrl } from "../ui/icons.js";
+import { openE2eBackup, openE2eRestore } from "../ui/modals.js";
+import { addDeckColumn, deckState, removeDeckColumn } from "./deck.js";
+import { renderOptionsColumn } from "./tabs/options.js";
+import { renderHomeColumn } from "./tabs/home.js";
+import { renderIdentityColumn } from "./tabs/identity.js";
+import { renderAgendaColumn } from "./tabs/agenda.js";
+import { renderRelationsColumn } from "./tabs/relations.js";
+import { renderNotificationsColumn } from "./tabs/notifications.js";
+
+export async function consumePendingInvite() {
+  let token = null;
+  try { token = sessionStorage.getItem(PENDING_INVITE); } catch {}
+  if (!token) return;
+  try { sessionStorage.removeItem(PENDING_INVITE); } catch {}
+  try {
+    const r = await api(`/api/invites/${encodeURIComponent(token)}/accept`, { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() } });
+    toast(`Invitation acceptée : vous êtes en contact avec @${r.handle} 🎉`);
+  } catch { /* invitation expirée / déjà utilisée */ }
+}
+
+export function dayLoadMap(data) {
+  const load = {};
+  (data.events || []).forEach((e) => {
+    const d = (e.starts_at || "").slice(0, 10);
+    if (d) load[d] = (load[d] || 0) + 1;
+  });
+  (data.requests || []).forEach((r) => {
+    if (r.day && r.status === "accepted") load[r.day] = (load[r.day] || 0) + 1;
+  });
+  return load;
+}
+
+export async function renderPrivate(key) {
+  const cookieMode = !key; // /me : auth par cookie de session ; /k/{clé} : auth par clé
+  appState.key = key; // null en mode cookie (l'auth passe par le cookie)
+  setAccessKey(appState.key); // reflète la clé dans net.js (authHeaders/jsonAuth)
+  app.innerHTML = `<p class="loading">Chargement…</p>`;
+  let data;
+  try {
+    data = await api("/api/me", { headers: authHeaders() });
+    appState.myRelations = data?.relations?.[1] || [];
+    void window.mindlogLocalPim?.save?.(data); // cache PIM hors-ligne (best-effort)
+  } catch {
+    // Hors-ligne (échec réseau) : si un cache PIM local existe, on affiche l'éditeur
+    // depuis le cache plutôt que d'échouer. Le chat E2E reste indisponible hors-ligne.
+    const cachedPim = window.mindlogLocalPim ? await window.mindlogLocalPim.load().catch(() => null) : null;
+    if (cachedPim) {
+      appState.myRelations = cachedPim?.relations?.[1] || [];
+      if (cookieMode) setSessionHint(true);
+      appState.auth = { handle: cachedPim.handle, key: appState.key };
+      connectSSE(cookieMode ? null : appState.key);
+      renderEditor(cachedPim);
+      toast("📴 Hors-ligne — données en cache (le chat reprendra en ligne).");
+      return;
+    }
+    if (cookieMode) {
+      // Session absente/expirée : on oublie l'indice et on revient à l'accueil.
+      setSessionHint(false);
+      location.replace("/");
+      return;
+    }
+    app.style.cssText = "display:flex;align-items:center;justify-content:center;min-height:100dvh";
+    app.innerHTML = `
+      <div class="card" style="text-align:center;max-width:340px">
+        <div class="empty-milo">${miloSvg(110)}</div>
+        <h1>Clé invalide</h1>
+        <p class="subtitle">Ce lien privé ne correspond à aucune identité.</p>
+        <a class="btn primary" href="/">Accueil</a>
+      </div>`;
+    return;
+  }
+  if (!cookieMode) {
+    // Lien /k/{clé} : on échange la clé contre une session cookie afin de la
+    // retirer de la barre d'URL, puis on rejoint /me. La clé n'est plus en URL.
+    try {
+      await api("/api/auth/session-from-key", { method: "POST", headers: { "x-access-key": key } });
+      setLastHandle(data.handle);
+      setSessionHint(true);
+      setStoredKey(null); // migration : plus besoin de conserver la clé en localStorage
+      setStoredHandle(null);
+      location.replace("/me");
+      return;
+    } catch {
+      // Échec réseau : on poursuit en mode lien classique (clé dans l'URL).
+    }
+  }
+  if (cookieMode) {
+    appState.key = data.accessKey || null; // récupère la clé pour afficher le lien privé / QR / rotation
+    setAccessKey(appState.key); // reflète la clé (mode cookie) dans net.js
+    setSessionHint(true);
+    appState.auth = { handle: data.handle, key: appState.key }; // état d'auth cohérent pour les pages suivantes
+  }
+  setLastHandle(data.handle); // mémorise le handle de la dernière connexion (reconnexion auto + pré-remplissage)
+  if (storedKey() === appState.key) setStoredHandle(data.handle); // garde le handle associé à la clé mémorisée
+  connectSSE(cookieMode ? null : appState.key); // flux temps réel (notifications, messages)
+  renderEditor(data); // affiche l'UI immédiatement, sans attendre la clé E2E
+  // E2E en arrière-plan : ne bloque pas le rendu (la clé n'est utile que pour le chat).
+  // On publie aussi le bundle de prekeys dès la connexion : ainsi un contact peut
+  // m'écrire en v2 (Double Ratchet) sans attendre que j'ouvre une conversation.
+  const hadPubkey = !!data.pubkey;
+  ensureE2E(data.handle, appState.key)
+    .then(async () => {
+      if (!E2E.pubStr && data.pubkey) E2E.pubStr = data.pubkey;
+      if (E2E.needsRestore) {
+        // Clé dans le coffre mais absente du navigateur → restauration nécessaire.
+        toast("🔑 Votre clé E2E est dans le coffre — restaurez-la pour activer la messagerie chiffrée.");
+        openE2eRestore(data.handle, appState.key, () => renderPrivate(appState.key));
+        return;
+      }
+      if (!hadPubkey && E2E.pubStr) toast("🔒 Messagerie chiffrée activée ✓");
+      // Clé neuve (ou jamais sauvegardée) sans coffre → on FORCE la mise en coffre
+      // dès la connexion : sans ça, perte d'appareil = messages illisibles.
+      if (E2E.needsBackup) {
+        openE2eBackup(data.handle, appState.key, () => renderPrivate(appState.key), { mandatory: true });
+      }
+      return ratchetEnsurePrekeys(data.handle, appState.key);
+    })
+    .catch(() => {
+      if (!hadPubkey) {
+        const msg = window.isSecureContext === false || !crypto.subtle
+          ? "🔒 La messagerie chiffrée requiert HTTPS ou localhost (pas disponible sur http://IP)."
+          : "⚠ Impossible d'activer la messagerie chiffrée. Rechargez la page pour réessayer.";
+        toast(msg);
+      }
+    });
+}
+
+export function renderEditor(data) {
+  // Invitation en attente (lien `/i/<token>` ouvert avant connexion) → accepter.
+  consumePendingInvite();
+  // Calendrier de l'éditeur : règle de dispo perso (jours/week-end/périodes).
+  host.calendar.setAvailability((data.settings || {}).availability);
+  const photo = data.hasPhoto
+    ? `<img class="photo" src="/api/identities/${encodeURIComponent(data.handle)}/photo?ts=${Date.now()}" alt="Photo" />`
+    : data.handle === "milo"
+      ? `<div class="photo milo-photo">${miloSvg(120)}</div>`
+      : `<div class="photo avatar">${genericAvatarSvg(
+          data.handle,
+          ((data.fields.find((f) => f.key === "display_name")?.value || data.handle)[0] || "·").toUpperCase()
+        )}</div>`;
+  const rel = data.relations || { 1: [], 2: [], 3: [] };
+  // Relations directes (degré 1) scindées : amis mis en avant dans l'onglet
+  // « Amis », le reste (pro/autre + degrés étendus) dans l'onglet « Réseau ».
+  const _deg1 = rel[1] || [];
+  const _friends = _deg1.filter((r) => r.type === "amis");
+  const _others = _deg1.filter((r) => r.type !== "amis");
+  const _incoming = data.incoming || [];
+  const _reseauCount = _others.length + _incoming.length + (rel[2]?.length || 0) + (rel[3]?.length || 0);
+
+  // Charge par jour pour la heatmap du calendrier (événements + RDV acceptés).
+  const dayLoad = dayLoadMap(data);
+
+  const cols = [
+    renderHomeColumn(data, { photo }),
+    renderIdentityColumn(data, { photo, fieldEditHtml, socialEditHtml }),
+    renderAgendaColumn(data, { reqFilterChips, requestsHtml, dayLoad }),
+    renderRelationsColumn(data, { incomingListHtml }),
+    renderNotificationsColumn(data, { notifListHtml }),
+  ];
+
+  // Colonnes cœur + colonnes contribuées par les plugins (registre). Le tri par
+  // `order` fixe l'ordre du deck (voir coreOrders ci-dessous) ; le Compte n'est
+  // plus une colonne (déplacé dans l'onglet « Compte » de l'Identité).
+  // Panneau Options
+  const optCol = renderOptionsColumn(data);
+
+  // Colonne Communications (Discuter + Appel, 2 colonnes WhatsApp-like)
+  const commContacts = (() => {
+    const convMap = new Map((data.conversations || []).map(c => [c.handle, c]));
+    const convList = [...convMap.values()].map(c => {
+      const last = (c.messages || []).reduce((mx, m) => m.created_at > mx ? m.created_at : mx, "");
+      return { handle: c.handle, displayName: c.display_name || null, hasPhoto: c.has_photo, lastAt: last, unread: (c.messages || []).filter(m => !m.mine && m.read === 0).length, isConv: true };
+    });
+    const convHandles = new Set(convMap.keys());
+    const others = _deg1.filter(r => !convHandles.has(r.handle)).map(r => ({ handle: r.handle, displayName: r.display_name || null, hasPhoto: r.has_photo, lastAt: "", unread: 0, isConv: false }));
+    // Tri : non-lus d'abord, puis activité récente, puis contacts favoris, puis alphabétique.
+    const favSet = new Set((_deg1 || []).filter(r => r.favorite).map(r => r.handle));
+    return [...convList, ...others].sort((a, b) => {
+      if ((a.unread > 0) !== (b.unread > 0)) return a.unread > 0 ? -1 : 1;
+      if (a.lastAt !== b.lastAt) return b.lastAt.localeCompare(a.lastAt);
+      const fa = favSet.has(a.handle), fb = favSet.has(b.handle);
+      if (fa !== fb) return fa ? -1 : 1;
+      return a.handle.localeCompare(b.handle);
+    });
+  })();
+
+  function commContactHtml(c) {
+    const init = (c.handle[0] || "?").toUpperCase();
+    // L'initiale colorée est TOUJOURS rendue en fond ; la photo se superpose et,
+    // si elle échoue (404 / has_photo périmé), s'efface pour révéler l'initiale.
+    const bg = `hsl(${[...c.handle].reduce((h,x)=>(h*31+x.charCodeAt(0))%360,0)} 40% 46%)`;
+    const initSpan = `<span class="comm-av-init" style="background:${bg};color:#fff">${esc(init)}</span>`;
+    const av = c.hasPhoto
+      ? `<img class="comm-av-img" src="/api/identities/${encodeURIComponent(c.handle)}/photo" alt="" loading="lazy" onerror="this.remove()" />${initSpan}`
+      : initSpan;
+    const timePart = c.lastAt ? `<span class="comm-time">${new Date(c.lastAt).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})}</span>` : "";
+    const unread = c.unread ? `<span class="comm-unread">${c.unread}</span>` : "";
+    const sub = c.displayName ? esc(c.displayName) : (c.isConv ? `${icon("lock", 11)} Message chiffré` : "Connexion directe");
+    return `<div class="comm-contact-item" data-handle="${esc(c.handle)}" data-search="${esc(c.handle + " " + (c.displayName||"")).toLowerCase()}">
+      <div class="comm-av">${av}</div>
+      <div class="comm-contact-body">
+        <div class="comm-contact-name">@${esc(c.handle)}</div>
+        <div class="comm-contact-sub">${sub}</div>
+      </div>
+      <div class="comm-contact-meta">${timePart}${unread}</div>
+    </div>`;
+  }
+
+  appState.commEmptyHtml = `<div class="comm-empty-state">${miloSvg(72)}<h3>Sélectionnez un contact</h3><p>Choisissez un contact à gauche pour démarrer une conversation ou passer un appel.</p></div>`;
+
+  const commColHtml = `<div class="comm-wrapper">
+    <div class="comm-layout">
+      <div class="comm-sidebar">
+        <div class="comm-topbar">${icon("chat",16)} Communications</div>
+        <div class="comm-search-wrap">
+          <input id="comm-search" placeholder="Rechercher un contact…" autocomplete="off" />
+        </div>
+        <div class="comm-contacts-list" id="comm-contacts">
+          ${commContacts.length
+            ? (commContacts.some(c => c.isConv) ? `<div class="comm-sep">Conversations récentes</div>` : "")
+              + commContacts.filter(c => c.isConv).map(commContactHtml).join("")
+              + (commContacts.some(c => !c.isConv) ? `<div class="comm-sep">Connexions directes</div>` : "")
+              + commContacts.filter(c => !c.isConv).map(commContactHtml).join("")
+            : `<div class="comm-empty-state">${miloSvg(56)}<p>Aucun contact. Ajoutez des connexions pour pouvoir discuter.</p></div>`}
+        </div>
+      </div>
+      <div class="comm-right" id="comm-right">${appState.commEmptyHtml}</div>
+    </div>
+  </div>`;
+
+  // Ordre du menu (communication d'abord) : Accueil · Chat · Notifs · Réseau ·
+  // Mon ID · Galerie (plugin, order 45) · Agenda · Options (réglages, en dernier).
+  const coreOrders = [5, 40, 50, 30, 20, 60, 10];
+  const coreLabels = ["Menu", "Identité", "Agenda", "Relations", "Notifications", "Options", "Chat"];
+  const allCols = (() => {
+    const list = [...cols, optCol, commColHtml]
+      .map((html, i) => ({ order: coreOrders[i], label: coreLabels[i], html }))
+      .concat(host.getPlugins().flatMap((p) => (p.editorColumns ? p.editorColumns(host, data) : [])))
+      .sort((a, b) => a.order - b.order);
+    // Dédoublonnage par label : garde-fou contre une colonne contribuée deux fois
+    // par un plugin (ex. « Galerie » en double) → une seule colonne par onglet.
+    const seen = new Set();
+    return list.filter((c) => (seen.has(c.label) ? false : (seen.add(c.label), true)));
+  })();
+
+  const _displayName = data.fields.find(f => f.key === "display_name")?.value || null;
+  // Source de vérité la plus riche pour le chip header : on alimente le cache
+  // partagé avec le nom et la photo issus de /api/me.
+  setMeProfile({ name: _displayName, hasPhoto: data.hasPhoto });
+  const BNAV = {
+    Menu: { label: "Accueil", ic: "home" },
+    Identité: { label: "Mon ID", ic: "user" },
+    Agenda: { label: "Agenda", ic: "calendar" },
+    Relations: { label: "Réseau", ic: "users" },
+    Notifications: { label: "Notifs", ic: "bell" },
+    Galerie: { label: "Galerie", ic: "image" },
+    Options: { label: "Options", ic: "settings" },
+    Chat: { label: "Chat", ic: "chat" },
+  };
+  app.setAttribute("data-view", "private");
+  app.innerHTML = `
+   ${siteHeader({
+     center: headerSearchHtml(),
+     right: `<button class="theme-toggle theme-toggle-header" id="theme-toggle-header" type="button" aria-label="Changer de thème"></button>
+       <button class="btn sm notif-wrap" id="notif-bell" aria-label="Notifications" title="Notifications">${icon("bell", 16)}<span class="notif-badge" id="notif-badge" ${data.unread ? "" : "hidden"}>${data.unread || ""}</span></button>
+       ${headerAccount()}`,
+   })}
+   <div class="deck-viewport" id="deck-viewport">
+     <div class="deck" id="deck">
+       ${allCols.map((c, i) => `<section class="col" data-col="${i}" data-deck-label="${esc(c.label || "")}">${c.html}</section>`).join("")}
+     </div>
+   </div>
+   <nav class="bottom-nav" id="bottom-nav" aria-label="Navigation principale">
+     ${(() => {
+       const chatUnread = (data.conversations || []).reduce((s, cv) => s + (cv.messages || []).filter(m => !m.mine && m.read === 0).length, 0);
+       const unreadFor = (label) => label === "Notifications" ? (data.unread || 0) : (label === "Chat" ? chatUnread : 0);
+       // Refonte 2026 — barre directe (sans menu « Plus ») : Accueil · Chat ·
+       // Réseau · Agenda · Galerie · Options. « Mon ID » (Identité) est accessible
+       // depuis l'Accueil (« Modifier ma carte ») ; les Notifications via la cloche
+       // du header. L'ordre est fixe et chaque label n'apparaît qu'une fois.
+       const NAV = ["Menu", "Chat", "Relations", "Agenda", "Galerie", "Options"];
+       const navBtn = ({ i, label }) => {
+         const cfg = BNAV[label] || { label, ic: "circle" };
+         const isChat = label === "Chat";
+         const hasUnread = unreadFor(label);
+         // Le badge Chat est TOUJOURS présent (masqué si 0) avec un sélecteur
+         // stable : la mise à jour temps réel (SSE) le retrouve sans re-rendu.
+         const badge = isChat
+           ? `<span class="bnav-badge" data-chat-badge ${hasUnread ? "" : "hidden"}>${hasUnread ? (hasUnread > 99 ? "99+" : hasUnread) : ""}</span>`
+           : (hasUnread ? `<span class="bnav-badge">${hasUnread > 99 ? "99+" : hasUnread}</span>` : "");
+         return `<button class="bnav-item" data-col="${i}" type="button" aria-label="${esc(cfg.label)}" title="${esc(cfg.label)}">
+           <span class="bnav-pip" aria-hidden="true"></span>
+           ${icon(cfg.ic, 22)}
+           ${badge}
+           <span>${esc(cfg.label)}</span>
+         </button>`;
+       };
+       const seen = new Set();
+       return NAV
+         .map((lbl) => { const i = allCols.findIndex((c) => c.label === lbl); return i >= 0 ? { i, label: lbl } : null; })
+         .filter((x) => x && !seen.has(x.label) && seen.add(x.label))
+         .map(navBtn)
+         .join("");
+     })()}
+   </nav>`;
+  wireEditor(data);
+  wireHeaderSearch();
+  // Bascule de thème intégrée à la barre (remplace le bouton flottant en vue connectée).
+  app.querySelector("#theme-toggle-header")?.addEventListener("click", toggleTheme);
+  applyTheme(document.documentElement.getAttribute("data-theme") || "dark"); // pose l'icône sur le bouton fraîchement rendu
+  setupTabs();
+  // Câblage des colonnes contribuées par les plugins (ex. boutons « Ouvrir » du chat).
+  allCols.forEach((c, i) => c.wire && c.wire(app.querySelector(`[data-col="${i}"]`), data));
+}
+
+export function setupTabs() {
+  const deck = document.getElementById("deck");
+  const nav = document.getElementById("bottom-nav");
+  if (!deck || !nav) return;
+
+  const cols = [...deck.querySelectorAll(".col")];
+  const navItems = [...nav.querySelectorAll(".bnav-item")];
+  deckState.cols = cols;
+  const footer = document.getElementById("footer");
+
+  const clamp = (i) => Math.max(0, Math.min(cols.length - 1, i));
+
+  // Mise à jour des états actifs. La barre ne liste plus toutes les colonnes :
+  // on apparie par data-col (une colonne non présente dans la barre, ex. Mon ID,
+  // n'allume simplement aucune entrée).
+  function applyActive(idx) {
+    cols.forEach((c, ci) => c.classList.toggle("active", ci === idx));
+    navItems.forEach((n) => {
+      const on = n.dataset.col != null && n.dataset.col !== "" && Number(n.dataset.col) === idx;
+      n.classList.toggle("active", on);
+    });
+  }
+
+  function go(i) {
+    const idx = clamp(i);
+    deckState.index = idx;
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    // Transition de panneau façon 2026 (View Transitions API) : crossfade +
+    // montée de la page active, header/rail figés. Repli direct si non supporté
+    // ou si l'utilisateur a demandé moins de mouvement.
+    if (!reduce && !document.hidden && typeof document.startViewTransition === "function") {
+      const vt = document.startViewTransition(() => applyActive(idx));
+      // Une transition interrompue (changements d'onglet rapprochés, init) rejette
+      // .ready/.finished avec « Transition was skipped » → on absorbe ces rejets
+      // pour ne pas polluer la console (la bascule a tout de même eu lieu).
+      vt?.ready?.catch(() => {});
+      vt?.finished?.catch(() => {});
+      vt?.updateCallbackDone?.catch(() => {});
+    } else {
+      applyActive(idx);
+    }
+    // Masquer le footer quand le tab Chat est actif (comm-layout plein écran)
+    const activeLabel = cols[idx]?.dataset.deckLabel;
+    if (footer) footer.style.display = activeLabel === "Chat" ? "none" : "";
+    // Scroll en haut de page sauf premier rendu
+    if (document.readyState === "complete") window.scrollTo({ top: 0, behavior: "instant" });
+  }
+
+  deckState.go = go;
+
+  navItems.forEach((btn) => {
+    btn.addEventListener("click", () => go(Number(btn.dataset.col)));
+  });
+
+  // Navigation clavier (accessibilité)
+  nav.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowRight") go(deckState.index + 1);
+    if (e.key === "ArrowLeft") go(deckState.index - 1);
+  });
+
+  go(clamp(deckState.index)); // restaure l'onglet actif
+}
+
+export async function openContactColumn(handle) {
+  const h = String(handle).replace(/^@/, "");
+  const closeBtn = `<button type="button" class="close" data-contact-close aria-label="Fermer">✕</button>`;
+  const section = addDeckColumn(
+    {
+      key: `contact:${h}`,
+      label: `@${h}`,
+      html: `<div class="card profile-card" style="position:relative">${closeBtn}<p class="loading" style="padding:2.5rem 0;text-align:center">Chargement de @${esc(h)}…</p></div>`,
+      wire: (overlay) =>
+        overlay.querySelector("[data-contact-close]")?.addEventListener("click", () => removeDeckColumn(overlay)),
+    }
+    // pas d'afterLabel → s'insère juste à droite de la colonne active
+  );
+  if (!section || section.dataset.contactLoaded) return;
+
+  let data;
+  try {
+    data = await api(`/api/identities/${encodeURIComponent(h)}`, { headers: viewerHeaders() });
+  } catch {
+    section.innerHTML = `<div class="card profile-card" style="position:relative">${closeBtn}<p class="empty" style="padding:2rem 0;text-align:center">Profil @${esc(h)} introuvable.</p></div>`;
+    section.querySelector("[data-contact-close]")?.addEventListener("click", () => removeDeckColumn(section));
+    return;
+  }
+  section.dataset.contactLoaded = "1";
+
+  const canChat = !!data.viewer?.isContact && data.options?.allowChat !== false;
+  const canCall = !!data.viewer?.isContact && data.options?.allowCall !== false;
+  // Rendu STRICTEMENT IDENTIQUE à la page individuelle (même composant), avec :
+  // bouton Fermer (coin haut-droit) + actions de contact (Voir page / Discuter / Appel).
+  const actions = {
+    right: closeBtn,
+    contact: `<div class="profile-contact-actions">
+      <a class="btn sm" href="/@${encodeURIComponent(data.handle)}" target="_blank" rel="noopener noreferrer">Voir la page ↗</a>
+      ${canChat ? `<button type="button" class="btn sm primary" data-contact-chat>${icon("chat", 15)} Discuter</button>` : ""}
+      ${canCall ? `<button type="button" class="btn sm" data-contact-call${data.pubkey ? "" : " disabled"}>${icon("camera", 15)} Appel</button>` : ""}
+    </div>`,
+  };
+  section.innerHTML = profileCardHtml(data, actions);
+  section.querySelector("[data-contact-close]")?.addEventListener("click", () => removeDeckColumn(section));
+  section.querySelector("[data-contact-chat]")?.addEventListener("click", () => host.chat.open(data.handle, myKey(), myHandle()));
+  section.querySelector("[data-contact-call]")?.addEventListener("click", () => {
+    if (data.pubkey && host.call) host.call.start(data.handle, data.pubkey, { video: data.options?.allowVideo !== false });
+  });
+}
+
+export function notifListHtml(list) {
+  if (!list || !list.length) return '<li class="empty">Aucune notification.</li>';
+  return list.map(notifItemHtml).join("");
+}
+
+export function incomingListHtml(list) {
+  if (!list || !list.length) return '<li class="empty">Aucune demande reçue.</li>';
+  return list.map((r) => relItemHtml(r, { incoming: true })).join("");
+}
+
+export function reqFilterChips(requests) {
+  const n = { all: requests.length, pending: 0, accepted: 0, declined: 0 };
+  requests.forEach((r) => { n[r.status] = (n[r.status] || 0) + 1; });
+  const chip = (val, label) =>
+    `<button class="req-chip${val === "pending" ? " active" : ""}" data-req-filter="${val}">${label} <span class="chip-n">${n[val]}</span></button>`;
+  return (
+    chip("pending", "En attente") +
+    chip("all", "Toutes") +
+    chip("accepted", "Acceptées") +
+    chip("declined", "Refusées")
+  );
+}
+
+export function requestsHtml(requests) {
+  if (!requests.length) return '<li class="empty">Aucune demande.</li>';
+  return requests
+    .map((r) => {
+      const badge =
+        r.status === "accepted" ? "ok" : r.status === "declined" ? "no" : "pending";
+      const label =
+        r.status === "accepted" ? "Acceptée" : r.status === "declined" ? "Refusée" : "En attente";
+      return `
+      <li class="request" data-status="${r.status}">
+        <div class="req-head">
+          <strong>${esc(r.name)}</strong>
+          <span class="req-status ${badge}">${label}</span>
+        </div>
+        ${r.day ? `<div class="req-slot">Date souhaitée : ${esc(host.calendar.fmtDay(r.day))}${r.time ? ` à <strong>${esc(r.time)}</strong>` : ""}</div>` : ""}
+        ${r.email ? `<div class="req-meta"><a href="mailto:${esc(r.email)}">${esc(r.email)}</a></div>` : ""}
+        ${r.message ? `<div class="req-msg">${esc(r.message)}</div>` : ""}
+        <div class="req-actions">
+          <button class="btn sm" data-req-accept="${r.id}">Accepter</button>
+          <button class="btn sm" data-req-decline="${r.id}">Refuser</button>
+          <button class="icon" data-req-del="${r.id}" title="Supprimer">✕</button>
+        </div>
+      </li>`;
+    })
+    .join("");
+}
+
+export function socialEditHtml(fields) {
+  const byKey = Object.fromEntries(fields.map((f) => [f.key, f.value]));
+  return SOCIALS.map((net) => {
+    const val = byKey[socialFieldKey(net.key)] || "";
+    const url = socialUrl(net, val);
+    return `<div class="social-edit" data-net="${net.key}">
+      <span class="social-ic" style="color:${net.color}">${socialIcon(net, 18)}</span>
+      <input class="social-input" value="${esc(val)}" placeholder="${esc(net.ph)}" inputmode="url" autocomplete="off" aria-label="${esc(net.label)}" />
+      <a class="social-open btn-field-del" href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="Ouvrir ${esc(net.label)}" aria-label="Ouvrir ${esc(net.label)}"${url ? "" : " hidden"}>${icon("link", 13)}</a>
+    </div>`;
+  }).join("");
+}
+
+export function fieldEditHtml(f) {
+  const vis = f.visibility || (f.is_public ? "public" : "private");
+  const opt = (v, label) => `<option value="${v}" ${vis === v ? "selected" : ""}>${label}</option>`;
+  const isEnc = typeof f.value === "string" && f.value.startsWith("e2e:");
+  const canDelete = f.is_custom;
+  return `
+    <div class="edit-field" data-key="${esc(f.key)}">
+      <span class="lbl">${esc(f.label)}</span>
+      <input class="fv" value="${isEnc ? "" : esc(f.value)}" placeholder="${isEnc ? "Chiffré…" : "—"}" data-enc="${isEnc ? esc(f.value) : ""}" />
+      <select class="fvis vis-${vis}" title="Visibilité" aria-label="Visibilité de ${esc(f.label)}">
+        ${opt("public", "Public")}${opt("contact", "Contact")}${opt("private", "Privé")}
+      </select>
+      ${canDelete ? `<button class="btn-field-del" title="Supprimer cet attribut" aria-label="Supprimer ${esc(f.label)}">✕</button>` : `<span></span>`}
+    </div>`;
+}
+
+export function wireEditor(data) {
+  // Retaille une image pour qu'elle tienne dans 320×320 (ratio préservé, sans
+  // déformation) avant l'envoi. Best-effort : en cas d'échec on garde l'original.
+  const resizePhoto = async (blob, max = 320) => {
+    try {
+      const bmp = await createImageBitmap(blob);
+      const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
+      const w = Math.max(1, Math.round(bmp.width * scale));
+      const h = Math.max(1, Math.round(bmp.height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(bmp, 0, 0, w, h);
+      return await new Promise((res) => canvas.toBlob((b) => res(b || blob), "image/jpeg", 0.9));
+    } catch {
+      return blob;
+    }
+  };
+
+  const uploadPhotoBlob = async (blob) => {
+    const resized = await resizePhoto(blob);
+    const fd = new FormData();
+    fd.append("photo", resized, "photo.jpg");
+    await fetch("/api/photo", { method: "POST", headers: authHeaders(), body: fd });
+    toast(t("msg_photo_updated"));
+    renderPrivate(appState.key);
+  };
+
+  app.querySelector('#photo-form input[type=file]').addEventListener("change", async (ev) => {
+    const file = ev.target.files[0];
+    if (file) await uploadPhotoBlob(file);
+  });
+
+  app.querySelector("#take-photo-btn").addEventListener("click", async () => {
+    if (!navigator.mediaDevices?.getUserMedia) return toast("Caméra non disponible sur cet appareil.");
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 1280 } } });
+    } catch {
+      return toast("Accès à la caméra refusé ou indisponible.");
+    }
+
+    const overlay = document.createElement("div");
+    overlay.className = "overlay";
+    overlay.innerHTML = `
+      <div class="panel" role="dialog" aria-modal="true" style="max-width:480px;padding:1rem">
+        <button type="button" class="close" id="cam-close" aria-label="Fermer">✕</button>
+        <h2 style="margin-bottom:.75rem">Prendre une photo</h2>
+        <video id="cam-video" autoplay playsinline muted style="width:100%;border-radius:8px;background:#000;aspect-ratio:1;object-fit:cover"></video>
+        <canvas id="cam-canvas" hidden></canvas>
+        <div class="actions" style="margin-top:.75rem">
+          <button type="button" class="btn" id="cam-cancel">Annuler</button>
+          <button type="button" class="btn primary" id="cam-snap">${icon("camera", 15)} Capturer</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const video = overlay.querySelector("#cam-video");
+    video.srcObject = stream;
+
+    const stop = () => { stream.getTracks().forEach((t) => t.stop()); overlay.remove(); };
+    overlay.querySelector("#cam-close").addEventListener("click", stop);
+    overlay.querySelector("#cam-cancel").addEventListener("click", stop);
+    overlay.addEventListener("click", (e) => e.target === overlay && stop());
+
+    overlay.querySelector("#cam-snap").addEventListener("click", async () => {
+      const canvas = overlay.querySelector("#cam-canvas");
+      const size = Math.min(video.videoWidth, video.videoHeight);
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(video, (video.videoWidth - size) / 2, (video.videoHeight - size) / 2, size, size, 0, 0, size, size);
+      stop();
+      canvas.toBlob(async (blob) => { if (blob) await uploadPhotoBlob(blob); }, "image/jpeg", 0.9);
+    });
+  });
+
+  app.querySelectorAll(".edit-field").forEach((row) => wireFieldRow(row));
+
+  function wireFieldRow(row) {
+    const key = row.dataset.key;
+    const input = row.querySelector(".fv");
+    const vis = row.querySelector(".fvis");
+    let saved = input.value;
+
+    // Déchiffrement à l'affichage si la valeur stockée est chiffrée E2E.
+    const encRaw = input.dataset.enc;
+    if (encRaw && encRaw.startsWith("e2e:") && E2E.priv && E2E.pubStr) {
+      const parts = encRaw.split(":");
+      e2eDecrypt(E2E.pubStr, parts[1], parts[2]).then((plain) => {
+        if (plain != null) {
+          input.value = plain;
+          input.placeholder = "—";
+          saved = plain;
+        }
+      });
+    }
+
+    const save = async () => {
+      if (input.value === saved && !vis._dirty) return;
+      let value = input.value;
+      // Chiffrement pour les champs non publics (to-self : propre clé publique).
+      if (vis.value !== "public" && E2E.priv && E2E.pubStr) {
+        try {
+          const { iv, ciphertext } = await e2eEncrypt(E2E.pubStr, value);
+          value = `e2e:${iv}:${ciphertext}`;
+        } catch (err) { toast(err.message); return; }
+      }
+      try {
+        await api("/api/card/field", {
+          method: "PUT",
+          headers: jsonAuth(),
+          body: JSON.stringify({ key, value, visibility: vis.value }),
+        });
+        saved = input.value; // on mémorise le texte en clair
+        vis._dirty = false;
+        toast(t("msg_saved"));
+      } catch (e) { toast(e.message); }
+    };
+    input.addEventListener("blur", save);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); save(); } });
+    vis.addEventListener("change", () => {
+      vis.className = "fvis vis-" + vis.value;
+      vis._dirty = true;
+      save();
+    });
+    row.querySelector(".btn-field-del")?.addEventListener("click", async () => {
+      try {
+        await api(`/api/card/field/${encodeURIComponent(key)}`, { method: "DELETE", headers: jsonAuth() });
+        row.remove();
+      } catch (e) { toast(e.message); }
+    });
+  }
+
+  app.querySelector("#add-field").addEventListener("click", async () => {
+    const labelEl = app.querySelector("#nf-label");
+    const valueEl = app.querySelector("#nf-value");
+    const label = labelEl.value.trim();
+    if (!label) return toast(t("msg_key_required"));
+    const key = label.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "field";
+    const value = valueEl.value.trim();
+    try {
+      await api("/api/card/field", {
+        method: "PUT",
+        headers: jsonAuth(),
+        body: JSON.stringify({ key, label, value, is_custom: true }),
+      });
+    } catch (e) { return toast(e.message); }
+    await renderPrivate(appState.key);
+    app.querySelector(`.edit-field[data-key="${CSS.escape(key)}"] .fv`)?.focus();
+  });
+
+  // Tags : ajout + suppression (re-rendu de la colonne après chaque action).
+  const addTagEl = app.querySelector("#nt-tag");
+  const submitTag = async () => {
+    const tag = addTagEl.value.trim();
+    if (!tag) return;
+    try {
+      await api("/api/tags", { method: "POST", headers: jsonAuth(), body: JSON.stringify({ tag }) });
+      await renderPrivate(appState.key);
+    } catch (e) { toast(e.message); }
+  };
+  app.querySelector("#add-tag")?.addEventListener("click", submitTag);
+  addTagEl?.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); void submitTag(); } });
+  app.querySelectorAll("[data-del-tag]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      try {
+        await api(`/api/tags/${encodeURIComponent(b.dataset.delTag)}`, { method: "DELETE", headers: jsonAuth() });
+        await renderPrivate(appState.key);
+      } catch (e) { toast(e.message); }
+    })
+  );
+
+  // Événements : suppression directe (corbeille sur la carte), création et
+  // édition via la modale composer (façon Teams).
+  app.querySelectorAll("[data-del-event]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const card = b.closest(".ev-card");
+      const title = card?.querySelector(".ev-title")?.textContent?.trim() || "cet événement";
+      if (!(await confirmDialog(`Supprimer « ${title} » ?`, { ok: "Supprimer", danger: true }))) return;
+      await api(`/api/agenda/${b.dataset.delEvent}`, { method: "DELETE", headers: authHeaders() });
+      renderPrivate(appState.key);
+    })
+  );
+  app.querySelectorAll("[data-event-new]").forEach((b) =>
+    b.addEventListener("click", () => openEventModal(null))
+  );
+  app.querySelectorAll("[data-event-edit]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const ev = (data.events || []).find((e) => String(e.id) === b.dataset.eventEdit);
+      if (ev) openEventModal(ev);
+    })
+  );
+
+  // Disponibilités : navigation de mois + bascule des jours (plugin calendrier)
+  host.calendar.wire(app.querySelector(".calendar"), data.overrides || {}, true, data.handle, dayLoadMap(data));
+
+  // QR code de la page publique
+  app.querySelector("#qr-btn")?.addEventListener("click", () =>
+    openQR(`${location.origin}${data.publicUrl}`, `@${data.handle}`, data)
+  );
+  app.querySelector("#hm-qr-btn")?.addEventListener("click", () =>
+    openQR(`${location.origin}${data.publicUrl}`, `@${data.handle}`, data)
+  );
+  // Tous les toggles data-setting (banner + onglet Options)
+  app.querySelectorAll("[data-setting]").forEach((input) => {
+    input.addEventListener("change", async () => {
+      const key = input.dataset.setting;
+      const val = input.checked;
+      try {
+        await api("/api/me/settings", { method: "PATCH", headers: jsonAuth(), body: JSON.stringify({ [key]: val }) });
+      } catch {
+        input.checked = !val;
+      }
+    });
+  });
+  // Boutons onglet Options
+  app.querySelector("#opt-e2e-backup")?.addEventListener("click", () =>
+    openE2eBackup(data.handle, appState.key, refreshVaultStatus)
+  );
+  app.querySelector("#opt-qr-link")?.addEventListener("click", () =>
+    openQR(`${location.origin}${data.publicUrl}`, `@${data.handle}`, data)
+  );
+  // Communications column wiring
+  const commContactList = app.querySelector("#comm-contacts");
+  const commRight = app.querySelector("#comm-right");
+  if (commContactList && commRight) {
+    // Search
+    app.querySelector("#comm-search")?.addEventListener("input", (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      commContactList.querySelectorAll(".comm-contact-item").forEach(el => {
+        el.hidden = !!q && !(el.dataset.search || "").includes(q);
+      });
+    });
+
+    // Contact click → ouvre le chat INLINE dans le panneau droit
+    commContactList.addEventListener("click", async (e) => {
+      const item = e.target.closest(".comm-contact-item");
+      if (!item) return;
+      const h = item.dataset.handle;
+      commContactList.querySelectorAll(".comm-contact-item").forEach(el => el.classList.toggle("selected", el === item));
+
+      // Intercepter openDeckColumn pour monter dans commRight au lieu d'un tab
+      const origOpen = host.openDeckColumn;
+      const origClose = host.closeDeckColumn;
+      host.openDeckColumn = ({ html, wire }) => {
+        commRight.innerHTML = html;
+        wire?.(commRight); // wireChat a besoin que #ch-close existe dans le DOM
+        // Ajouter le bouton Appel vidéo à droite du bouton Envoyer dans le formulaire
+        const form = commRight.querySelector("#ch-form");
+        if (form && !form.querySelector("#comm-call-vid")) {
+          // Appel = on joint d'abord le contact, puis on démarre audio ou vidéo selon le bouton.
+          const placeCall = async (video) => {
+            try {
+              const p = await api(`/api/identities/${encodeURIComponent(h)}`, { headers: authHeaders() });
+              if (!p.pubkey) return toast("Appels non disponibles pour ce contact.");
+              if (host.call) host.call.start(h, p.pubkey, { video });
+            } catch { toast("Impossible de joindre ce contact."); }
+          };
+          const mkCallBtn = (id, ttl, ic, video) => {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.id = id;
+            b.className = "btn";
+            b.title = ttl;
+            b.setAttribute("aria-label", ttl);
+            b.innerHTML = icon(ic, 18);
+            b.addEventListener("click", () => placeCall(video));
+            return b;
+          };
+          form.appendChild(mkCallBtn("comm-call-aud", "Appel audio", "phone", false));
+          form.appendChild(mkCallBtn("comm-call-vid", "Appel vidéo", "camera", true));
+        }
+        return commRight;
+      };
+      host.closeDeckColumn = (col) => {
+        if (col === commRight) {
+          commRight.innerHTML = appState.commEmptyHtml;
+          commContactList.querySelectorAll(".comm-contact-item").forEach(el => el.classList.remove("selected"));
+          host.closeDeckColumn = origClose;
+        } else {
+          origClose?.(col);
+        }
+      };
+      host.chat.open(h, appState.key, data.handle);
+      host.openDeckColumn = origOpen; // restaurer immédiatement
+    });
+  }
+  // Boutons dupliqués dans Options (Accès & Sessions + Appareils)
+  const wireAlias = (id2, id1) => {
+    const b = app.querySelector(id2);
+    if (b) b.addEventListener("click", () => app.querySelector(id1)?.click());
+  };
+  wireAlias("#toggle-key2",       "#toggle-key");
+  wireAlias("#rotate-key2",       "#rotate-key");
+  wireAlias("#save-rec2",         "#save-rec");
+  wireAlias("#logout-btn2",       "#logout-btn");
+  wireAlias("#logout-all-btn2",   "#logout-all-btn");
+  wireAlias("#gen-invite2",       "#gen-invite");
+  wireAlias("#open-groups2",      "#open-groups");
+  wireAlias("#e2e-passkey-save2", "#e2e-passkey-save");
+  wireAlias("#e2e-pin-save2",     "#e2e-pin-save");
+  wireAlias("#e2e-pass-save2",    "#e2e-pass-save");
+  wireAlias("#e2e-restore2",      "#e2e-restore");
+  wireAlias("#passkey-add2",      "#passkey-add");
+  wireAlias("#export-data2",      "#export-data");
+  wireAlias("#delete-account2",   "#delete-account");
+  // copy-key2 : même clé que copy-key
+  app.querySelector("#toggle-key2")?.addEventListener("click", () => {
+    const d = app.querySelector("#key-display2");
+    const d1 = app.querySelector("#key-display");
+    if (d && d1) d.textContent = d1.textContent;
+  });
+  // email de récupération (champ dupliqué)
+  const rec2 = app.querySelector("#rec-email2");
+  const rec1 = app.querySelector("#rec-email");
+  if (rec2 && rec1) {
+    rec2.addEventListener("change", () => { rec1.value = rec2.value; });
+  }
+  // Visite guidée « Milo » : lanceur manuel + ouverture auto à la 1re connexion.
+  app.querySelector("#hm-tour-btn")?.addEventListener("click", () => openMiloTourPicker());
+  if (!localStorage.getItem(TOUR_SEEN_KEY)) {
+    // On attend qu'aucun autre overlay (ex. sauvegarde E2E obligatoire à la 1re
+    // connexion) ne soit ouvert, pour ne pas empiler les fenêtres modales.
+    let tries = 0;
+    const tryOpen = () => {
+      if (localStorage.getItem(TOUR_SEEN_KEY)) return;
+      if (document.querySelector(".overlay") && tries++ < 12) { setTimeout(tryOpen, 1200); return; }
+      openMiloTourPicker();
+    };
+    setTimeout(tryOpen, 1300);
+  }
+
+  // Stats + liens "Voir tout" de la home → navigation par data-goto
+  app.querySelectorAll(".hm-stat[data-goto], .hm-section-title a[data-goto], .hm-requests-banner[data-goto]").forEach(el => {
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      const label = el.dataset.goto;
+      const ci = deckState.cols.findIndex(c => c.dataset.deckLabel === label);
+      if (ci >= 0 && deckState.go) deckState.go(ci);
+    });
+  });
+
+  // Notifications : la cloche mène à la colonne Notifications + marque lues
+  const markRead = () => {
+    const badge = app.querySelector("#notif-badge");
+    if (badge) {
+      badge.hidden = true;
+      badge.textContent = "";
+    }
+    const count = app.querySelector("#notif-count");
+    if (count) count.textContent = "0 non lue(s)";
+    app.querySelectorAll("#notif-list .notif.unread").forEach((n) => n.classList.remove("unread"));
+    api("/api/notifications/read", { method: "POST", headers: authHeaders() }).catch(() => {});
+  };
+  app.querySelector("#notif-bell")?.addEventListener("click", () => {
+    // Refonte 2026 : les Notifications ne sont plus dans la barre du bas (5
+    // entrées max) — la cloche du header est leur point d'accès. On ouvre la
+    // colonne « Notifications » par son label (robuste aux index dynamiques).
+    deckGoLabel("Notifications");
+    markRead();
+  });
+  app.querySelector("#notif-readall")?.addEventListener("click", markRead);
+
+  // Colonne « Menu » : un clic mène à la colonne ciblée (nav par label, robuste
+  // aux index dynamiques). Le bouton « ← Menu » ramène à la colonne Menu.
+  const deckGoLabel = (label) => {
+    const cols = [...document.querySelectorAll("#deck .col")];
+    const i = cols.findIndex((c) => c.dataset.deckLabel === label);
+    if (i >= 0 && deckState.go) deckState.go(i);
+  };
+  app.querySelector("#menu-nav")?.addEventListener("click", (e) => {
+    // Stoppe la propagation : sinon le handler de clic au niveau colonne (qui
+    // « sélectionne une colonne inactive ») se déclenche ensuite, voit l'index
+    // du Menu ≠ nouvelle colonne active et nous ramène aussitôt au Menu.
+    const goto = e.target.closest("[data-goto]");
+    if (goto) { e.stopPropagation(); deckGoLabel(goto.dataset.goto); return; }
+    const act = e.target.closest("[data-action]");
+    if (act) { e.stopPropagation(); openContactPicker(act.dataset.action); }
+  });
+
+  // Sélecteur de contact : tuiles « Discuter » / « Passer un appel » du Menu.
+  async function openContactPicker(mode) {
+    let relations = data.relations;
+    try {
+      const fresh = await api("/api/me", { headers: authHeaders() });
+      relations = fresh.relations;
+      data.relations = relations;
+    } catch {}
+    const contacts = (relations?.[1] || []).filter((r) => r.mutual);
+    const titleTxt = mode === "call" ? "Passer un appel" : "Discuter";
+    const overlay = document.createElement("div");
+    overlay.className = "overlay";
+    overlay.innerHTML = `
+      <div class="panel picker-panel" role="dialog" aria-modal="true" aria-label="${esc(titleTxt)}">
+        <button type="button" class="close" id="pick-x" aria-label="Fermer">✕</button>
+        <h2 class="picker-title">${mode === "call" ? icon("camera", 18) : icon("chat", 18)} ${esc(titleTxt)}</h2>
+        <p class="sub" style="margin:.1rem 0 .7rem">Choisissez un contact.</p>
+        ${contacts.length > 4 ? `<input type="search" id="pick-search" class="pick-search" placeholder="Rechercher un contact…" autocomplete="off" />` : ""}
+        <ul class="picker-list">${
+          contacts.length
+            ? contacts
+                .map(
+                  (r) => `<li class="picker-li" data-search="${esc(`${r.display_name || ""} ${r.handle}`.toLowerCase())}"><button type="button" class="picker-item" data-h="${esc(r.handle)}">
+                    ${avatarHtml(r.handle, r.has_photo, "av")}
+                    <span class="meta"><span class="nm">${esc(r.display_name || r.handle)}</span><span class="hd">@${esc(r.handle)}</span></span>
+                    <span class="e2e-dot" title="${r.has_pubkey ? "Messagerie chiffrée disponible" : "Clé E2E absente"}">${r.has_pubkey ? "🔒" : "🔓"}</span>
+                  </button></li>`
+                )
+                .join("")
+            : '<li class="empty">Aucun contact réciproque. Reliez-vous à quelqu’un dans « Relations » d’abord.</li>'
+        }<li class="empty pick-none" hidden>Aucun contact ne correspond.</li></ul>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => { overlay.remove(); document.removeEventListener("keydown", onKey); };
+    const onKey = (ev) => ev.key === "Escape" && close();
+    document.addEventListener("keydown", onKey);
+    overlay.addEventListener("click", (ev) => ev.target === overlay && close());
+    overlay.querySelector("#pick-x").onclick = close;
+    // Filtre live de la liste (affiché dès > 4 contacts).
+    const search = overlay.querySelector("#pick-search");
+    if (search) {
+      const lis = [...overlay.querySelectorAll(".picker-li")];
+      const none = overlay.querySelector(".pick-none");
+      search.addEventListener("input", () => {
+        const q = search.value.trim().toLowerCase();
+        let shown = 0;
+        lis.forEach((li) => {
+          const ok = !q || (li.dataset.search || "").includes(q);
+          li.hidden = !ok;
+          if (ok) shown++;
+        });
+        if (none) none.hidden = shown > 0;
+      });
+      setTimeout(() => search.focus(), 0);
+    }
+    overlay.querySelectorAll(".picker-item").forEach((b) =>
+      b.addEventListener("click", async () => {
+        const h = b.dataset.h;
+        close();
+        if (mode === "chat") return host.chat.open(h, appState.key, data.handle);
+        // Appel : récupérer la clé publique du pair avant de lancer la connexion.
+        try {
+          const d = await api(`/api/identities/${encodeURIComponent(h)}`, { headers: viewerHeaders() });
+          if (!d.pubkey) return toast("Ce contact n'a pas encore activé les appels chiffrés.");
+          if (host.call) host.call.start(h, d.pubkey, { video: d.options?.allowVideo !== false });
+        } catch {
+          toast("Impossible de joindre ce contact.");
+        }
+      })
+    );
+  }
+  // Clic sur une notif → colonne fermable (jamais de changement d'URL) :
+  // message → chat, profil (ex. ajout en relation) → fiche contact.
+  // stopPropagation : évite le handler « sélectionner une colonne inactive ».
+  app.querySelector("#notif-list")?.addEventListener("click", (e) => {
+    const chatB = e.target.closest("[data-chat-notif]");
+    if (chatB) { e.stopPropagation(); host.chat.open(chatB.dataset.chatNotif, appState.key, data.handle); return; }
+    const relNotifB = e.target.closest("[data-relation-notif]");
+    if (relNotifB) {
+      e.stopPropagation();
+      const h = relNotifB.dataset.relationNotif;
+      confirmDialog(`Ajouter @${h} à vos relations ?`, { ok: "Ajouter", cancel: "Ignorer" }).then(async (ok) => {
+        if (!ok) return;
+        try {
+          await api("/api/relations", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...viewerHeaders() },
+            body: JSON.stringify({ handle: h, type: "amis" }),
+          });
+          toast(`@${h} ajouté à vos relations ✓`);
+          renderPrivate(appState.key);
+        } catch (err) { toast(err.message || "Impossible d'ajouter."); }
+      });
+      return;
+    }
+    const contactB = e.target.closest("[data-contact-notif]");
+    if (contactB) { e.stopPropagation(); openContactColumn(contactB.dataset.contactNotif); }
+  });
+
+  // Onglets de la colonne Agenda/RDV
+  app.querySelectorAll(".agenda-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      app.querySelectorAll(".agenda-tab").forEach((t) => {
+        t.classList.toggle("active", t === tab);
+        t.setAttribute("aria-selected", String(t === tab));
+      });
+      const id = tab.dataset.tab;
+      app.querySelectorAll(".agenda-panel").forEach((p) => {
+        p.hidden = p.id !== `agenda-${id}`;
+      });
+    });
+  });
+
+  // Cliquer une relation ouvre sa page identité publique (/@handle) dans un
+  // NOUVEL onglet (target="_blank" sur l'ancre) — on laisse l'ancre agir.
+  // Listener posé sur la colonne Relations (recréée à chaque rendu → pas de doublon),
+  // stopPropagation pour éviter le handler « sélectionner une colonne inactive ».
+  app.querySelector("#rel-tabs")?.closest(".col")?.addEventListener("click", (e) => {
+    const link = e.target.closest("a.rel-link");
+    if (!link || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.stopPropagation();
+  });
+
+  // Onglets de la colonne Relations (Amis / Réseau)
+  app.querySelectorAll(".rel-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      app.querySelectorAll(".rel-tab").forEach((t) => {
+        t.classList.toggle("active", t === tab);
+        t.setAttribute("aria-selected", String(t === tab));
+      });
+      const id = tab.dataset.tab;
+      app.querySelectorAll(".rel-panel").forEach((p) => {
+        p.hidden = p.id !== `rel-${id}`;
+      });
+    });
+  });
+
+  // Onglets de la carte Identité (Profil / Réseaux)
+  app.querySelectorAll(".id-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      app.querySelectorAll(".id-tab").forEach((t) => {
+        t.classList.toggle("active", t === tab);
+        t.setAttribute("aria-selected", String(t === tab));
+      });
+      const id = tab.dataset.tab;
+      app.querySelectorAll(".id-panel").forEach((p) => {
+        p.hidden = p.id !== `id-${id}`;
+      });
+    });
+  });
+
+  // Onglets de la colonne Options (Confidentialité / Sécurité / Accès / Compte)
+  app.querySelectorAll(".opt-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      app.querySelectorAll(".opt-tab").forEach((t) => {
+        t.classList.toggle("active", t === tab);
+        t.setAttribute("aria-selected", String(t === tab));
+      });
+      const id = tab.dataset.tab;
+      app.querySelectorAll(".opt-panel").forEach((p) => {
+        p.hidden = p.id !== `opt-${id}`;
+      });
+    });
+  });
+
+  // Onglet « Options » : chaque bascule enregistre la préférence immédiatement.
+  // « Vidéo » dépend d'« Appels » : on la désactive visuellement si les appels
+  // sont coupés (la préférence reste mémorisée, mais sans effet).
+  const syncVideoDep = () => {
+    const call = app.querySelector('.opt-toggle[data-setting="allow_call"]');
+    const video = app.querySelector('.opt-toggle[data-setting="allow_video"]');
+    if (call && video) video.closest(".opt-row")?.classList.toggle("disabled", !call.checked);
+  };
+  syncVideoDep();
+  app.querySelectorAll(".opt-toggle[data-setting]").forEach((box) => {
+    box.addEventListener("change", async () => {
+      const key = box.dataset.setting;
+      try {
+        await api("/api/me/settings", {
+          method: "PATCH",
+          headers: jsonAuth(),
+          body: JSON.stringify({ [key]: box.checked }),
+        });
+        if (key === "allow_call") syncVideoDep();
+        toast("Préférence enregistrée ✓");
+      } catch (e) {
+        box.checked = !box.checked; // rollback visuel si l'enregistrement échoue
+        toast(e.message);
+      }
+    });
+  });
+
+  // Onglet « Options » → Disponibilités générales (jours / week-end / horaires /
+  // créneaux / périodes). Tout changement enregistre la règle et rafraîchit le
+  // calendrier de l'agenda en place (les jours par défaut suivent la nouvelle règle).
+  const availState = normalizeAvailability((data.settings || {}).availability);
+  const refreshEditorCalendar = () => {
+    host.calendar.setAvailability(availState);
+    const fill = app.querySelector(".calendar-fill");
+    if (fill && fill.querySelector(".calendar")) {
+      const load = dayLoadMap(data);
+      fill.innerHTML = host.calendar.html(data.overrides || {}, true, load);
+      host.calendar.wire(fill.querySelector(".calendar"), data.overrides || {}, true, data.handle, load);
+    }
+  };
+  const saveAvail = async () => {
+    try {
+      await api("/api/me/settings", {
+        method: "PATCH",
+        headers: jsonAuth(),
+        body: JSON.stringify({ availability: availState }),
+      });
+      data.settings = { ...(data.settings || {}), availability: { ...availState } };
+      refreshEditorCalendar();
+      toast("Disponibilités enregistrées ✓");
+    } catch (e) {
+      toast(e.message);
+    }
+  };
+  // Jours de la semaine (toggle individuel)
+  app.querySelectorAll("#avail-days .avail-day").forEach((b) =>
+    b.addEventListener("click", () => {
+      const i = Number(b.dataset.dow);
+      availState.weekdays[i] = !availState.weekdays[i];
+      b.classList.toggle("on", availState.weekdays[i]);
+      b.setAttribute("aria-pressed", String(availState.weekdays[i]));
+      const wk = app.querySelector("#avail-weekend");
+      if (wk) wk.checked = availState.weekdays[5] && availState.weekdays[6];
+      saveAvail();
+    })
+  );
+  // Week-end (sam + dim d'un coup)
+  app.querySelector("#avail-weekend")?.addEventListener("change", (e) => {
+    const on = e.target.checked;
+    availState.weekdays[5] = on;
+    availState.weekdays[6] = on;
+    app.querySelectorAll("#avail-days .avail-day").forEach((b) => {
+      const i = Number(b.dataset.dow);
+      if (i === 5 || i === 6) {
+        b.classList.toggle("on", on);
+        b.setAttribute("aria-pressed", String(on));
+      }
+    });
+    saveAvail();
+  });
+  // Horaires + finesse des créneaux
+  app.querySelector("#avail-start")?.addEventListener("change", (e) => {
+    if (e.target.value) { availState.start = e.target.value; saveAvail(); }
+  });
+  app.querySelector("#avail-end")?.addEventListener("change", (e) => {
+    if (e.target.value) { availState.end = e.target.value; saveAvail(); }
+  });
+  app.querySelector("#avail-slot")?.addEventListener("change", (e) => {
+    availState.slot_minutes = Number(e.target.value);
+    saveAvail();
+  });
+  // Périodes : ajout / suppression
+  const wirePeriodDeletes = () =>
+    app.querySelectorAll("[data-del-period]").forEach((b) =>
+      b.addEventListener("click", () => {
+        availState.periods.splice(Number(b.dataset.delPeriod), 1);
+        const box = app.querySelector("#avail-periods");
+        if (box) box.innerHTML = periodsListHtml(availState.periods);
+        wirePeriodDeletes();
+        saveAvail();
+      })
+    );
+  wirePeriodDeletes();
+  app.querySelector("#ap-add")?.addEventListener("click", () => {
+    const fromEl = app.querySelector("#ap-from");
+    const toEl = app.querySelector("#ap-to");
+    const from = fromEl.value, to = toEl.value;
+    if (!from || !to) { toast("Renseignez les deux dates."); return; }
+    const [f, t] = from <= to ? [from, to] : [to, from];
+    availState.periods.push({ from: f, to: t, free: app.querySelector("#ap-status").value === "free" });
+    fromEl.value = ""; toEl.value = "";
+    const box = app.querySelector("#avail-periods");
+    if (box) box.innerHTML = periodsListHtml(availState.periods);
+    wirePeriodDeletes();
+    saveAvail();
+  });
+
+  // Réseaux sociaux : sauvegarde par champ de carte `social_<net>`.
+  app.querySelectorAll(".social-edit").forEach((row) => {
+    const netKey = row.dataset.net;
+    const net = SOCIAL_BY_KEY[netKey];
+    const input = row.querySelector(".social-input");
+    const open = row.querySelector(".social-open");
+    let saved = input.value;
+    const refreshOpen = () => {
+      const url = socialUrl(net, input.value);
+      if (url) { open.href = url; open.hidden = false; }
+      else { open.removeAttribute("href"); open.hidden = true; }
+    };
+    const save = async () => {
+      if (input.value.trim() === saved.trim()) return;
+      try {
+        await api("/api/card/field", {
+          method: "PUT",
+          headers: jsonAuth(),
+          body: JSON.stringify({
+            key: socialFieldKey(netKey),
+            label: net.label,
+            value: input.value.trim(),
+            is_custom: true,
+            visibility: "public",
+          }),
+        });
+        saved = input.value;
+        refreshOpen();
+        toast(t("msg_saved"));
+      } catch (e) { toast(e.message); }
+    };
+    input.addEventListener("input", refreshOpen);
+    input.addEventListener("blur", save);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); save(); } });
+  });
+
+  // Onglets de la colonne Compte
+  app.querySelectorAll(".acct-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      app.querySelectorAll(".acct-tab").forEach((t) => {
+        t.classList.toggle("active", t === tab);
+        t.setAttribute("aria-selected", String(t === tab));
+      });
+      const id = tab.dataset.tab;
+      app.querySelectorAll(".acct-panel").forEach((p) => {
+        p.hidden = p.id !== `acct-${id}`;
+      });
+    });
+  });
+
+  // Compte : email de récupération
+  app.querySelector("#save-rec")?.addEventListener("click", async () => {
+    await api("/api/recovery-email", {
+      method: "PUT",
+      headers: jsonAuth(),
+      body: JSON.stringify({ email: app.querySelector("#rec-email").value }),
+    });
+    toast(t("msg_email_saved"));
+  });
+
+  // Invitation de contact : génère un jeton à usage unique → QR + lien à partager.
+  app.querySelector("#gen-invite")?.addEventListener("click", async () => {
+    try {
+      const { token } = await api("/api/invites", { method: "POST", headers: jsonAuth(), body: "{}" });
+      openQR(`${location.origin}/i/${token}`, "une invitation de contact");
+    } catch (e) {
+      toast(e.message || "Échec");
+    }
+  });
+  app.querySelector("#open-groups")?.addEventListener("click", () => host.chat.openGroups(myKey(), myHandle()));
+
+  // Passkeys
+  async function refreshPasskeyList() {
+    const list = app.querySelector("#passkey-list");
+    if (!list) return;
+    try {
+      const passkeys = await api("/api/passkeys", { headers: authHeaders() });
+      if (!passkeys.length) {
+        list.innerHTML = `<p class="lbl-sm" style="color:var(--fg-muted)">Aucune passkey enregistrée.</p>`;
+        return;
+      }
+      list.innerHTML = passkeys.map((p) => `
+        <div class="passkey-row" data-pk-id="${esc(p.id)}">
+          <span class="passkey-icon">${icon("shield", 16)}</span>
+          <span class="passkey-name">${esc(p.name)}</span>
+          <span class="passkey-meta">${p.backedUp ? "synchronisée" : "cet appareil"} · ${new Date(p.createdAt).toLocaleDateString()}</span>
+          <button class="btn sm danger passkey-del" data-pk-id="${esc(p.id)}" title="Supprimer">✕</button>
+        </div>`).join("");
+      list.querySelectorAll(".passkey-del").forEach((b) =>
+        b.addEventListener("click", async () => {
+          if (!await confirmDialog("Supprimer cette passkey ?", { ok: "Supprimer", danger: true })) return;
+          await api(`/api/passkeys/${encodeURIComponent(b.dataset.pkId)}`, { method: "DELETE", headers: authHeaders() });
+          refreshPasskeyList();
+        })
+      );
+    } catch {}
+  }
+  refreshPasskeyList();
+
+  app.querySelector("#passkey-add")?.addEventListener("click", async () => {
+    if (!window.PublicKeyCredential) return toast("Passkeys non supportées sur cet appareil");
+    const name = app.querySelector("#passkey-name").value.trim() || "Passkey";
+    try {
+      // 1. Obtenir les options du serveur
+      const options = await api("/api/passkeys/register/begin", {
+        method: "POST", headers: jsonAuth(), body: JSON.stringify({ name }),
+      });
+      // 2. Créer la credential dans le navigateur
+      const { startRegistration } = await import("https://unpkg.com/@simplewebauthn/browser@13/esm/index.js");
+      const response = await startRegistration({ optionsJSON: options });
+      // 3. Envoyer au serveur pour vérification
+      await api("/api/passkeys/register/finish", {
+        method: "POST", headers: jsonAuth(), body: JSON.stringify({ name, response }),
+      });
+      app.querySelector("#passkey-name").value = "";
+      toast("Passkey enregistrée ✓");
+      refreshPasskeyList();
+    } catch (e) {
+      if (e.name !== "NotAllowedError") toast(e.message || "Enregistrement annulé");
+    }
+  });
+
+  // Chiffrement des messages : coffre de clé portable (passkey PRF / PIN / passphrase).
+  async function refreshVaultStatus() {
+    const { vault: vaultStr } = await e2eVaultGet(appState.key);
+    const v = vaultStr ? JSON.parse(vaultStr) : null;
+    const parts = [];
+    if (v?.prf) parts.push("passkey");
+    if (v?.pin) parts.push("code PIN");
+    if (v?.pass) parts.push("passphrase");
+    const hasVault = parts.length > 0;
+    // Garder l'état cohérent pour les prochains rendus de la même session.
+    data.hasVault = hasVault;
+
+    // Compte (Identité) : texte court.
+    const el = app.querySelector("#e2e-vault-status");
+    if (el) {
+      el.textContent = hasVault ? `Sauvegardé ✓ (${parts.join(" + ")})` : "Non sauvegardé sur ce compte.";
+      el.style.color = hasVault ? "var(--success)" : "var(--muted)";
+    }
+
+    // Options › Sécurité : bandeau de statut + libellé du bouton de sauvegarde.
+    const banner = app.querySelector("#opt-vault-banner");
+    if (banner) {
+      banner.classList.toggle("ok", hasVault);
+      banner.classList.toggle("warn", !hasVault);
+      banner.innerHTML = `${icon(hasVault ? "shield" : "key", 20)}
+        <div>
+          <b>${hasVault ? "Clé sauvegardée dans le coffre" : "Aucune sauvegarde de clé"}</b>
+          <p>${hasVault ? "Vos messages chiffrés sont protégés sur tous vos appareils." : "Sans sauvegarde, vos messages sont perdus si vous changez d'appareil."}</p>
+        </div>`;
+    }
+    const backupBtn = app.querySelector("#opt-e2e-backup");
+    if (backupBtn) backupBtn.innerHTML = `${icon("download", 14)} ${hasVault ? "Mettre à jour le coffre" : "Sauvegarde rapide"}`;
+
+    // Accueil : badge « E2E activé » / « Sans coffre ».
+    const badges = app.querySelector("#hm-vault-badges");
+    if (badges) badges.innerHTML = hasVault
+      ? `<span class="hm-badge vault">${icon("lock", 11)} E2E activé</span>`
+      : `<span class="hm-badge secret">${icon("lock", 11)} Sans coffre</span>`;
+  }
+  refreshVaultStatus();
+
+  app.querySelector("#e2e-passkey-save")?.addEventListener("click", async () => {
+    try {
+      await ensureE2E(data.handle, appState.key);
+      await e2eSaveVault(data.handle, appState.key, "passkey");
+      toast("Clé sauvegardée via passkey ✓");
+      refreshVaultStatus();
+    } catch (e) {
+      if (e.name !== "NotAllowedError") toast(e.message || "Échec");
+    }
+  });
+  app.querySelector("#e2e-pin-save")?.addEventListener("click", async () => {
+    const pin = await promptPin("Choisir un code PIN", { confirm: true });
+    if (!pin) return;
+    try {
+      await ensureE2E(data.handle, appState.key);
+      await e2eSaveVault(data.handle, appState.key, "pin", pin);
+      toast("Clé sauvegardée via code PIN ✓");
+      refreshVaultStatus();
+    } catch (e) {
+      toast(e.message || "Échec");
+    }
+  });
+  app.querySelector("#e2e-pass-save")?.addEventListener("click", async () => {
+    const pass = await promptPassphrase("Définir une passphrase de secours", { generate: true });
+    if (!pass) return;
+    try {
+      await ensureE2E(data.handle, appState.key);
+      await e2eSaveVault(data.handle, appState.key, "passphrase", pass);
+      toast("Clé sauvegardée via passphrase ✓");
+      refreshVaultStatus();
+    } catch (e) {
+      toast(e.message || "Échec");
+    }
+  });
+  app.querySelector("#e2e-restore")?.addEventListener("click", () =>
+    openE2eRestore(data.handle, appState.key, refreshVaultStatus)
+  );
+
+  // Colonne Compte — clé d'accès
+  let keyVisible = false;
+  app.querySelector("#toggle-key")?.addEventListener("click", () => {
+    keyVisible = !keyVisible;
+    app.querySelector("#key-display").textContent = keyVisible ? appState.key : "••••••••••••";
+    app.querySelector("#toggle-key").innerHTML = `${icon("key",13)} ${keyVisible ? "Masquer" : "Afficher"}`;
+  });
+
+  // Nettoie tout état local de connexion (session, indice, ancienne clé).
+  const clearLocalAuth = () => {
+    setSessionHint(false);
+    setStoredKey(null);
+    setStoredHandle(null);
+    appState.auth = null;
+    appState.authPromise = null;
+  };
+
+  app.querySelector("#logout-btn")?.addEventListener("click", async () => {
+    try {
+      await api("/api/auth/logout", { method: "POST", headers: jsonAuth() });
+    } catch {}
+    clearLocalAuth();
+    location.assign("/");
+  });
+
+  app.querySelector("#logout-all-btn")?.addEventListener("click", async () => {
+    if (!(await confirmDialog("Déconnecter tous les appareils ? Toutes les sessions seront fermées.", { ok: "Déconnecter tout", danger: true }))) return;
+    try {
+      await api("/api/auth/logout-all", { method: "POST", headers: jsonAuth() });
+    } catch {}
+    clearLocalAuth();
+    location.assign("/");
+  });
+
+  // Code PIN d'appairage : génère un code à 6 chiffres à saisir sur le mobile.
+  let pinTimer = null;
+  // Génère un PIN d'appairage et l'affiche dans le couple display/hint fourni.
+  // Deux emplacements existent (panneau Compte legacy masqué + onglet Accès v2),
+  // chacun avec ses propres éléments — d'où le paramétrage plutôt qu'un alias.
+  async function genPinInto(btn, display, hint) {
+    if (!btn || !display) return;
+    btn.disabled = true;
+    try {
+      const { pin, expiresAt } = await api("/api/auth/pin", { method: "POST", headers: jsonAuth() });
+      display.textContent = pin.replace(/(\d{3})(\d{3})/, "$1 $2");
+      display.hidden = false;
+      if (hint) hint.hidden = false;
+      if (pinTimer) clearInterval(pinTimer);
+      const tick = () => {
+        const left = Math.max(0, Math.round((new Date(expiresAt) - Date.now()) / 1000));
+        if (left <= 0) {
+          clearInterval(pinTimer);
+          pinTimer = null;
+          display.hidden = true;
+          if (hint) hint.textContent = "Code expiré — générez-en un nouveau.";
+        } else {
+          const m = Math.floor(left / 60), s = String(left % 60).padStart(2, "0");
+          if (hint) hint.textContent = `À saisir dans l'app mobile. Expire dans ${m}:${s}.`;
+        }
+      };
+      tick();
+      pinTimer = setInterval(tick, 1000);
+    } catch (e) {
+      if (hint) { hint.hidden = false; hint.textContent = e.message || "Impossible de générer le code."; }
+      else toast(e.message || "Impossible de générer le code.");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  app.querySelector("#gen-pin-btn")?.addEventListener("click", () =>
+    genPinInto(app.querySelector("#gen-pin-btn"), app.querySelector("#pin-display"), app.querySelector("#pin-hint")));
+  app.querySelector("#gen-pin-btn2")?.addEventListener("click", () =>
+    genPinInto(app.querySelector("#gen-pin-btn2"), app.querySelector("#pin-display2"), app.querySelector("#pin-hint2")));
+
+  // Liste des sessions/appareils actifs, avec révocation individuelle.
+  async function refreshSessions() {
+    const box = app.querySelector("#sessions-list");
+    if (!box) return;
+    try {
+      const { sessions } = await api("/api/sessions", { headers: authHeaders() });
+      if (!sessions.length) {
+        box.innerHTML = `<p class="lbl-sm">Aucune session active.</p>`;
+        return;
+      }
+      box.innerHTML = sessions
+        .map((s) => {
+          const when = new Date(s.lastSeen + "Z");
+          const ua = (s.userAgent || "Appareil inconnu").slice(0, 60);
+          return `<div class="session-row" data-sid="${esc(s.id)}" style="display:flex;align-items:center;gap:.5rem;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid var(--line)">
+            <span class="lbl-sm" style="flex:1">${esc(ua)}${s.current ? ' · <strong>cet appareil</strong>' : ""}<br><span style="opacity:.7">vu ${isNaN(when) ? "" : when.toLocaleString()}</span></span>
+            ${s.current ? "" : `<button class="btn sm danger session-revoke" data-sid="${esc(s.id)}" title="Révoquer">✕</button>`}
+          </div>`;
+        })
+        .join("");
+      box.querySelectorAll(".session-revoke").forEach((b) =>
+        b.addEventListener("click", async () => {
+          await api(`/api/sessions/${encodeURIComponent(b.dataset.sid)}`, { method: "DELETE", headers: authHeaders() });
+          refreshSessions();
+        })
+      );
+    } catch {
+      box.innerHTML = `<p class="lbl-sm">Sessions indisponibles.</p>`;
+    }
+  }
+  refreshSessions();
+
+  // Multi-appareils : liste des appareils chiffrés, approbation des appareils en
+  // attente (réservée à un appareil déjà approuvé) et révocation.
+  // Expose au module pour le handler SSE "device" (hors-portée de renderPrivate).
+  appState.refreshDevices = async function () {
+    const box = app.querySelector("#devices-list");
+    if (!box) return;
+    const myDid = mdDeviceId();
+    const hdr = { ...authHeaders(), "x-device-id": myDid };
+    try {
+      const { devices } = await api("/api/devices", { headers: hdr });
+      if (!devices || !devices.length) {
+        box.innerHTML = `<p class="lbl-sm">Aucun appareil enregistré.</p>`;
+        return;
+      }
+      const iAmApproved = devices.some((d) => d.deviceId === myDid && d.approved);
+      box.innerHTML = devices
+        .map((d) => {
+          const isMe = d.deviceId === myDid;
+          const badge = d.approved
+            ? `<span class="badge-sm" style="color:var(--success)">approuvé</span>`
+            : `<span class="badge-sm" style="color:var(--accent-ink)">en attente</span>`;
+          let actions = "";
+          if (isMe) actions = `<strong class="lbl-sm">cet appareil</strong>`;
+          else {
+            if (!d.approved && iAmApproved) actions += `<button class="btn sm device-approve" data-pk="${d.id}">Approuver</button>`;
+            actions += `<button class="btn sm danger device-revoke" data-pk="${d.id}" title="Révoquer">✕</button>`;
+          }
+          return `<div class="session-row" style="display:flex;align-items:center;gap:.5rem;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid var(--line)">
+            <span class="lbl-sm" style="flex:1">${esc(d.name || "Appareil")} ${badge}</span>
+            <span style="display:flex;gap:.35rem;align-items:center">${actions}</span>
+          </div>`;
+        })
+        .join("");
+      box.querySelectorAll(".device-approve").forEach((b) =>
+        b.addEventListener("click", async () => {
+          try {
+            await api(`/api/devices/${encodeURIComponent(b.dataset.pk)}/approve`, { method: "POST", headers: hdr });
+            toast?.("Appareil approuvé ✅");
+          } catch (e) {
+            toast?.(e.message || "Échec de l'approbation");
+          }
+          appState.refreshDevices();
+        })
+      );
+      box.querySelectorAll(".device-revoke").forEach((b) =>
+        b.addEventListener("click", async () => {
+          if (!(await confirmDialog("Révoquer cet appareil ? Il ne pourra plus lire ni écrire vos messages.", { ok: "Révoquer", danger: true }))) return;
+          try {
+            await api(`/api/devices/${encodeURIComponent(b.dataset.pk)}`, { method: "DELETE", headers: hdr });
+          } catch (e) {
+            toast?.(e.message || "Échec");
+          }
+          appState.refreshDevices();
+        })
+      );
+    } catch {
+      box.innerHTML = `<p class="lbl-sm">Appareils indisponibles.</p>`;
+    }
+  }
+  appState.refreshDevices();
+
+  app.querySelector("#rotate-key")?.addEventListener("click", async () => {
+    if (!(await confirmDialog("Régénérer la clé ? L'ancien lien privé cessera de fonctionner et les autres appareils seront déconnectés.", { ok: "Régénérer", danger: true }))) return;
+    // Le serveur révoque toutes les sessions et en rouvre une (cookie) pour cet appareil.
+    await api("/api/access-key/rotate", { method: "POST", headers: authHeaders() });
+    setStoredKey(null); // l'ancienne clé éventuellement mémorisée n'est plus valable
+    setSessionHint(true);
+    appState.auth = null;
+    appState.authPromise = null;
+    toast("Clé régénérée ✓");
+    // Recharge l'espace via la session cookie rafraîchie (récupère la nouvelle clé).
+    location.assign("/me");
+  });
+
+  // Copie clé / URL publique depuis la colonne Compte
+  app.querySelectorAll(".url-row .copy, #copy-key").forEach((b) =>
+    b.addEventListener("click", () => {
+      copyText(b.dataset.copy);
+      toast(t("msg_copied"));
+    })
+  );
+
+  // Export RGPD
+  app.querySelector("#export-data")?.addEventListener("click", () => {
+    const a = document.createElement("a");
+    a.href = `/api/me/export`;
+    a.setAttribute("download", `mindlog-${data.handle}.json`);
+    a.style.display = "none";
+    // Passe la clé d'accès en header — contournement via fetch + blob
+    api("/api/me/export", { headers: authHeaders() })
+      .then((raw) => {
+        // api() parse le JSON, on re-stringifie pour le téléchargement
+        const blob = new Blob([JSON.stringify(raw, null, 2)], { type: "application/json" });
+        a.href = URL.createObjectURL(blob);
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(a.href);
+      })
+      .catch((e) => toast(e.message));
+  });
+
+  // Suppression définitive du compte (RGPD)
+  app.querySelector("#delete-account")?.addEventListener("click", async () => {
+    if (!(await confirmDialog(
+      `Supprimer définitivement @${data.handle} ?\n\nToutes vos données (profil, agenda, relations, messages) seront effacées. Cette action est irréversible.`,
+      { ok: "Supprimer", danger: true }
+    ))) return;
+    try {
+      await api("/api/me", { method: "DELETE", headers: authHeaders() });
+      // Nettoie le localStorage puis redirige vers la landing
+      if (storedHandle() === data.handle) { setStoredKey(null); setStoredHandle(null); }
+      toast("Compte supprimé.");
+      setTimeout(() => location.assign("/"), 1200);
+    } catch (e) {
+      toast(e.message);
+    }
+  });
+
+  // Relations : ajouter (avec type) / retirer
+  app.querySelector("#add-rel")?.addEventListener("click", async () => {
+    const handle = app.querySelector("#rel-handle").value.trim();
+    const type = app.querySelector("#rel-type").value;
+    if (!handle) return toast(t("msg_handle_required"));
+    try {
+      await api("/api/relations", {
+        method: "POST",
+        headers: jsonAuth(),
+        body: JSON.stringify({ handle, type }),
+      });
+      renderPrivate(appState.key);
+    } catch (e) {
+      toast(e.message);
+    }
+  });
+  app.querySelectorAll("[data-del-rel]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      await api(`/api/relations/${encodeURIComponent(b.dataset.delRel)}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      renderPrivate(appState.key);
+    })
+  );
+
+  // Réciprocité : ajouter en retour une relation reçue (→ devient un contact)
+  app.querySelectorAll("[data-recip]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      try {
+        await api("/api/relations", {
+          method: "POST",
+          headers: jsonAuth(),
+          body: JSON.stringify({ handle: b.dataset.recip, type: "amis" }),
+        });
+        toast(t("msg_relation_validated"));
+        renderPrivate(appState.key);
+      } catch (e) {
+        toast(e.message);
+      }
+    })
+  );
+
+  // Recherche + filtre date des relations
+  const relSearch = app.querySelector("#rel-search");
+  const relDate = app.querySelector("#rel-datefilter");
+  const filterRels = () => {
+    const q = (relSearch?.value || "").trim().toLowerCase();
+    const days = Number(relDate?.value || 0);
+    const minTs = days ? Date.now() - days * 86400000 : 0;
+    app.querySelectorAll(".col .rel").forEach((li) => {
+      const okText = !q || (li.dataset.search || "").includes(q);
+      const ts = Number(li.dataset.ts || 0);
+      const okDate = !minTs || (ts && ts >= minTs);
+      li.style.display = okText && okDate ? "" : "none";
+    });
+  };
+  relSearch?.addEventListener("input", filterRels);
+  relDate?.addEventListener("change", filterRels);
+
+  // Demandes de RDV : statut, suppression, filtre — tout en place (pas de reload,
+  // on reste sur l'onglet RDV actif).
+  const reqList = app.querySelector("ul.requests");
+  const STATUS_BADGE = { accepted: ["ok", "Acceptée"], declined: ["no", "Refusée"], pending: ["pending", "En attente"] };
+  const activeReqFilter = () =>
+    app.querySelector("[data-req-filter].active")?.dataset.reqFilter || "pending";
+  const applyReqFilter = (val) => {
+    app.querySelectorAll("li.request").forEach((li) => {
+      li.style.display = val === "all" || li.dataset.status === val ? "" : "none";
+    });
+  };
+  // Recompte les puces depuis le DOM et réaffiche l'état vide si besoin.
+  const refreshReqChips = () => {
+    const lis = [...app.querySelectorAll("li.request")];
+    const n = { all: lis.length, pending: 0, accepted: 0, declined: 0 };
+    lis.forEach((li) => { n[li.dataset.status] = (n[li.dataset.status] || 0) + 1; });
+    app.querySelectorAll("[data-req-filter]").forEach((chip) => {
+      const span = chip.querySelector(".chip-n");
+      if (span) span.textContent = n[chip.dataset.reqFilter] ?? 0;
+    });
+    const empty = reqList?.querySelector("li.empty");
+    if (!lis.length && reqList && !empty) reqList.innerHTML = '<li class="empty">Aucune demande.</li>';
+    applyReqFilter(activeReqFilter());
+  };
+
+  const setStatus = async (id, status, btn) => {
+    await api(`/api/requests/${id}`, { method: "PATCH", headers: jsonAuth(), body: JSON.stringify({ status }) });
+    const li = btn.closest("li.request");
+    if (li) {
+      li.dataset.status = status;
+      const badge = li.querySelector(".req-status");
+      const [cls, label] = STATUS_BADGE[status] || STATUS_BADGE.pending;
+      if (badge) { badge.className = `req-status ${cls}`; badge.textContent = label; }
+    }
+    refreshReqChips();
+    toast(status === "accepted" ? "Demande acceptée 🦎" : "Demande refusée");
+  };
+  app.querySelectorAll("[data-req-accept]").forEach((b) =>
+    b.addEventListener("click", () => setStatus(b.dataset.reqAccept, "accepted", b))
+  );
+  app.querySelectorAll("[data-req-decline]").forEach((b) =>
+    b.addEventListener("click", () => setStatus(b.dataset.reqDecline, "declined", b))
+  );
+  app.querySelectorAll("[data-req-del]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      await api(`/api/requests/${b.dataset.reqDel}`, { method: "DELETE", headers: authHeaders() });
+      b.closest("li.request")?.remove();
+      refreshReqChips();
+      toast("Demande supprimée");
+    })
+  );
+
+  // Filtre par statut (client) : « En attente » actif par défaut.
+  const reqChips = app.querySelectorAll("[data-req-filter]");
+  reqChips.forEach((chip) =>
+    chip.addEventListener("click", () => {
+      reqChips.forEach((c) => c.classList.toggle("active", c === chip));
+      applyReqFilter(chip.dataset.reqFilter);
+    })
+  );
+  if (app.querySelector("li.request")) applyReqFilter("pending");
+
+  renderPrivateFooter(data);
+}
+
+export function renderPrivateFooter(data) {
+  footer.innerHTML = `<p style="margin:.4rem 0"><span class="mobile-hide">${CREDIT()} · </span><a href="${esc(data.publicUrl)}" target="_blank" rel="noopener">Voir ma page ↗</a></p>`;
+}
+
+// ISO → valeur d'un <input type="datetime-local"> (heure LOCALE, sans secondes).
+function toLocalInput(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// Modale composer d'événement (création ou édition), inspirée du « New meeting »
+// de Teams : titre, créneau début/fin, lieu, lien, notes, visibilité publique.
+// `event` null → création (POST /api/agenda) ; sinon édition (PUT /api/agenda/:id).
+export function openEventModal(event) {
+  const editing = !!event;
+  const overlay = document.createElement("div");
+  overlay.className = "overlay open";
+  overlay.innerHTML = `
+    <div class="panel ev-modal" role="dialog" aria-modal="true" aria-labelledby="ev-modal-title">
+      <button type="button" class="close" id="ev-close" aria-label="Fermer">✕</button>
+      <h2 id="ev-modal-title">${editing ? "Modifier l'événement" : "Nouvel événement"}</h2>
+      <form id="ev-form" novalidate>
+        <div class="group">
+          <label for="ev-title">Titre</label>
+          <input id="ev-title" name="title" maxlength="200" required placeholder="Réunion, rendez-vous, sortie…" value="${editing ? esc(event.title || "") : ""}" />
+        </div>
+        <div class="group ev-grid2">
+          <div>
+            <label for="ev-start">Début</label>
+            <input id="ev-start" name="starts_at" type="datetime-local" required value="${editing ? toLocalInput(event.starts_at) : ""}" />
+          </div>
+          <div>
+            <label for="ev-end">Fin <span class="opt">(optionnel)</span></label>
+            <input id="ev-end" name="ends_at" type="datetime-local" value="${editing ? toLocalInput(event.ends_at) : ""}" />
+          </div>
+        </div>
+        <div class="group">
+          <label for="ev-loc">Lieu <span class="opt">(optionnel)</span></label>
+          <input id="ev-loc" name="location" maxlength="200" placeholder="Adresse, salle, visio…" value="${editing ? esc(event.location || "") : ""}" />
+        </div>
+        <div class="group">
+          <label for="ev-link">Lien <span class="opt">(optionnel)</span></label>
+          <input id="ev-link" name="link" type="url" maxlength="500" placeholder="https://…" value="${editing ? esc(event.link || "") : ""}" />
+        </div>
+        <div class="group">
+          <label for="ev-notes">Notes <span class="opt">(optionnel)</span></label>
+          <textarea id="ev-notes" name="notes" rows="3" maxlength="4000" placeholder="Détails, ordre du jour…">${editing ? esc(event.notes || "") : ""}</textarea>
+        </div>
+        <label class="ev-public-row"><input type="checkbox" id="ev-public" name="is_public" ${editing ? (event.is_public !== 0 ? "checked" : "") : "checked"} /> <span>Visible publiquement sur ma page</span></label>
+        <div class="err" id="ev-err"></div>
+        <div class="actions">
+          ${editing ? `<button type="button" class="btn danger ghost" id="ev-delete">${icon("trash", 15)} Supprimer</button>` : ""}
+          <button type="button" class="btn" id="ev-cancel">Annuler</button>
+          <button type="submit" class="btn primary">${editing ? "Enregistrer" : "Ajouter"}</button>
+        </div>
+      </form>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  const errEl = overlay.querySelector("#ev-err");
+  overlay.addEventListener("click", (e) => e.target === overlay && close());
+  overlay.querySelector("#ev-close").addEventListener("click", close);
+  overlay.querySelector("#ev-cancel").addEventListener("click", close);
+  overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } });
+  setTimeout(() => overlay.querySelector("#ev-title").focus(), 30);
+
+  overlay.querySelector("#ev-delete")?.addEventListener("click", async () => {
+    if (!(await confirmDialog(`Supprimer « ${event.title} » ?`, { ok: "Supprimer", danger: true }))) return;
+    await api(`/api/agenda/${event.id}`, { method: "DELETE", headers: authHeaders() });
+    close();
+    renderPrivate(appState.key);
+  });
+
+  overlay.querySelector("#ev-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    errEl.textContent = "";
+    const fd = new FormData(e.target);
+    const title = (fd.get("title") || "").trim();
+    const start = fd.get("starts_at");
+    const end = fd.get("ends_at");
+    if (!title) { errEl.textContent = "Le titre est requis."; return; }
+    if (!start) { errEl.textContent = "La date de début est requise."; return; }
+    if (end && new Date(end) < new Date(start)) { errEl.textContent = "La fin doit suivre le début."; return; }
+    const payload = {
+      title,
+      starts_at: new Date(start).toISOString(),
+      ends_at: end ? new Date(end).toISOString() : null,
+      location: (fd.get("location") || "").trim(),
+      link: (fd.get("link") || "").trim(),
+      notes: (fd.get("notes") || "").trim(),
+      is_public: fd.get("is_public") === "on",
+    };
+    const submitBtn = e.target.querySelector("button[type=submit]");
+    submitBtn.disabled = true;
+    try {
+      await api(editing ? `/api/agenda/${event.id}` : "/api/agenda", {
+        method: editing ? "PUT" : "POST",
+        headers: jsonAuth(),
+        body: JSON.stringify(payload),
+      });
+      close();
+      toast(editing ? "Événement modifié 🦎" : "Événement ajouté 🦎");
+      renderPrivate(appState.key);
+    } catch (err) {
+      submitBtn.disabled = false;
+      errEl.textContent = "Échec de l'enregistrement. Réessayez.";
+    }
+  });
+}
+

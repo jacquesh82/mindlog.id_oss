@@ -1,0 +1,13 @@
+node_modules
+data
+.git
+.github
+.screenshots
+.dual-graph
+.claude
+*.log
+.env
+npm-debug.log*
+Dockerfile
+docker-compose.yml
+README.md

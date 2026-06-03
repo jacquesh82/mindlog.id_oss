@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Motif « carte d'identité » : carte blanche, avatar + lignes en vert Milo.
+     Contenu centré dans la zone de sécurité (≈ 18..90 sur 108). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Carte blanche arrondie -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M40,36 h28 a6,6 0 0 1 6,6 v24 a6,6 0 0 1 -6,6 h-28 a6,6 0 0 1 -6,-6 v-24 a6,6 0 0 1 6,-6 z" />
+
+    <!-- Avatar (cercle vert) -->
+    <path
+        android:fillColor="#2E9E5B"
+        android:pathData="M46,52 m-6,0 a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 z" />
+
+    <!-- Ligne de titre -->
+    <path
+        android:fillColor="#2E9E5B"
+        android:pathData="M56,48 h14 v4 h-14 z" />
+
+    <!-- Ligne de détail -->
+    <path
+        android:fillColor="#2E9E5B"
+        android:pathData="M56,55 h12 v3 h-12 z" />
+
+    <!-- Bandeau bas (coordonnées) -->
+    <path
+        android:fillColor="#F2B441"
+        android:pathData="M40,63 h28 v4 h-28 z" />
+</vector>

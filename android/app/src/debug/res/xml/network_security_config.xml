@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Build DEBUG uniquement. En plus des CA système (prod : https://id.mindlog.today)
+  on fait confiance à la CA locale mkcert pour accepter le certificat de
+  https://id.mindlog.localhost servi par le Caddy de dev. `user` permet aussi
+  d'installer manuellement une CA si besoin. cleartextTrafficPermitted couvre
+  l'ancien accès http://10.0.2.2.
+  La prod (release) garde la config par défaut : HTTPS strict, CA système seules.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+            <certificates src="@raw/mkcert_ca" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

@@ -1,0 +1,1 @@
+ALTER TABLE "events" ADD COLUMN "link" text DEFAULT '' NOT NULL;

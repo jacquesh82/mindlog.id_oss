@@ -1,0 +1,27 @@
+# Fichiers exclus du miroir OSS public — code premium/propriétaire.
+#
+# Pour ajouter une feature premium : créer dans src/premium/ (backend),
+# test/premium/ (tests), public/editor/tabs/ si besoin côté frontend.
+# Ajouter ici tout nouveau chemin frontend ou hors src/premium/.
+
+# Tout le module Premium backend + tests
+src/premium/
+test/premium/
+
+# Frontend — onglet compte premium
+public/editor/tabs/account.js
+
+# Migrations premium
+drizzle/0020_premium_subscriptions.sql
+drizzle/0021_premium_page_features.sql
+drizzle/0022_billing_events.sql
+drizzle/0023_paid_pages.sql
+
+# Docs internes
+docs/premium-offer-plan.md
+
+# Scripts d'administration
+scripts/gen-admin-certs.sh
+
+# CI privé (deploy str01, miroir OSS) — le repo public a son propre CI
+.github/

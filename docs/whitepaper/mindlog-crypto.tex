@@ -1,0 +1,372 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{amsmath}
+\usepackage{url}
+
+\newcommand{\code}[1]{\texttt{\small #1}}
+
+\title{\textbf{mindlog $\cdot$ id} \\[2pt]
+  \large Cryptographic Whitepaper}
+\author{mindlog id Engineering \\ \small milo@mindlog.today}
+\date{May 2026 -- version 1.0}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+\textbf{mindlog $\cdot$ id} is an open-source digital identity and end-to-end
+encrypted messenger published under the AGPLv3 licence. This document specifies
+the cryptographic mechanisms shipped in the current release: the
+\emph{Signal-style} pairwise channel (X3DH key agreement + Double Ratchet),
+the group channel (sender keys + ECDSA), the multi-device key vault
+(PBKDF2 + AES-256-GCM, optionally unlocked via WebAuthn PRF), the
+out-of-band identity verification ladder (safety numbers / QR), and the
+ephemerality and one-shot message extensions. All primitives are NIST-standard
+or IETF-standard; no custom cipher or curve is introduced. A canonical
+reference implementation (\code{src/ratchet.ts}) is shared verbatim between
+the web and Android clients, and is exercised by a frozen set of test
+vectors (\code{test/vectors/ratchet.json}) replayed by both runtimes to
+guarantee bit-for-bit interoperability.
+\end{abstract}
+
+\section{Threat model and design goals}
+
+We assume an active network adversary with full control over the transport
+layer. We additionally assume that the server (operated by the publisher or
+self-hosted) is honest-but-curious: it is trusted to deliver messages in
+order on a best-effort basis but is not trusted with plaintext content,
+attachments, key material, or call media.
+
+The design goals are:
+\begin{itemize}
+  \item \textbf{Confidentiality and authenticity} of every direct and group
+    message under standard cryptographic assumptions
+    (ECDLP on NIST P-256, AES-GCM security, HMAC-SHA-256 PRF).
+  \item \textbf{Forward secrecy:} compromise of long-term key material must
+    not retroactively expose past messages.
+  \item \textbf{Post-compromise security (self-healing):} after a single
+    healthy round-trip following a state compromise, the channel returns
+    to a secure state.
+  \item \textbf{No mandatory directory:} no phone number or email is
+    required to open a channel.
+  \item \textbf{Auditability and portability:} a single reference algorithm
+    spec, verbatim across runtimes, validated by shared test vectors.
+\end{itemize}
+
+\section{Primitives}
+
+All primitives are NIST or IETF specified. We use the same set on web
+(WebCrypto, \code{crypto.subtle}) and on Android (\code{javax.crypto} +
+\code{java.security}).
+
+\begin{itemize}
+  \item \textbf{Elliptic curve:} NIST P-256 (\code{secp256r1}) for both
+    key agreement (ECDH) and signatures (ECDSA).
+  \item \textbf{KDF:} HKDF-SHA-256 (RFC 5869) with explicit, domain-separated
+    \texttt{info} labels.
+  \item \textbf{Symmetric AEAD:} AES-256-GCM with a fresh 96-bit IV per
+    message and a 128-bit authentication tag.
+  \item \textbf{MAC / chain advance:} HMAC-SHA-256.
+  \item \textbf{Password-based KDF:} PBKDF2-HMAC-SHA-256 with $600\,000$
+    iterations (OWASP 2023+ recommendation) for the vault unlock path.
+  \item \textbf{ECDSA encoding:} fixed-length P1363 ($r \| s$, 64 bytes)
+    for cross-runtime interoperability.
+\end{itemize}
+
+\section{Pairwise channel}
+
+Each pair of identities runs an instance of the Signal-family
+\textbf{Double Ratchet} initialised by \textbf{X3DH}.
+
+\subsection{Identity and prekeys}
+
+Every account publishes:
+\begin{itemize}
+  \item an identity public key $IK_A$ (P-256),
+  \item a medium-term signed prekey $SPK_A$ (rotated),
+  \item a pool of one-time prekeys $\{OPK_A^{(i)}\}$.
+\end{itemize}
+The server stores only the \emph{public} bundle and consumes one-time
+prekeys atomically, gated per requesting contact, so that a single OPK is
+never handed out twice.
+
+\subsection{X3DH initial key agreement}
+
+To open a channel toward $B$, the initiator $A$ generates an ephemeral
+$EK_A$ and computes:
+\begin{align*}
+DH_1 &= \text{ECDH}(IK_A, SPK_B), &
+DH_2 &= \text{ECDH}(EK_A, IK_B), \\
+DH_3 &= \text{ECDH}(EK_A, SPK_B), &
+DH_4 &= \text{ECDH}(EK_A, OPK_B^{(i)})\ \text{(if available).}
+\end{align*}
+The initial root key is
+$RK_0 = \mathrm{HKDF}(DH_1 \| DH_2 \| DH_3 \| DH_4,\ \text{info}=\text{``mindlog/x3dh''})$.
+
+\subsection{Double Ratchet}
+
+State per channel: a 32-byte root key $RK$, a sending chain key $CK_s$, a
+receiving chain key $CK_r$, and a Diffie--Hellman ratchet pair.
+
+\textbf{Symmetric ratchet step.} For each message sent, the chain key is
+advanced and a message key is derived:
+\[
+mk = \mathrm{HMAC}(CK_n, \texttt{0x01}), \qquad
+CK_{n+1} = \mathrm{HMAC}(CK_n, \texttt{0x02}).
+\]
+The message key $mk$ is then split via HKDF into an AES-256 encryption key
+and a 12-byte IV. The ciphertext is
+$ct = \mathrm{AES\text{-}GCM}_{mk}(\text{header}, \text{plaintext})$,
+binding the header (sender DH public, counters) as Associated Data.
+
+\textbf{DH ratchet step.} On receipt of a message advertising a new
+sender DH public $DH'$, the receiver computes $\mathrm{ECDH}(\cdot,DH')$,
+mixes it into $RK$, and resets both chain keys:
+\[
+(RK', CK_r') = \mathrm{HKDF}(RK \| \mathrm{ECDH}(sk, DH'),\ \text{info}=\text{``mindlog/dr''}).
+\]
+This produces \emph{forward secrecy} (past message keys are unrecoverable
+after a chain advance) and \emph{post-compromise security} (one healthy
+round-trip restores secrecy after a state compromise).
+
+\subsection{Session continuity and reset recovery}
+
+A channel is keyed by the peer handle but \emph{bound} to the peer's
+cryptographic identity, by storing a format-independent fingerprint of
+$IK_{\text{peer}}$ (the raw public key). Two kinds of desynchronisation are
+detected and repaired client-side; neither needs server cooperation.
+
+\textbf{Identity change.} If the stored fingerprint no longer matches the
+peer's current $IK$ (account re-created, key rotated), the local session is
+discarded and a fresh X3DH handshake is run --- otherwise the counterpart
+would receive messages encrypted under a dead root key and read them as
+``unreadable''.
+
+\textbf{Unilateral reset at unchanged identity.} A peer may reset its
+ratchet while keeping the \emph{same} $IK$ (reinstall, cleared local store,
+regenerated prekeys). The identity fingerprint is then unchanged, so the
+test above does not fire, yet the two sides hold incompatible states: one
+keeps sending symmetric-ratchet continuations while the other re-runs X3DH,
+and \emph{both} read ``unreadable''. We therefore additionally bind a
+session to its \emph{establishing ephemeral} $EK$: when an initial
+(bootstrap-bearing) message arrives whose $EK$ differs from the one that
+opened the current session, the receiver tears down the stale session and
+replays the X3DH responder to adopt the peer's new one. An idempotent
+re-send of the same bootstrap (identical $EK$, before confirmation) is
+ignored, so the recovery does not loop. The conversation self-heals on the
+next initiating message; only continuations already sent on the dead
+session stay unrecoverable, as forward secrecy requires.
+
+\textbf{One-time prekey replenishment.} The OPK pool is refilled to its
+target from the \emph{server-reported} available count, not the local pool
+size --- a client whose published OPKs were drained or wiped server-side
+then always republishes, instead of computing a zero deficit and leaving
+the bundle permanently OPK-less.
+
+\subsection{Wire format}
+
+A message is packaged as
+\[
+\texttt{ciphertext} = \texttt{b64url}(\text{header}) \| \texttt{"."} \| \texttt{b64}(ct),
+\]
+with a header version flag (\code{v=1}, \code{v=2}) for forward
+compatibility. No new database column is required: the server is oblivious
+to the channel state and stores opaque blobs only.
+
+\section{Group channel}
+
+Group conversations use \textbf{sender keys}, mirroring the Signal group
+construction, with the simplification that the group admin is the
+creator and membership transitions are authenticated by the admin's
+pairwise channel.
+
+Each group member $M$ holds a \emph{sender state}: a 32-byte symmetric
+chain key $CK^M$ and a P-256 ECDSA signing key pair
+$(sk^M_\text{sig}, pk^M_\text{sig})$.
+
+\subsection{Sender Key Distribution Message (SKDM)}
+
+On joining or on rotation, $M$ ships its initial $CK^M$ and
+$pk^M_\text{sig}$ to every other member \emph{over their pairwise
+Double Ratchet channel}. The SKDM therefore inherits the confidentiality,
+authenticity, forward secrecy, and post-compromise security properties of
+the pairwise channel; the server only sees a regular E2EE message tagged
+with the control prefix \code{skd}.
+
+\subsection{Encrypt and decrypt}
+
+To send to the group, $M$ advances its chain:
+\[
+mk = \mathrm{HKDF}(CK^M_n, \text{info}=\text{``mindlog/sk/mk''}), \quad
+CK^M_{n+1} = \mathrm{HKDF}(CK^M_n, \text{info}=\text{``mindlog/sk/ck''}).
+\]
+The payload is
+$ct = \mathrm{AES\text{-}GCM}_{mk}(\text{header}, \text{plaintext})$,
+and the entire $(\text{header}, ct)$ is signed:
+$\sigma = \mathrm{ECDSA}_{sk^M_\text{sig}}(\text{header} \| ct)$,
+encoded in fixed-length P1363 (64 bytes). Receivers verify $\sigma$
+against the sender's registered $pk^M_\text{sig}$, then decrypt.
+
+\subsection{Rotation}
+
+On any membership change that reduces the visibility set (member
+removal), each remaining member regenerates a fresh $CK^M$ and
+re-distributes it via SKDM to every other current member. This is the
+standard sender-key forward-secrecy boundary on member removal.
+
+\section{Multi-device key vault}
+
+The user's identity private key must travel between devices without ever
+being exposed to the server in cleartext. We store it as an
+\emph{encrypted vault} with two unwrap paths.
+
+\textbf{Passphrase path.} The vault key is derived as
+\[
+K_\text{vault} = \mathrm{PBKDF2\text{-}HMAC\text{-}SHA256}
+  (\text{passphrase},\ \text{salt}_\text{vault},\ 600\,000),
+\]
+producing 32 bytes; the identity key is then sealed with
+$\mathrm{AES\text{-}GCM}_{K_\text{vault}}$ under a fresh 12-byte IV.
+The server stores the resulting ciphertext, salt, and IV only; the
+passphrase never leaves the device.
+
+\textbf{Passkey (WebAuthn PRF) path.} Where the platform exposes the
+WebAuthn \code{prf} extension, the vault is unlocked by a 32-byte PRF
+output bound to the user's passkey, yielding a phishing- and
+replay-resistant unlock with no shared secret to remember.
+
+The same envelope format is used on web and Android, so a vault written
+on one platform unlocks bit-identically on the other.
+
+\section{Identity verification}
+
+To resist a server-side man-in-the-middle attack on the initial X3DH
+bundle, each pair derives a \emph{safety number}:
+\[
+\mathrm{SN}_{A,B} = \mathrm{SHA\text{-}256}(\min(IK_A, IK_B) \| \max(IK_A, IK_B)),
+\]
+encoded as a stable 60-digit string and rendered as a QR code. Two users
+that scan or compare each other's safety number obtain an out-of-band
+authentication of their channel that does not depend on the server's
+honesty.
+
+\section{Ephemerality, attachments, view-once}
+
+\textbf{Disappearing messages.} The header may carry an explicit TTL
+$\tau$ (seconds). Both endpoints schedule a deterministic deletion at
+$t_\text{recv} + \tau$; the ciphertext on the server is purged on the
+same deadline.
+
+\textbf{View-once messages.} A view-once flag instructs the recipient
+to delete plaintext, ciphertext, and header from local storage as soon
+as the message is decrypted and rendered, and to acknowledge a server-
+side \emph{burn} for the corresponding row. The message key is also
+zeroized after a single decryption.
+
+\textbf{Attachments and voice.} Files are encrypted in chunks with a
+per-attachment AES-256-GCM key freshly derived from the per-message key
+material. The server stores opaque ciphertext blobs and never sees a
+filename, MIME type, or plaintext byte.
+
+\section{Directoryless contact (invite links)}
+
+A user $A$ may mint a single-use invite token $t$ and share the URL
+\url{https://id.mindlog.today/i/<t>}. The token is bound to $A$ on the
+server but does not reveal $A$'s identity attributes; upon acceptance,
+both sides install a mutual \emph{contact} relation and immediately run
+the X3DH exchange described above. The token is destroyed after first
+use. No phone number, no email, and no directory lookup are involved.
+
+\section{Test vectors and cross-runtime parity}
+
+The reference algorithm lives in \code{src/ratchet.ts} and is exercised
+by the frozen test vectors \code{test/vectors/ratchet.json}. The Android
+runtime ships unit tests that replay the same vectors against its
+\code{javax.crypto} / \code{java.security} stack
+(\code{GroupSenderTest}, \code{RatchetTest}). Any algorithmic divergence
+between web and Android fails CI, which is what makes the multi-client
+\emph{universality} of the cryptographic core a checked property rather
+than a documentation claim.
+
+\section{Multi-device messaging}
+
+Each account may link up to five devices. Every device generates its
+own ECDH P-256 identity key pair and publishes its own X3DH prekey
+bundle (SPK + OPK pool) under a stable \emph{device-id} (UUID).
+
+\subsection*{Fan-out at send time}
+
+When device $D_A$ of user $A$ sends a message to user $B$ (devices
+$D_{B_1}, D_{B_2}, \ldots$), it:
+\begin{enumerate}
+  \item Fetches the prekey bundles of all active devices of $B$ \emph{and}
+        of $A$'s other devices from \code{GET /api/e2e/device-prekeys/:handle}.
+  \item Encrypts the plaintext independently for each target device using
+        that device's X3DH bundle and per-device Double Ratchet session
+        (session key: \code{dev:<deviceId>}).
+  \item Posts $N$ envelopes in a single request as
+        \code{\{clientMsgId, envelopes[]\}}.
+\end{enumerate}
+
+The server stores one \emph{logical} row in \code{messages} and one
+\code{message\_envelopes} row per target device.  On read, each device
+receives only its own envelopes; the logical metadata (timestamps,
+reactions, TTL, view-once flag) is shared.
+
+\subsection*{Device enrolment and approval}
+
+The first device registered by an account is auto-approved.
+Subsequent devices enter a \emph{pending} state until an already-approved
+device calls \code{POST /api/devices/:pk/approve}.  Approval requires
+an active authenticated session from an approved device (checked via the
+\code{x-device-id} header); the server never auto-approves on the basis
+of the access key alone.
+
+\subsection*{Security properties}
+
+\textbf{Forward secrecy.}  Each device maintains its own Diffie-Hellman
+ratchet state; compromise of one device does not retroactively expose
+sessions on other devices.
+
+\textbf{Device addition visibility.}  Registering a new device emits an
+in-app notification to all approved devices of the account, so a
+fraudulent enrolment is immediately visible.  The safety number (§7)
+is per-identity; pairing partners are encouraged to re-verify after any
+device change.
+
+\textbf{Group sender keys.}  The SKDM (Sender Key Distribution Message)
+is itself delivered via fan-out: each group member's SKDM is encrypted
+for all their active devices, so every device of every member can decrypt
+group messages natively.
+
+\subsection*{What is explicitly not preserved}
+
+A newly enrolled device cannot read messages sent before its enrolment
+(no history transfer).  The per-identity ratchet cache
+(\code{/api/e2e/cache}) introduced as a temporary multi-device bridge
+has been removed; fan-out is the sole mechanism.
+
+\section{What is not done}
+
+We do not claim post-quantum security in this release. We do not claim
+metadata privacy: the server learns who talks to whom and when,
+although not what is said. There is no sealed-sender construction, no
+mixnet routing, and no PIR-based contact discovery. These are tracked
+items on the roadmap.
+
+\section*{References}
+\begin{itemize}
+  \item Marlinspike, M. and Perrin, T. \emph{The X3DH Key Agreement
+    Protocol.} Signal Foundation, 2016. \url{https://signal.org/docs/specifications/x3dh/}
+  \item Perrin, T. and Marlinspike, M. \emph{The Double Ratchet
+    Algorithm.} Signal Foundation, 2016.
+    \url{https://signal.org/docs/specifications/doubleratchet/}
+  \item Signal Foundation. \emph{Sender Keys for Group Messaging.}
+  \item W3C. \emph{Web Authentication, Level 3 -- PRF Extension.}
+    \url{https://www.w3.org/TR/webauthn-3/}
+\end{itemize}
+
+\end{document}

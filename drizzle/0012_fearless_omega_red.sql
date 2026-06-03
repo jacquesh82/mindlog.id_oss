@@ -1,0 +1,1 @@
+ALTER TABLE "messages" ADD COLUMN "read_once" integer DEFAULT 0 NOT NULL;
