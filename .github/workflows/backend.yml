@@ -1,0 +1,54 @@
+name: Backend
+
+# CI backend : tests, typecheck et lint sur toute PR/push qui touche le code serveur.
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "src/**"
+      - "test/**"
+      - "scripts/**"
+      - "*.ts"
+      - "package*.json"
+      - "tsconfig*.json"
+      - "eslint.config.js"
+      - ".github/workflows/backend.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "test/**"
+      - "scripts/**"
+      - "*.ts"
+      - "package*.json"
+      - "tsconfig*.json"
+      - "eslint.config.js"
+      - ".github/workflows/backend.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Tests, typecheck & lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Tests unitaires (PGlite)
+        run: npm test
+
+      - name: Typecheck TypeScript
+        run: npm run typecheck
+
+      - name: Lint ESLint
+        run: npm run lint

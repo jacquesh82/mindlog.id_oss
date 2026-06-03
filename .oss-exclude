@@ -23,5 +23,6 @@ docs/premium-offer-plan.md
 # Scripts d'administration
 scripts/gen-admin-certs.sh
 
-# CI privé (deploy str01, miroir OSS) — le repo public a son propre CI
-.github/
+# Workflows privés (deploy prod + miroir) — le CI de test reste dans l'OSS
+.github/workflows/mirror-oss.yml
+.github/workflows/release.yml
