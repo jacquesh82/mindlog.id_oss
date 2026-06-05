@@ -292,8 +292,8 @@ function headerAccount(unread = 0) {
       <span class="chip-notif-dot" id="chip-notif-dot" ${unread ? "" : "hidden"}>${unread || ""}</span>
     </button>
     <div class="profile-menu" id="profile-menu" role="menu">
-      <a class="pmenu-item" href="/me" role="menuitem">${icon("user", 15)} Mon profil</a>
-      <button class="pmenu-item" id="pmenu-theme" role="menuitem" type="button">${icon("sun", 15)} Thème</button>
+      <button class="pmenu-item" id="pmenu-profil" role="menuitem" type="button">${icon("user", 15)} Mon profil</button>
+      <button class="pmenu-item" id="pmenu-theme" role="menuitem" type="button">${storedTheme() === "light" ? icon("moon", 15) + " Mode sombre" : icon("sun", 15) + " Mode clair"}</button>
       <button class="pmenu-item" id="pmenu-notifs" role="menuitem" type="button">${icon("bell", 15)} Notifications</button>
       <div class="pmenu-sep" role="separator"></div>
       <button class="pmenu-item pmenu-danger" data-action="logout" role="menuitem" type="button">${icon("key", 15)} ${t("nav_logout")}</button>
@@ -340,8 +340,17 @@ function wireProfileMenu() {
   // capture:true → avant tout stopPropagation des listeners enfants
   document.addEventListener("click", (e) => {
     if (e.target.closest("#profile-menu-btn")) { _pmenu.toggle(); return; }
-    if (e.target.closest("#pmenu-theme"))  { toggleTheme(); _pmenu.close(); return; }
-    if (e.target.closest("#pmenu-notifs")) { document.getElementById("notif-bell")?.click(); _pmenu.close(); return; }
+    if (e.target.closest("#pmenu-profil")) {
+      if (window.__deckGoLabel) window.__deckGoLabel("Compte");
+      else location.assign("/me");
+      _pmenu.close(); return;
+    }
+    if (e.target.closest("#pmenu-notifs")) {
+      const bell = document.getElementById("notif-bell");
+      if (bell) bell.click();
+      else location.assign("/me");
+      _pmenu.close(); return;
+    }
     if (!e.target.closest(".profile-menu-wrap")) _pmenu.close();
   }, true);
 
@@ -355,6 +364,16 @@ function wireProfileMenuBtn() {
   document.getElementById("profile-menu-btn")?.addEventListener("click", (e) => {
     e.stopPropagation();
     _pmenu.toggle();
+  });
+  // Listener direct sur le bouton thème (plus fiable que la délégation capture)
+  const themeBtn = document.getElementById("pmenu-theme");
+  themeBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleTheme();
+    themeBtn.innerHTML = storedTheme() === "light"
+      ? icon("moon", 15) + " Mode sombre"
+      : icon("sun", 15) + " Mode clair";
+    _pmenu.close();
   });
 }
 
@@ -2227,15 +2246,9 @@ async function renderPublicProfile(handle) {
   const LOG_OUT_SVG = `<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>`;
   const _profileActions = {
     isSelf,
-    topLeft: [
-      `<button class="btn sm" id="cv-back-btn" aria-label="Retour à l'application">${icon("home", 18)}</button>`,
-      `<button class="btn sm" id="cv-search-btn" aria-label="Rechercher un profil">${icon("search", 18)}</button>`,
-      loggedIn ? `<button class="btn sm" id="cv-logout-btn" aria-label="Se déconnecter"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${LOG_OUT_SVG}</svg></button>` : "",
-    ].join(""),
-    left: `<button class="btn sm" id="qr-btn" aria-label="QR code">${icon("qr", 18)}</button>
-           <button class="btn sm theme-toggle" id="cv-theme-btn" type="button" aria-label="Changer le thème"></button>
-           ${relBtnHtml()}`,
-    right: "",
+    topLeft: "",  // La barre standard (logo + recherche + chip) remplace les glass buttons
+    left: "",
+    right: relBtnHtml(), // Bouton relation dans la zone cover-actions (bas du hero)
     contact: _contactActions,
   };
   app.innerHTML = `
@@ -2291,6 +2304,7 @@ async function renderPublicProfile(handle) {
     });
 
   wireHeaderSearch();
+  wireProfileMenuBtn(); // profile-chip menu (thème, profil, notifications)
 
   // Bascule thème de l'en-tête (icône posée par applyTheme, comme en connecté).
   applyTheme(storedTheme() || "dark");
@@ -2676,6 +2690,21 @@ function cardViewHtml(data, editable, profileActions = "") {
   const hasEvents = data.events && data.events.length > 0;
   const hasAvailability = !!data.availability;
   const showAgenda = hasEvents || hasAvailability;
+  const nowTs = Date.now();
+  // Prochains événements (futurs uniquement) — filtrés côté client pour n'afficher
+  // que ceux à venir, même si le serveur a renvoyé des événements passés.
+  const upcomingEvents = (data.events || [])
+    .filter(e => e.starts_at && new Date(e.starts_at).getTime() >= nowTs)
+    .sort((a, b) => (a.starts_at || "").localeCompare(b.starts_at || ""));
+  const upcomingGroups = (() => {
+    const groups = []; let cur = null;
+    for (const e of upcomingEvents) {
+      const key = (e.starts_at || "").slice(0, 10);
+      if (!cur || cur.key !== key) { cur = { key, label: fmtDayLabel(e.starts_at), items: [] }; groups.push(cur); }
+      cur.items.push(e);
+    }
+    return groups;
+  })();
 
   const get = (k) => data.fields?.find((f) => f.key === k)?.value || "";
   const name = get("display_name") || data.handle;
@@ -2806,16 +2835,22 @@ function cardViewHtml(data, editable, profileActions = "") {
           </section>
 
           <section id="pub-agenda" class="pub-tab-panel" role="tabpanel" tabindex="-1" hidden>
-            ${hasEvents ? `<div class="pub-section-h first">${icon("calendar", 16)} Agenda</div>
-              <div class="agenda-events">${eventsHtml(data.events, false)}</div>` : ""}
-            ${hasAvailability ? `<div class="pub-section-h${hasEvents ? "" : " first"}">${icon("clock", 16)} Disponibilités</div>
+            ${hasAvailability ? `<div class="pub-section-h first">${icon("clock", 16)} Disponibilités</div>
               <div class="calendar-fill">
                 ${host.calendar.html(data.overrides, false, undefined, canBook)}
-                ${isSelf || data.options?.allowRequests === false ? "" :
-                  `<button class="btn primary" id="ask-rdv" style="width:100%;justify-content:center;margin-top:.75rem">
-                    ${icon("calendar", 16)} Demander un RDV</button>`}
+              </div>
+              ${isSelf || data.options?.allowRequests === false ? "" :
+                `<button class="btn primary" id="ask-rdv" style="width:100%;justify-content:center;margin-top:.75rem">
+                  ${icon("calendar", 16)} Demander un RDV</button>`}` : ""}
+            ${upcomingGroups.length ? `
+              <div class="pub-section-h${!hasAvailability ? " first" : ""}">${icon("calendar", 16)} Prochains événements</div>
+              <div class="ev-agenda">
+                ${upcomingGroups.map(g => `<section class="ev-group">
+                  <div class="ev-day">${esc(g.label)}</div>
+                  ${g.items.map(e => eventCardHtml(e, false, nowTs)).join("")}
+                </section>`).join("")}
               </div>` : ""}
-            ${!hasEvents && !hasAvailability ? `<p class="pub-empty">Pas d'événements publics.</p>` : ""}
+            ${!hasAvailability && !upcomingGroups.length ? `<p class="pub-empty">Pas d'événements publics à venir.</p>` : ""}
           </section>
 
           <section id="pub-gallery-slot" class="pub-tab-panel" role="tabpanel" tabindex="-1" hidden></section>

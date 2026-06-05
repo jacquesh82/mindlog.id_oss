@@ -40,6 +40,7 @@ export const ICONS = {
   zap: '<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>',
   "chevron-right": '<path d="m9 6 6 6-6 6"/>',
   "chevron-down": '<path d="m6 9 6 6 6-6"/>',
+  send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
 };
 
 export const icon = (n, size = 20) =>

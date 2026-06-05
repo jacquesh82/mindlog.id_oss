@@ -18,6 +18,8 @@
  *  - Compte à rebours avant suppression au clic sur l'heure d'un message.
  * ========================================================================== */
 
+import { icon as svgIcon } from "../ui/icons.js";
+
 const QUICK_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
 // Historique d'appel : message E2E sentinel « call:{json} » écrit par l'appelant en
@@ -90,7 +92,7 @@ export default function register(host) {
           <button type="button" class="btn" id="ch-once" title="Message à lecture unique" aria-label="Lecture unique" aria-pressed="false">👁</button>
           <input type="file" id="ch-file" hidden />
           <input id="ch-input" placeholder="Votre message…" autocomplete="off" maxlength="1000" />
-          <button class="btn primary" type="submit">Envoyer</button>
+          <button class="btn primary" type="submit" title="Envoyer" aria-label="Envoyer" style="padding:.3rem .55rem;flex:none">${svgIcon("send", 18)}</button>
         </form>
       </div>`;
 
@@ -755,10 +757,10 @@ export default function register(host) {
         <div class="section-title" style="border-top:none;padding-top:0;margin-top:0">Groupes 👥</div>
         <div id="g-list"><p class="empty">Chargement…</p></div>
         <div class="section-title">Nouveau groupe</div>
-        <form id="g-new" class="add-row" style="grid-template-columns:1fr;gap:.5rem">
+        <form id="g-new" style="display:flex;flex-direction:column;gap:.5rem;margin-top:.4rem">
           <input id="g-name" placeholder="Nom du groupe" maxlength="80" />
           <input id="g-members" placeholder="Contacts (@a, @b, …)" />
-          <button class="btn primary" type="submit">Créer</button>
+          <button class="btn primary sm" type="submit" style="align-self:flex-start">Créer</button>
         </form>
       </div>`;
     const col = host.openDeckColumn({ key: "groups", label: "Groupes", html, wire: wire });
@@ -805,7 +807,7 @@ export default function register(host) {
         <div class="chat-log" id="gc-log"><p class="empty">Chargement…</p></div>
         <form id="gc-form" class="chat-form">
           <input id="gc-input" placeholder="Message au groupe…" autocomplete="off" maxlength="1000" />
-          <button class="btn primary" type="submit">Envoyer</button>
+          <button class="btn primary" type="submit" title="Envoyer" aria-label="Envoyer" style="padding:.3rem .55rem;flex:none">${svgIcon("send", 18)}</button>
         </form>
       </div>`;
     host.openDeckColumn({ key: `group:${gid}`, label: "Groupe", html, wire });

@@ -150,8 +150,17 @@ body:has(#app[data-view="profile"] .pub-hero-page) {
      se réfère bien au coin haut-gauche de la page. */
   position: relative;
 }
+/* Profil hero : topbar standard visible en overlay fixe sur la photo de couverture.
+   Remplace les glass buttons top-left/top-right pour une continuité visuelle avec
+   l'app connectée (logo Milo + recherche + chip @handle). */
 body:has(#app[data-view="profile"] .pub-hero-page) .topbar.site-header {
-  display: none;
+  position: fixed !important;
+  top: 0; left: 0; right: 0;
+  z-index: 200;
+  background: linear-gradient(to bottom, rgba(0,0,0,.52) 0%, rgba(0,0,0,.18) 70%, transparent 100%) !important;
+  border-bottom: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 /* Texte et icônes de la barre : blancs sur fond photo */
 body:has(#app[data-view="profile"] .pub-hero-page) .topbar.site-header .brand,
@@ -165,6 +174,9 @@ body:has(#app[data-view="profile"] .pub-hero-page) .topbar.site-header input {
   background: rgba(255,255,255,.15); color: #fff; border-color: rgba(255,255,255,.25);
 }
 body:has(#app[data-view="profile"] .pub-hero-page) .topbar.site-header input::placeholder { color: rgba(255,255,255,.55); }
+/* Glass overlay buttons supprimés : la barre standard les remplace */
+body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top-left,
+body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top { display: none !important; }
 
 /* ============================== Mascotte Milo ============================== */
 .milo { display: block; overflow: visible; }
@@ -582,13 +594,17 @@ body:has(#app[data-view="profile"] .pub-hero-page) .topbar.site-header input::pl
   display: flex; align-items: center; justify-content: center; padding: 1.25rem; z-index: 150;
 }
 .panel { position: relative; }
-.panel .close {
+.panel .close,
+.card .close {
   position: absolute; top: .9rem; right: .9rem; width: 32px; height: 32px;
   display: flex; align-items: center; justify-content: center;
   border: 1px solid var(--line); background: var(--inset); color: var(--muted);
-  border-radius: var(--r-sm); cursor: pointer; font-size: 1rem; line-height: 1;
+  border-radius: var(--r-sm); cursor: pointer; font-size: 1rem; line-height: 1; z-index: 2;
 }
-.panel .close:hover { color: var(--fg); border-color: var(--accent-ink); }
+.panel .close:hover,
+.card .close:hover { color: var(--fg); border-color: var(--accent-ink); }
+/* Card avec .close : réserve la place pour le bouton × (hors chat-card qui gère son propre layout) */
+.card:has(.close):not(.chat-card) { position: relative; padding-top: 2.8rem; }
 .panel {
   width: 100%; max-width: 420px; background: var(--card);
   border: 1px solid var(--line); border-radius: var(--r-xl); padding: 1.6rem;
@@ -933,12 +949,13 @@ body:has(#app[data-view="profile"] .pub-hero-page) .topbar.site-header input::pl
   display: flex; gap: 3px; margin-left: .5rem;
 }
 .pub-av-size-btn {
-  padding: .15rem .4rem; font-size: .7rem; font-weight: 700;
-  background: rgba(0,0,0,.38); color: rgba(255,255,255,.6);
-  border: 1px solid rgba(255,255,255,.2); border-radius: 4px; cursor: pointer;
+  padding: .2rem .5rem; font-size: .68rem; font-weight: 700;
+  background: rgba(0,0,0,.45); color: rgba(255,255,255,.65);
+  border: 1px solid rgba(255,255,255,.18); border-radius: 99px; cursor: pointer;
   transition: background .12s, color .12s;
+  min-height: 28px;
 }
-.pub-av-size-btn.active, .pub-av-size-btn:hover { background: rgba(0,0,0,.65); color: #fff; }
+.pub-av-size-btn.active, .pub-av-size-btn:hover { background: rgba(0,0,0,.72); color: #fff; border-color: rgba(255,255,255,.45); }
 
 /* Identité overlay en bas */
 .pub-cover-identity {
@@ -1268,6 +1285,111 @@ body:has(#app[data-view="profile"] .pub-hero-page) .topbar.site-header input::pl
     background: color-mix(in srgb, var(--bg) 75%, transparent);
     backdrop-filter: blur(24px) saturate(1.3);
     -webkit-backdrop-filter: blur(24px) saturate(1.3);
+  }
+
+  /* ── Public profile 2026 : avatar plus imposant ── */
+  .pub-cover-av,
+  .pub-cover-av-gen,
+  .pub-cover-av-milo {
+    width: 80px; height: 80px;
+    border: 3px solid rgba(255,255,255,.6);
+  }
+  .pub-cover-av-gen svg,
+  .pub-cover-av-milo svg { width: 80px; height: 80px; }
+  .pub-av-wrap[data-size="s"] .pub-cover-av,
+  .pub-av-wrap[data-size="s"] .pub-cover-av-gen,
+  .pub-av-wrap[data-size="s"] .pub-cover-av-milo { width: 44px; height: 44px; }
+  .pub-av-wrap[data-size="l"] .pub-cover-av,
+  .pub-av-wrap[data-size="l"] .pub-cover-av-gen,
+  .pub-av-wrap[data-size="l"] .pub-cover-av-milo { width: 80px; height: 80px; }
+  .pub-av-wrap[data-size="xl"] .pub-cover-av,
+  .pub-av-wrap[data-size="xl"] .pub-cover-av-gen,
+  .pub-av-wrap[data-size="xl"] .pub-cover-av-milo { width: 110px; height: 110px; }
+
+  /* ── Nom + handle plus forts ── */
+  .pub-cover-name { font-size: clamp(2rem, 8vw, 3.2rem); letter-spacing: -.035em; }
+  .pub-cover-handle { font-size: 1.05rem; color: rgba(255,255,255,.9); font-weight: 500; }
+  .pub-cover-title  { font-size: .95rem; }
+
+  /* ── Gradient plus profond pour lisibilité de l'identité ── */
+  .pub-cover-bg::after {
+    background: linear-gradient(to top,
+      rgba(0,0,0,.90) 0%,
+      rgba(0,0,0,.50) 38%,
+      rgba(0,0,0,.10) 65%,
+      transparent 100%);
+  }
+
+  /* ── Identité : padding bottom généreux ── */
+  .pub-cover-identity { padding: 1.5rem 1.25rem 2.5rem; }
+
+  /* ── Boutons d'action sur la cover : plus grands, min 44px ── */
+  .pub-cover-actions .btn, .pub-cover-actions .rel-switch {
+    padding: .55rem 1rem; font-size: .9rem; min-height: 44px;
+  }
+
+  /* ── Boutons glass top-left/right : vrais ronds 44px ── */
+  .pub-cover-top .btn, .pub-cover-top button,
+  .pub-cover-top-left .btn, .pub-cover-top-left button {
+    width: 40px; height: 40px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 50%;
+    background: rgba(0,0,0,.45);
+    backdrop-filter: blur(8px);
+  }
+
+  /* ── Panneaux agenda/gallery : réduction padding-top (5rem → 3rem) ── */
+  .pub-tab-panel { padding-top: 3rem; }
+
+  /* ── Fond panneaux : plus opaque pour lisibilité ── */
+  #pub-agenda, #pub-gallery-slot {
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+  }
+
+  /* ── Calendrier : cellules touchables (min 44px) ── */
+  #pub-agenda .cal-cell {
+    min-height: 44px;
+    font-size: .85rem;
+    padding: .35rem .15rem;
+  }
+  #pub-agenda .cal-grid { grid-auto-rows: auto; }
+  #pub-agenda .calendar-fill { flex: none; }
+
+  /* ── Bouton RDV : CTA proéminent pleine largeur ── */
+  #ask-rdv {
+    margin-top: 1.5rem !important;
+    padding: .9rem 1.25rem !important;
+    font-size: 1rem !important;
+    font-weight: 700 !important;
+    border-radius: var(--r-xl) !important;
+    justify-content: center !important;
+  }
+
+  /* ── Galerie : plein écran — grille s'étire sur tout l'espace disponible ── */
+  #pub-gallery-slot {
+    display: flex !important;
+    flex-direction: column;
+    padding-bottom: 2rem;
+  }
+  #pub-gallery-slot .gal-ph-grid {
+    flex: 1;
+    min-height: 0;
+    grid-template-rows: 1fr 1fr 1fr;
+    gap: 3px;
+    margin-top: 0;
+  }
+  #pub-gallery-slot .gal-ph { aspect-ratio: unset; }
+
+  /* ── Bullets de navigation : plus visibles, min 44px de zone tactile ── */
+  .pub-hero-dot {
+    width: 8px; height: 8px;
+    padding: 0; margin: 0 3px;
+    border: none; border-radius: 50%;
+    background: rgba(255,255,255,.35); cursor: pointer;
+    transition: background .2s, transform .2s;
+  }
+  .pub-hero-dot.is-on {
+    background: #fff; transform: scale(1.4);
   }
 }
 
@@ -2374,6 +2496,22 @@ footer a { text-decoration: none; }
 .avail-period:first-child { border-top: none; }
 .avail-period .ap-range { flex: 1; }
 .avail-period .ap-status { font-size: .72rem; padding: .05rem .4rem; border-radius: 999px; border: 1px solid var(--line); }
+
+/* Prochains événements sous le calendrier (onglet Agenda → Agenda) */
+.agenda-upcoming { padding: .6rem 0 .4rem; }
+.agenda-upcoming-title {
+  font-size: .68rem; font-weight: 700; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--muted);
+  display: flex; align-items: center; gap: .3rem;
+  margin: 0 0 .5rem; padding-top: .5rem; border-top: 1px solid var(--line);
+}
+.agenda-upcoming-item {
+  display: flex; align-items: baseline; gap: .55rem;
+  padding: .35rem 0; border-bottom: 1px solid var(--hairline);
+}
+.agenda-upcoming-item:last-child { border-bottom: none; }
+.agenda-upcoming-time { font-size: .75rem; color: var(--accent-ink); flex: none; font-variant-numeric: tabular-nums; }
+.agenda-upcoming-name { font-size: .84rem; color: var(--fg); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .avail-period .ap-status.free { color: #2c7d63; border-color: #2c7d63; }
 .avail-period .ap-status.busy { color: var(--muted); }
 .avail-period-add { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .5rem; align-items: center; }
@@ -2895,6 +3033,11 @@ body { font-family: var(--font); }
   max-height: var(--col-h);
   min-height: 0;
 }
+/* Onglet Options : pas de col-scroll interne → le card lui-même défile. */
+#app[data-view="private"] #deck .col.active[data-deck-label="Options"] > .card {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
 /* hm-dashboard n'a pas de .card wrapper → lui donner le même padding que les cartes */
 #app[data-view="private"] #deck .col.active > .hm-dashboard {
   padding: var(--pad);
@@ -3032,6 +3175,35 @@ body:has(.overlay.open) .bottom-nav { transform: translateY(100%); }
 /* Menu tiles en 2 colonnes → toujours 2 colonnes (lisible jusqu'à 760px) */
 #app[data-view="private"] .menu-grid {
   grid-template-columns: 1fr 1fr;
+}
+
+/* — Mobile uniquement (< 840px) : ajustements spécifiques vue connectée — */
+@media (max-width: 839px) {
+  /* Onglet Compte : cache l'aperçu téléphone (trop grand, bloque le contenu) */
+  #app[data-view="private"] #deck .lt-phone { display: none !important; }
+  #app[data-view="private"] #deck .lt-phone-cols { display: block !important; }
+  /* Cache le titre "APERÇU DE TA PAGE PUBLIQUE" sans preview */
+  #app[data-view="private"] #deck .hm-public > .hm-section-title { display: none !important; }
+  /* Réordonne : hm-aside (stats/activité) avant les toggles de visibilité */
+  #app[data-view="private"] #deck .hm-row-hybrid { display: flex !important; flex-direction: column !important; }
+  #app[data-view="private"] #deck .hm-row-hybrid .hm-aside { order: -1; }
+
+  /* Onglet Agenda : plafonne le calendrier pour laisser de la place aux événements */
+  #app[data-view="private"] #deck .col.active[data-deck-label="Agenda"]
+    .col-scroll:has(> #agenda-dispo:not([hidden])) {
+    display: block !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+  }
+  #app[data-view="private"] #agenda-dispo:not([hidden]) {
+    flex: none !important;
+    display: block !important;
+  }
+  #app[data-view="private"] #deck .col.active[data-deck-label="Agenda"] .calendar-fill {
+    height: calc(var(--col-h) * 0.54) !important;
+    flex: none !important;
+    min-height: 0 !important;
+  }
 }
 
 /* — Desktop sidebar (≥ 840px) — */
@@ -3515,6 +3687,12 @@ body:has(.overlay.open) .bottom-nav { transform: translateY(100%); }
 @container (max-width: 760px) {
   .lt-phone-cols .lt-phone { width: 130px; max-width: 130px; }
 }
+/* Très étroit (mobile ≤440px) : empile le téléphone au-dessus des contrôles */
+@container (max-width: 440px) {
+  .lt-phone-cols { flex-direction: column; align-items: center; }
+  .lt-phone-cols .lt-phone { width: 200px; max-width: 200px; }
+  .lt-controls { width: 100%; }
+}
 
 /* Mini-calendrier autonome de l'écran « Calendrier ». */
 .lt-cal-month { font-size: .82rem; font-weight: 700; color: rgba(255,255,255,.6); text-transform: capitalize; margin-bottom: .5rem; }
@@ -3719,6 +3897,7 @@ body:has(.overlay.open) .bottom-nav { transform: translateY(100%); }
   background: var(--chip); color: var(--muted); border: 1px solid var(--line);
 }
 .acc-plan-badge.premium { background: var(--accent); color: #0b0d12; border-color: transparent; }
+.acc-publink { font-size: .72rem !important; padding: .18rem .5rem !important; flex-shrink: 0; }
 /* Blocs section */
 .acc-block {
   background: var(--surface);
@@ -3882,6 +4061,17 @@ body:has(.overlay.open) .bottom-nav { transform: translateY(100%); }
   .comm-layout:has(#comm-right .chat-card) .comm-right .chat-card .close {
     display: inline-flex !important;
   }
+  /* Chat header : autoriser le wrapping sur mobile (nowrap → truncation) */
+  .comm-right .chat-head {
+    flex-wrap: wrap !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    height: auto !important;
+    padding-bottom: .45rem !important;
+  }
+  /* Chat form : boutons plus compacts → plus d'espace pour le champ texte */
+  .comm-right .chat-form { gap: .2rem !important; }
+  .comm-right .chat-form > button { padding: .3rem .4rem !important; font-size: .82rem !important; }
 }
 /* Barre gauche */
 .comm-sidebar {
