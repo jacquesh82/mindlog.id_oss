@@ -14,10 +14,11 @@ import { host } from "../host.js";
 import { CREDIT, t } from "../i18n.js";
 import { api, authHeaders, jsonAuth, setAccessKey } from "../net.js";
 import { appState } from "../state.js";
-import { applyTheme, toggleTheme } from "../theme.js";
+import { ACCENT_STORE, applyAccent, applyTheme, storedAccent, toggleTheme } from "../theme.js";
 import { confirmDialog, copyText, esc, promptPassphrase, promptPin, toast } from "../ui/dom.js";
 import { SOCIALS, SOCIAL_BY_KEY, avatarHtml, genericAvatarSvg, icon, isSocialKey, miloSvg, siteHeader, socialFieldKey, socialIcon, socialUrl } from "../ui/icons.js";
 import { openE2eBackup, openE2eRestore } from "../ui/modals.js";
+import { openCoverEditor } from "../ui/cover-editor.js";
 import { addDeckColumn, deckState, removeDeckColumn } from "./deck.js";
 import { renderOptionsColumn } from "./tabs/options.js";
 import { renderIdentityColumn } from "./tabs/identity.js";
@@ -25,6 +26,7 @@ import { renderAgendaColumn } from "./tabs/agenda.js";
 import { renderRelationsColumn } from "./tabs/relations.js";
 import { renderNotificationsColumn } from "./tabs/notifications.js";
 import { renderAccountColumn } from "./tabs/account.js";
+import { pbRowHtml, renderPremiumPage } from "./tabs/premium.js";
 
 export async function consumePendingInvite() {
   let token = null;
@@ -112,6 +114,9 @@ export async function renderPrivate(key) {
   setLastHandle(data.handle); // mémorise le handle de la dernière connexion (reconnexion auto + pré-remplissage)
   if (storedKey() === appState.key) setStoredHandle(data.handle); // garde le handle associé à la clé mémorisée
   connectSSE(cookieMode ? null : appState.key); // flux temps réel (notifications, messages)
+  // Premium dev : l'état réel vient de /api/me (ligne d'abonnement provider "dev"
+  // posée par le toggle Options via POST /api/dev/premium) → par-utilisateur, pas
+  // de simulation client. Plus de patch localStorage ici.
   renderEditor(data); // affiche l'UI immédiatement, sans attendre la clé E2E
   // E2E en arrière-plan : ne bloque pas le rendu (la clé n'est utile que pour le chat).
   // On publie aussi le bundle de prekeys dès la connexion : ainsi un contact peut
@@ -225,19 +230,231 @@ function handleBilling(data) {
   }
 }
 
-// Pages payantes (P7) : peuple le bloc « Pages payantes » de l'onglet Abonnement
-// (statut Connect + liste + création). No-op si le bloc est absent (non Premium).
-async function loadPaidPages(data) {
-  const block = app.querySelector("#pp-block");
+// Icône représentant un type de page (utilisé dans la liste).
+const ppTypeIcon = (t) =>
+  t === "gallery" ? icon("image", 14)
+  : t === "link"  ? icon("link", 14)
+  : t === "file"  ? icon("download", 14)
+  :                 icon("chat", 14); // markdown par défaut
+
+// Slug auto-généré à partir du titre. Reste éditable par l'utilisateur tant
+// qu'il n'a pas saisi son propre slug (suivi via dataset.touched sur l'input).
+function slugifyTitle(s) {
+  return String(s || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+}
+
+// HTML des champs spécifiques à un type de page. Le payload est lu plus tard
+// par collectTypeContent() en relisant ces mêmes inputs.
+// Auto-préfixe https:// si l'utilisateur a tapé un domaine sans schéma
+// (ex. "exemple.com" → "https://exemple.com"). Conserve mailto:/tel:/data:.
+// Évite le rejet serveur silencieux "URL invalide (http/https requis)".
+function autoHttps(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  if (/^(https?:\/\/|mailto:|tel:|data:)/i.test(s)) return s;
+  return "https://" + s;
+}
+
+function ppTypeFieldsHtml(type, current, ctx = {}) {
+  if (type === "markdown") {
+    const v = typeof current === "string" ? current : "";
+    return `<textarea id="pp-md" rows="8" placeholder="# Mon document\n\nContenu réservé aux abonnés…" maxlength="50000">${esc(v)}</textarea>`;
+  }
+  if (type === "link") {
+    const o = (current && typeof current === "object") ? current : {};
+    return `<input id="pp-link-url" type="text" inputmode="url" autocomplete="off" placeholder="exemple.com ou https://…" maxlength="2000" value="${esc(o.url || "")}">
+            <input id="pp-link-note" placeholder="Note pour l'abonné (optionnel)" maxlength="500" value="${esc(o.note || "")}">`;
+  }
+  if (type === "gallery") {
+    // Système identique à la galerie classique : grille de vignettes + zone de
+    // dépôt + sélecteur de fichiers. Les médias sont uploadés sur le serveur
+    // (data/page-media/<page_id>/…) puis servis via /api/pages/.../media/….
+    const items = (current && Array.isArray(current.items)) ? current.items : [];
+    const slug = ctx.slug || "";
+    const handle = ctx.handle || "";
+    const gridHtml = items.map((it) => galItemHtml(it, handle, slug)).join("");
+    return `<div class="gal-grid pp-gal-grid" id="pp-gal-grid" data-slug="${esc(slug)}" data-handle="${esc(handle)}">${gridHtml}</div>
+            <div class="gal-drop pp-gal-drop" id="pp-gal-drop">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              <span>Glisse des images ou des vidéos (≤25 Mo, max 30)</span>
+              <label class="btn sm" style="cursor:pointer">Parcourir
+                <input type="file" accept="image/*,video/*" multiple hidden id="pp-gal-file" />
+              </label>
+            </div>
+            <p class="lbl-sm" id="pp-gal-hint" style="margin:.4rem 0 0;opacity:.7">${slug ? "Tes médias sont privés et ne sont accessibles qu'aux abonné·e·s." : "Enregistre la page une première fois pour pouvoir ajouter des médias."}</p>`;
+  }
+  if (type === "file") {
+    const o = (current && typeof current === "object") ? current : {};
+    const slug = ctx.slug || "";
+    const handle = ctx.handle || "";
+    const hasFile = !!o.url;
+    const fileUrl = hasFile && !String(o.url).startsWith("http")
+      ? `/api/pages/${encodeURIComponent(handle)}/${encodeURIComponent(slug)}/media/${encodeURIComponent(o.url)}`
+      : (o.url || "");
+    return `<div class="pp-file-state" id="pp-file-state" data-slug="${esc(slug)}" data-handle="${esc(handle)}" data-filename="${esc(o.url || "")}">
+        ${hasFile
+          ? `<div class="pp-file-card">
+              <span class="pp-file-ic">${icon("download", 18)}</span>
+              <div class="pp-file-info">
+                <b>${esc(o.name || "fichier")}</b>
+                <span class="lbl-sm">${o.size ? `${(o.size/1024).toFixed(1)} Ko` : ""}</span>
+              </div>
+              <a class="btn sm" href="${esc(fileUrl)}" target="_blank" rel="noopener">Aperçu</a>
+              <button type="button" class="btn sm danger" id="pp-file-del">Remplacer</button>
+            </div>`
+          : `<div class="pp-file-empty">
+              <span class="pp-file-ic">${icon("download", 22)}</span>
+              <p>${slug ? "Choisis un fichier PDF ou ZIP à téléverser (≤25 Mo)." : "Enregistre la page une première fois pour pouvoir téléverser le fichier."}</p>
+              <label class="btn primary sm" style="cursor:pointer">Choisir un fichier
+                <input type="file" accept=".pdf,.zip,application/pdf,application/zip" hidden id="pp-file-input" ${slug ? "" : "disabled"}>
+              </label>
+            </div>`}
+      </div>`;
+  }
+  return "";
+}
+
+// Vignette unique pour la grille galerie du wizard. data-filename sert au DELETE.
+function galItemHtml(it, handle, slug) {
+  const filename = String(it.url || "");
+  const src = filename.startsWith("http")
+    ? filename
+    : `/api/pages/${encodeURIComponent(handle)}/${encodeURIComponent(slug)}/media/${encodeURIComponent(filename)}`;
+  const isVideo = it.kind === "video" || /\.(mp4|webm|mov)(\?|$)/i.test(filename);
+  return `<div class="gal-item" data-filename="${esc(filename)}">
+    ${isVideo
+      ? `<video src="${esc(src)}" muted playsinline preload="metadata"></video>`
+      : `<img src="${esc(src)}" alt="${esc(it.caption || "")}" loading="lazy" />`}
+    <button type="button" class="gal-del" title="Supprimer">✕</button>
+  </div>`;
+}
+
+// Lit les inputs du formulaire et reconstruit le payload `content` attendu
+// par le backend (chaîne pour markdown, objet sérialisable pour les autres).
+// Pour la galerie : on relit l'état persisté dans #pp-gal-grid (chaque .gal-item
+// a son data-filename) — le textarea n'existe plus.
+function collectTypeContent(root, type) {
+  if (type === "markdown") return root.querySelector("#pp-md")?.value || "";
+  if (type === "link") {
+    return {
+      url: autoHttps(root.querySelector("#pp-link-url")?.value),
+      note: (root.querySelector("#pp-link-note")?.value || "").trim(),
+    };
+  }
+  if (type === "gallery") {
+    const grid = root.querySelector("#pp-gal-grid");
+    if (!grid) return { items: [] };
+    const items = [...grid.querySelectorAll(".gal-item")].map((el) => {
+      const filename = el.dataset.filename || "";
+      const isVideo = !!el.querySelector("video");
+      return { url: filename, kind: isVideo ? "video" : "image", caption: "" };
+    }).filter((it) => it.url);
+    return { items };
+  }
+  if (type === "file") {
+    const st = root.querySelector("#pp-file-state");
+    return { url: st?.dataset.filename || "", name: "", size: 0 };
+  }
+  return null;
+}
+
+// Charge le tarif de l'espace + intro Markdown + brancher les sauvegardes.
+// Idempotent : appelé à chaque rendu de la page Premium.
+async function loadSpacePricing(root) {
+  const priceInput = root.querySelector("#sp-price");
+  const status = root.querySelector("#sp-status");
+  const introTa = root.querySelector("#sp-intro");
+  const introStatus = root.querySelector("#sp-intro-status");
+  const profIntroTa = root.querySelector("#sp-profile-intro");
+  const profIntroStatus = root.querySelector("#sp-profile-intro-status");
+  const benefitCbs = root.querySelectorAll(".prem-benefit-cb");
+  const benefitStatus = root.querySelector("#prem-benefits-status");
+  if (!priceInput && !introTa && !profIntroTa && !benefitCbs.length) return;
+  let currentBenefits = { chat: true, call: true, pages: true, rdv: true, lives: true };
+  try {
+    const sp = await api("/api/space", { headers: authHeaders() });
+    if (priceInput && sp.price_cents) priceInput.value = (sp.price_cents / 100).toFixed(2);
+    if (status) status.textContent = sp.active ? "✓ vendable" : (sp.price_cents ? "prix défini, activation en attente" : "");
+    if (introTa && typeof sp.intro_md === "string") introTa.value = sp.intro_md;
+    if (profIntroTa && typeof sp.profile_intro_md === "string") profIntroTa.value = sp.profile_intro_md;
+    if (sp.benefits && typeof sp.benefits === "object") {
+      currentBenefits = { ...currentBenefits, ...sp.benefits };
+      benefitCbs.forEach((cb) => { cb.checked = !!currentBenefits[cb.name]; });
+    }
+  } catch { /* pas de prix encore */ }
+  // Sauvegarde immédiate sur changement de checkbox. Une requête par toggle,
+  // suffisamment rare pour ne pas justifier un debounce.
+  benefitCbs.forEach((cb) => {
+    cb.addEventListener("change", async () => {
+      currentBenefits = { ...currentBenefits, [cb.name]: !!cb.checked };
+      if (benefitStatus) benefitStatus.textContent = "Enregistrement…";
+      try {
+        const r = await api("/api/space/benefits", {
+          method: "PUT",
+          headers: jsonAuth(),
+          body: JSON.stringify(currentBenefits),
+        });
+        if (r?.benefits) currentBenefits = { ...currentBenefits, ...r.benefits };
+        if (benefitStatus) benefitStatus.textContent = "✓ enregistré";
+      } catch (e) {
+        if (benefitStatus) benefitStatus.textContent = "";
+        cb.checked = !cb.checked; // revert UI
+        currentBenefits = { ...currentBenefits, [cb.name]: !!cb.checked };
+        toast(e?.message === "premium required" ? "Réservé aux comptes Premium." : (e?.message || "Échec."));
+      }
+    });
+  });
+  root.querySelector("#sp-save")?.addEventListener("click", async () => {
+    const price = Math.round(parseFloat(priceInput.value) * 100);
+    if (!Number.isFinite(price) || price < 100) { toast("Prix invalide (min 1,00 €)."); return; }
+    try {
+      const sp = await api("/api/space", { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ price_cents: price }) });
+      if (status) status.textContent = sp.active ? "✓ vendable" : "enregistré (activation en attente)";
+      toast("Tarif enregistré ✓");
+    } catch (e) {
+      toast(e?.message === "premium required" ? "Réservé aux comptes Premium." : (e?.message || "Échec."));
+    }
+  });
+  const saveIntro = async (ta, statusEl, endpoint, label) => {
+    const val = ta.value || "";
+    if (val.length > 4000) { toast("Intro trop longue (max 4000 caractères)."); return; }
+    try {
+      await api(endpoint, { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ intro_md: val }) });
+      if (statusEl) statusEl.textContent = "✓ enregistré";
+      toast(`${label} enregistrée ✓`);
+    } catch (e) {
+      toast(e?.message === "premium required" ? "Réservé aux comptes Premium." : (e?.message || "Échec."));
+    }
+  };
+  root.querySelector("#sp-intro-save")?.addEventListener("click", () =>
+    introTa && saveIntro(introTa, introStatus, "/api/space/intro", "Intro de l'espace")
+  );
+  root.querySelector("#sp-profile-intro-save")?.addEventListener("click", () =>
+    profIntroTa && saveIntro(profIntroTa, profIntroStatus, "/api/space/profile-intro", "Intro du profil")
+  );
+}
+
+// Peuple les blocs « Tarif de l'espace » + « Pages de l'espace » de la page
+// Premium (statut Connect, liste de pages, wizard d'ajout). `root` = la page
+// Premium (hors #app), donc on requête dans `root`, pas dans `app`.
+async function loadPaidPages(root, data) {
+  const block = root.querySelector("#pp-block");
   if (!block) return;
-  const connectEl = app.querySelector("#pp-connect");
+
+  // ── Statut Stripe Connect (partagé avec le bloc tarif) ────────────────────
+  const connectEl = root.querySelector("#pp-connect");
   try {
     const st = await api("/api/billing/connect/status", { headers: authHeaders() });
     if (st.chargesEnabled) {
-      connectEl.innerHTML = `✅ Paiements actifs — vous pouvez publier des pages payantes.`;
+      connectEl.innerHTML = `✅ Paiements actifs — vous pouvez vendre l'accès à votre espace.`;
     } else {
       connectEl.innerHTML = `<button type="button" class="btn sm" id="pp-onboard">Configurer les paiements</button> <span style="opacity:.7">(requis pour vendre)</span>`;
-      app.querySelector("#pp-onboard")?.addEventListener("click", async () => {
+      root.querySelector("#pp-onboard")?.addEventListener("click", async () => {
         try {
           const r = await api("/api/billing/connect/onboard", { method: "POST", headers: jsonAuth() });
           if (r?.url) location.assign(r.url);
@@ -245,28 +462,268 @@ async function loadPaidPages(data) {
       });
     }
   } catch { connectEl.innerHTML = ""; }
+
+  // ── Tarif de l'espace ─────────────────────────────────────────────────────
+  void loadSpacePricing(root);
+
+  // ── Liste des pages ──────────────────────────────────────────────────────
+  const pagesEl = root.querySelector("#pp-pages");
+  const countEl = root.querySelector("#pp-count");
+  let pages = [];
   try {
-    const pages = (await api("/api/pages", { headers: authHeaders() })).pages || [];
-    app.querySelector("#pp-pages").innerHTML = pages.length
-      ? pages.map((p) =>
-          `<div class="pp-row"><b>${esc(p.title)}</b> <span class="lbl-sm">/${esc(p.slug)} · ${(p.price_cents / 100).toFixed(2)} ${(p.currency || "eur").toUpperCase()} · ${p.published ? "publiée" : "brouillon"}</span> <a href="/@${esc(data.handle)}/p/${esc(p.slug)}" target="_blank" rel="noopener">Voir ↗</a></div>`
-        ).join("")
-      : `<p class="lbl-sm">Aucune page payante pour l'instant.</p>`;
-  } catch { /* ignoré */ }
-  app.querySelector("#pp-save")?.addEventListener("click", async () => {
-    const slug = app.querySelector("#pp-slug")?.value.trim();
-    const title = app.querySelector("#pp-title")?.value.trim();
-    const price = Math.round(parseFloat(app.querySelector("#pp-price")?.value) * 100);
-    const content = app.querySelector("#pp-content")?.value || "";
-    const published = !!app.querySelector("#pp-pub")?.checked;
-    if (!slug || !title || !Number.isFinite(price) || price < 50) { toast("Slug, titre et prix (≥ 0,50 €) requis."); return; }
+    pages = (await api("/api/pages", { headers: authHeaders() })).pages || [];
+  } catch { /* liste vide */ }
+  if (countEl) countEl.textContent = pages.length ? `${pages.length} page${pages.length > 1 ? "s" : ""}` : "";
+  pagesEl.innerHTML = pages.length
+    ? pages.map((p) =>
+        `<div class="pp-row" data-slug="${esc(p.slug)}">
+           <span class="pp-row-ic">${ppTypeIcon(p.type)}</span>
+           <b>${esc(p.title)}</b>
+           <span class="lbl-sm">/${esc(p.slug)} · ${p.published ? "publiée" : "brouillon"}</span>
+           <a href="/@${esc(data.handle)}/p/${esc(p.slug)}" target="_blank" rel="noopener" style="margin-left:auto">Voir ↗</a>
+           <button type="button" class="btn sm" data-pp-edit>Éditer</button>
+           <button type="button" class="btn sm danger" data-pp-del title="Supprimer">✕</button>
+         </div>`
+      ).join("")
+    : `<p class="lbl-sm">Aucune page pour l'instant. Ajoutez-en une via « + Ajouter une page ».</p>`;
+
+  // Édition / suppression d'une ligne existante : on rouvre le wizard pré-rempli.
+  pagesEl.querySelectorAll("[data-pp-del]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const slug = btn.closest(".pp-row")?.dataset.slug;
+      if (!slug) return;
+      const ok = await confirmDialog(`Supprimer la page « ${slug} » ?`, { danger: true, ok: "Supprimer" });
+      if (!ok) return;
+      try {
+        await api(`/api/pages/${encodeURIComponent(slug)}`, { method: "DELETE", headers: authHeaders() });
+        toast("Page supprimée");
+        void loadPaidPages(root, data);
+      } catch (e) { toast(e?.message || "Échec."); }
+    });
+  });
+  pagesEl.querySelectorAll("[data-pp-edit]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const slug = btn.closest(".pp-row")?.dataset.slug;
+      const page = pages.find((p) => p.slug === slug);
+      if (page) openWizardForm(root, data, page);
+    });
+  });
+
+  // ── Wizard d'ajout ───────────────────────────────────────────────────────
+  root.querySelector("#pp-add-btn")?.addEventListener("click", () => openWizardTypeChooser(root, data));
+  root.querySelectorAll("[data-wiz-cancel]").forEach((b) => b.addEventListener("click", () => closeWizard(root)));
+}
+
+function openWizardTypeChooser(root, data) {
+  const wiz = root.querySelector("#pp-wizard");
+  if (!wiz) return;
+  wiz.hidden = false;
+  wiz.querySelector('[data-step="type"]').hidden = false;
+  wiz.querySelector('[data-step="form"]').hidden = true;
+  // Bind chaque carte de type → ouvre le formulaire dédié.
+  wiz.querySelectorAll(".pp-type-card").forEach((card) => {
+    if (card.disabled) return;
+    card.onclick = () => {
+      const type = card.dataset.type;
+      openWizardForm(root, data, { type });
+    };
+  });
+  wiz.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function openWizardForm(root, data, page) {
+  const wiz = root.querySelector("#pp-wizard");
+  if (!wiz) return;
+  wiz.hidden = false;
+  wiz.querySelector('[data-step="type"]').hidden = true;
+  const formStep = wiz.querySelector('[data-step="form"]');
+  formStep.hidden = false;
+
+  const isEdit = !!page?.slug;
+  const type = page?.type || "markdown";
+  const head = wiz.querySelector("#pp-form-head");
+  const typeLabel = type === "gallery" ? "Galerie" : type === "link" ? "Lien externe" : type === "file" ? "Fichier" : "Markdown";
+  head.innerHTML = `${ppTypeIcon(type)} ${isEdit ? "Éditer" : "Nouvelle page"} — ${typeLabel}`;
+
+  const titleInp = wiz.querySelector("#pp-title");
+  const slugInp = wiz.querySelector("#pp-slug");
+  const pubInp = wiz.querySelector("#pp-pub");
+  titleInp.value = page?.title || "";
+  slugInp.value = page?.slug || "";
+  slugInp.dataset.touched = isEdit ? "1" : "0";
+  // En création : publié par défaut (sinon la page n'apparaît nulle part côté
+   // visiteur et le propriétaire ne comprend pas pourquoi rien ne s'affiche).
+  pubInp.checked = isEdit ? !!page?.published : true;
+
+  // Auto-slugify : tant que l'utilisateur n'a pas édité le slug à la main,
+  // on le met à jour à partir du titre.
+  titleInp.oninput = () => {
+    if (slugInp.dataset.touched !== "1") slugInp.value = slugifyTitle(titleInp.value);
+  };
+  slugInp.oninput = () => { slugInp.dataset.touched = "1"; };
+
+  // Champs type-spécifiques : si on édite, parse le content existant.
+  let parsed = page?.content;
+  if (parsed && typeof parsed === "string" && type !== "markdown") {
+    try { parsed = JSON.parse(parsed); } catch { parsed = null; }
+  }
+  // ctx : nécessaire pour construire les URLs servables des médias galerie/fichier.
+  // En création, slug est vide → l'UI affiche un message « enregistre d'abord ».
+  const ctx = { slug: page?.slug || "", handle: data.handle };
+  wiz.querySelector("#pp-type-fields").innerHTML = ppTypeFieldsHtml(type, parsed, ctx);
+  wirePpTypeFields(root, type, ctx);
+
+  wiz.querySelector("[data-wiz-back]").onclick = () => openWizardTypeChooser(root, data);
+  wiz.querySelector("#pp-save").onclick = async () => {
+    const slug = slugInp.value.trim();
+    const title = titleInp.value.trim();
+    if (!title) { toast("Titre requis."); return; }
+    if (!/^[a-z0-9][a-z0-9-]{0,48}$/.test(slug)) { toast("Slug invalide (a-z, 0-9, tirets)."); return; }
+    const content = collectTypeContent(root, type);
     try {
-      await api("/api/pages", { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ slug, title, price_cents: price, content, published }) });
+      await api("/api/pages", {
+        method: "PUT",
+        headers: jsonAuth(),
+        body: JSON.stringify({ slug, title, type, content, published: pubInp.checked }),
+      });
       toast("Page enregistrée ✓");
-      void loadPaidPages(data);
+      closeWizard(root);
+      void loadPaidPages(root, data);
     } catch (e) {
       toast(e?.message === "premium required" ? "Réservé aux comptes Premium." : (e?.message || "Échec."));
     }
+  };
+  titleInp.focus();
+  wiz.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function closeWizard(root) {
+  const wiz = root.querySelector("#pp-wizard");
+  if (wiz) wiz.hidden = true;
+}
+
+// Câble upload/drop/delete pour les types média (gallery + file). Disponible
+// seulement après la première sauvegarde de la page (slug existant dans ctx).
+function wirePpTypeFields(root, type, ctx) {
+  if (type !== "gallery" && type !== "file") return;
+  const slug = ctx.slug;
+  if (!slug) return; // page pas encore enregistrée → upload désactivé
+
+  if (type === "gallery") {
+    const grid = root.querySelector("#pp-gal-grid");
+    const drop = root.querySelector("#pp-gal-drop");
+    const fileInp = root.querySelector("#pp-gal-file");
+    if (!grid || !drop || !fileInp) return;
+
+    const uploadFiles = async (files) => {
+      if (!files?.length) return;
+      const fd = new FormData();
+      for (const f of files) fd.append("media", f);
+      try {
+        const r = await api(`/api/pages/${encodeURIComponent(slug)}/media`, {
+          method: "POST", headers: authHeaders(), body: fd,
+        });
+        for (const it of (r.added || [])) {
+          const tmp = document.createElement("div");
+          tmp.innerHTML = galItemHtml(it, ctx.handle, slug);
+          const node = tmp.firstElementChild;
+          grid.appendChild(node);
+          wireGalDelete(node, slug);
+        }
+        toast(`${r.added?.length || 0} média(s) ajouté(s) ✓`);
+      } catch (e) {
+        toast(e?.message || "Upload échoué.");
+      }
+    };
+
+    fileInp.addEventListener("change", () => {
+      if (fileInp.files?.length) uploadFiles(fileInp.files);
+      fileInp.value = "";
+    });
+    drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("drag-over"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("drag-over"));
+    drop.addEventListener("drop", (e) => {
+      e.preventDefault();
+      drop.classList.remove("drag-over");
+      if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
+    });
+    grid.querySelectorAll(".gal-item").forEach((el) => wireGalDelete(el, slug));
+  }
+
+  if (type === "file") {
+    const st = root.querySelector("#pp-file-state");
+    if (!st) return;
+    const inp = root.querySelector("#pp-file-input");
+    const del = root.querySelector("#pp-file-del");
+    inp?.addEventListener("change", async () => {
+      const file = inp.files?.[0];
+      inp.value = "";
+      if (!file) return;
+      const fd = new FormData();
+      fd.append("file", file);
+      try {
+        const r = await api(`/api/pages/${encodeURIComponent(slug)}/media`, {
+          method: "POST", headers: authHeaders(), body: fd,
+        });
+        const a = r.added?.[0];
+        if (a) {
+          st.dataset.filename = a.url;
+          // Re-rendu local : on remplace l'état vide par la carte fichier.
+          const fileUrl = `/api/pages/${encodeURIComponent(ctx.handle)}/${encodeURIComponent(slug)}/media/${encodeURIComponent(a.url)}`;
+          st.innerHTML = `<div class="pp-file-card">
+            <span class="pp-file-ic">${icon("download", 18)}</span>
+            <div class="pp-file-info">
+              <b>${esc(a.caption || file.name)}</b>
+              <span class="lbl-sm">${(file.size/1024).toFixed(1)} Ko</span>
+            </div>
+            <a class="btn sm" href="${esc(fileUrl)}" target="_blank" rel="noopener">Aperçu</a>
+            <button type="button" class="btn sm danger" id="pp-file-del">Remplacer</button>
+          </div>`;
+          // Re-câble le bouton de remplacement.
+          wirePpTypeFields(root, "file", ctx);
+        }
+        toast("Fichier téléversé ✓");
+      } catch (e) {
+        toast(e?.message || "Upload échoué.");
+      }
+    });
+    del?.addEventListener("click", async () => {
+      const filename = st.dataset.filename;
+      if (!filename) return;
+      try {
+        await api(`/api/pages/${encodeURIComponent(slug)}/media/${encodeURIComponent(filename)}`, {
+          method: "DELETE", headers: authHeaders(),
+        });
+        st.dataset.filename = "";
+        // Re-rendu de l'état vide.
+        const handle = ctx.handle;
+        st.innerHTML = `<div class="pp-file-empty">
+          <span class="pp-file-ic">${icon("download", 22)}</span>
+          <p>Choisis un fichier PDF ou ZIP à téléverser (≤25 Mo).</p>
+          <label class="btn primary sm" style="cursor:pointer">Choisir un fichier
+            <input type="file" accept=".pdf,.zip,application/pdf,application/zip" hidden id="pp-file-input">
+          </label>
+        </div>`;
+        void handle;
+        wirePpTypeFields(root, "file", ctx);
+        toast("Fichier retiré");
+      } catch (e) { toast(e?.message || "Échec."); }
+    });
+  }
+}
+
+function wireGalDelete(itemEl, slug) {
+  const btn = itemEl.querySelector(".gal-del");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    const filename = itemEl.dataset.filename;
+    if (!filename) { itemEl.remove(); return; }
+    try {
+      await api(`/api/pages/${encodeURIComponent(slug)}/media/${encodeURIComponent(filename)}`, {
+        method: "DELETE", headers: authHeaders(),
+      });
+      itemEl.remove();
+    } catch (e) { toast(e?.message || "Suppression échouée."); }
   });
 }
 
@@ -351,7 +808,7 @@ export function renderEditor(data) {
     </div>`;
   }
 
-  appState.commEmptyHtml = `<div class="comm-empty-state"><h3>Sélectionnez un contact</h3><p>Choisissez un contact à gauche pour démarrer une conversation ou passer un appel.</p></div>`;
+  appState.commEmptyHtml = `<div class="comm-empty-state"><h3>Sélectionnez un contact</h3><p>Choisissez un contact pour démarrer une conversation ou passer un appel.</p></div>`;
 
   const commColHtml = `<div class="comm-wrapper">
     <div class="comm-layout">
@@ -422,7 +879,7 @@ export function renderEditor(data) {
        // Réseau · Agenda · Galerie · Options. « Mon ID » (Identité) est accessible
        // depuis l'Accueil (« Modifier ma carte ») ; les Notifications via la cloche
        // du header. L'ordre est fixe et chaque label n'apparaît qu'une fois.
-       const NAV = ["Chat", "Relations", "Agenda", "Compte", "Options"];
+       const NAV = ["Chat", "Relations", "Agenda", "Compte"];
        const navBtn = ({ i, label }) => {
          const cfg = BNAV[label] || { label, ic: "circle" };
          const isChat = label === "Chat";
@@ -526,8 +983,14 @@ export function setupTabs() {
     if (e.key === "ArrowLeft") go(deckState.index - 1);
   });
 
-  // Premier chargement (index=0) → atterrir sur Chat par défaut.
-  if (deckState.index === 0) {
+  // Indice de navigation (ex. retour depuis la page Premium → onglet Galerie).
+  let hintTab = null;
+  try { hintTab = sessionStorage.getItem("mindlog.openTab"); sessionStorage.removeItem("mindlog.openTab"); } catch {}
+  const hintIdx = hintTab ? cols.findIndex(c => c.dataset.deckLabel === hintTab) : -1;
+  if (hintIdx >= 0) {
+    deckState.index = hintIdx;
+  } else if (deckState.index === 0) {
+    // Premier chargement → atterrir sur Chat par défaut.
     const chatIdx = cols.findIndex(c => c.dataset.deckLabel === "Chat");
     if (chatIdx >= 0) deckState.index = chatIdx;
   }
@@ -577,6 +1040,241 @@ export async function openContactColumn(handle) {
   section.querySelector("[data-contact-call]")?.addEventListener("click", () => {
     if (data.pubkey && host.call) host.call.start(data.handle, data.pubkey, { video: data.options?.allowVideo !== false });
   });
+}
+
+// Page « Espace Premium » : vue plein écran servie à l'URL /me/premium (vraie
+// page, ni colonne du deck ni modale). Regroupe abonnement/facturation,
+// couverture, boutons personnalisés, pages payantes, liens galerie. Atteinte via
+// le bouton « Gérer » du bandeau (location.assign("/me/premium")) ; retour via le
+// bouton « ← Retour » ou le bouton retour du navigateur.
+export async function renderPremiumFull() {
+  app.innerHTML = `<p class="loading">Chargement…</p>`;
+  let data;
+  try {
+    data = await api("/api/me", { headers: authHeaders() });
+  } catch {
+    location.replace("/me"); // non authentifié → l'éditeur gère la connexion
+    return;
+  }
+  appState.key = data.accessKey || appState.key || null;
+  setAccessKey(appState.key);
+  appState.auth = { handle: data.handle, key: appState.key };
+  app.setAttribute("data-view", "premium");
+  app.innerHTML = renderPremiumPage(data);
+  wirePremiumPage(app, data);
+}
+
+// Câblage de la page Premium (scopé à `root` = #app). Les ids premium
+// (#cover-file, #pb-*, #pp-*) ne vivent que sur cette page → pas de collision.
+function wirePremiumPage(root, data) {
+  if (!root) return;
+  const reloadEditor = async () => renderPremiumFull(); // re-render la page Premium
+  const premErr = (e) => toast(e?.message === "premium required" ? "Réservé aux comptes Premium." : (e?.message || "Échec."));
+
+  root.querySelector("#prem-back")?.addEventListener("click", () => {
+    // history.back si on a un historique même origine, sinon /me (cohérent
+    // avec backBtnHtml du SPA).
+    const sameOrigin = document.referrer && new URL(document.referrer, location.href).origin === location.origin;
+    if (window.history.length > 1 && sameOrigin) window.history.back();
+    else location.assign("/me");
+  });
+  root.querySelector("#prem-portal")?.addEventListener("click", openBillingPortal);
+
+  // Toggle « Profil hors annuaire » : inversé (case cochée = listed_in_directory false).
+  const hiddenCb = root.querySelector("#prem-perk-hidden");
+  const hiddenStatus = root.querySelector("#prem-perks-status");
+  hiddenCb?.addEventListener("change", async () => {
+    if (hiddenStatus) hiddenStatus.textContent = "Enregistrement…";
+    try {
+      await api("/api/me/settings", {
+        method: "PATCH",
+        headers: jsonAuth(),
+        body: JSON.stringify({ listed_in_directory: !hiddenCb.checked }),
+      });
+      if (hiddenStatus) hiddenStatus.textContent = hiddenCb.checked ? "✓ profil retiré de l'annuaire" : "✓ profil visible dans l'annuaire";
+    } catch (e) {
+      if (hiddenStatus) hiddenStatus.textContent = "";
+      hiddenCb.checked = !hiddenCb.checked; // revert UI
+      toast(e?.message || "Échec.");
+    }
+  });
+  root.querySelector("#prem-go-gallery")?.addEventListener("click", () => {
+    // Retour à l'éditeur en demandant l'ouverture de l'onglet Galerie (indice lu
+    // par setupTabs au prochain rendu).
+    try { sessionStorage.setItem("mindlog.openTab", "Galerie"); } catch {}
+    location.assign("/me");
+  });
+
+  // Couverture (photo / vidéo) : cadrage + recompression côté navigateur
+  // (1080×1920 WebP image, WebM VP9 10 s sans audio vidéo) avant upload,
+  // pour rester sous COVER_MAX et garantir une lecture <video> fluide.
+  const coverInput = root.querySelector("#cover-file");
+  coverInput?.addEventListener("change", async () => {
+    const file = coverInput.files?.[0];
+    coverInput.value = ""; // permet de re-sélectionner le même fichier après annulation
+    if (!file) return;
+    let out;
+    try { out = await openCoverEditor(file); }
+    catch (e) { premErr(e); return; }
+    if (!out) return; // annulé
+    const fd = new FormData();
+    fd.append("cover", new File([out.blob], `cover.${out.ext}`, { type: out.type }));
+    try { await api("/api/cover", { method: "POST", headers: authHeaders(), body: fd }); toast("Couverture mise à jour ✓"); await reloadEditor(); }
+    catch (e) { premErr(e); }
+  });
+  root.querySelector("#cover-remove")?.addEventListener("click", async () => {
+    try { await api("/api/cover", { method: "DELETE", headers: authHeaders() }); toast("Couverture retirée"); await reloadEditor(); }
+    catch (e) { premErr(e); }
+  });
+
+  // Boutons personnalisés : édition complète (icône, libellé, URL, forme,
+  // affichage du libellé). La position (pos_x/pos_y) est portée en data-attr et
+  // préservée — la modification de position se fait sur la page publique (drag).
+  // Save automatique (debounce 280ms) sur toute mutation.
+  const pbList = root.querySelector("#pb-list");
+  const pbCount = root.querySelector("#pb-count");
+  const pbStatus = root.querySelector("#pb-status");
+  const pbAdd = root.querySelector("#pb-add");
+  if (pbList) {
+    const refreshCount = () => {
+      const n = pbList.querySelectorAll(".pb-row").length;
+      if (pbCount) pbCount.textContent = `${n}/5`;
+      if (pbAdd) pbAdd.disabled = n >= 5;
+    };
+    // Si l'utilisateur saisit "google.com" (sans https://), on auto-préfixe
+     // pour éviter que sanitizeButtonUrl côté serveur rejette silencieusement
+    // l'URL (laissant le toast "Enregistré ✓" mensonger).
+    const normalizeUrl = (raw) => {
+      const s = String(raw || "").trim();
+      if (!s) return "";
+      if (/^(https?:\/\/|mailto:|tel:)/i.test(s)) return s;
+      // Heuristique : ressemble à un domaine ? Sinon, on laisse tel quel.
+      if (/^[^\s/]+\.[^\s/]/.test(s)) return "https://" + s;
+      return s;
+    };
+    const collect = () => [...pbList.querySelectorAll(".pb-row")].map((r) => {
+      const urlEl = r.querySelector(".pb-url");
+      const url = normalizeUrl(urlEl?.value);
+      // Met à jour l'input pour montrer la normalisation à l'utilisateur.
+      if (urlEl && url && urlEl.value.trim() !== url) urlEl.value = url;
+      return {
+        label: r.querySelector(".pb-label")?.value.trim() || "",
+        url,
+        icon: r.querySelector(".pb-icon")?.value.trim() || "",
+        pos_x: Number(r.dataset.x ?? 0.5),
+        pos_y: Number(r.dataset.y ?? 0.9),
+        shape: r.querySelector(".pb-shape")?.dataset.shape === "square" ? "square" : "circle",
+        show_label: r.querySelector(".pb-showlbl")?.dataset.on === "1",
+      };
+    });
+    let saveTimer = null;
+    let saveDirty = false; // y a-t-il une modif non envoyée ?
+    // Envoi synchrone fire-and-forget — utilisé pour ne pas perdre une modif
+    // quand l'utilisateur navigue avant la fin du debounce.
+    const flushSync = () => {
+      if (!saveDirty) return;
+      clearTimeout(saveTimer);
+      saveDirty = false;
+      try {
+        const buttons = collect().filter((b) => b.label && b.url);
+        // keepalive : le navigateur autorise la requête à se poursuivre même
+        // après que la page soit en train de se décharger.
+        void fetch("/api/page/buttons", { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ buttons }), keepalive: true });
+      } catch {}
+    };
+    const save = () => {
+      saveDirty = true;
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(async () => {
+        if (pbStatus) pbStatus.textContent = "Enregistrement…";
+        try {
+          const buttons = collect().filter((b) => b.label && b.url);
+          const sent = buttons.length;
+          const resp = await api("/api/page/buttons", { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ buttons }) });
+          saveDirty = false;
+          const got = Array.isArray(resp?.buttons) ? resp.buttons.length : 0;
+          if (sent !== got) {
+            // Le serveur a rejeté silencieusement des entrées (URL invalide…).
+            const msg = `${got}/${sent} enregistré${got > 1 ? "s" : ""} (vérifie les URLs)`;
+            console.warn("[buttons.save] rejet silencieux", { sent, got, buttons });
+            if (pbStatus) pbStatus.textContent = msg;
+          } else if (pbStatus) {
+            pbStatus.textContent = "Enregistré ✓";
+            setTimeout(() => { if (pbStatus.textContent === "Enregistré ✓") pbStatus.textContent = ""; }, 1500); }
+        } catch (e) {
+          console.error("[buttons.save] erreur", e);
+          if (pbStatus) pbStatus.textContent = e?.message === "premium required" ? "Réservé aux Premium" : (e?.message || "Échec d'enregistrement");
+          else toast(e?.message || "Échec d'enregistrement");
+        }
+      }, 280);
+    };
+    // Flush au déchargement ou à la navigation (clic sur « Voir ma page »).
+    window.addEventListener("beforeunload", flushSync);
+    window.addEventListener("pagehide", flushSync);
+    root.querySelector('a[href^="/@"]')?.addEventListener("click", flushSync);
+    const wireRow = (row) => {
+      row.querySelectorAll("input").forEach((inp) => {
+        // « input » couvre frappe/coller/effacer → debounce 280ms agrège tout.
+        // « blur » garde un filet de sécurité en cas de navigation rapide.
+        inp.addEventListener("input", save);
+        inp.addEventListener("blur", save);
+        inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); inp.blur(); } });
+      });
+      row.querySelector(".pb-icon")?.addEventListener("input", (e) => {
+        const prev = row.querySelector(".pb-prev-ic");
+        if (prev) prev.innerHTML = icon(e.target.value.trim() || "link", 16);
+      });
+      row.querySelector(".pb-shape")?.addEventListener("click", (e) => {
+        const btn = e.currentTarget;
+        const next = btn.dataset.shape === "square" ? "circle" : "square";
+        btn.dataset.shape = next;
+        btn.textContent = next === "square" ? "▢" : "◯";
+        save();
+      });
+      row.querySelector(".pb-showlbl")?.addEventListener("click", (e) => {
+        const btn = e.currentTarget;
+        const next = btn.dataset.on === "1" ? "0" : "1";
+        btn.dataset.on = next;
+        btn.classList.toggle("on", next === "1");
+        save();
+      });
+      row.querySelector(".pb-del")?.addEventListener("click", () => {
+        row.remove(); refreshCount(); save();
+      });
+    };
+    pbList.querySelectorAll(".pb-row").forEach(wireRow);
+    pbAdd?.addEventListener("click", () => {
+      const n = pbList.querySelectorAll(".pb-row").length;
+      if (n >= 5) return;
+      // Position aléatoire dans la zone « visible » du hero — on évite les
+      // bords (10 %) et la bande basse occupée par l'identity (avatar/nom/handle).
+      const randPx = +(0.10 + Math.random() * 0.80).toFixed(3);
+      const randPy = +(0.15 + Math.random() * 0.55).toFixed(3);
+      // Pré-remplissage de label + URL pour que le bouton soit immédiatement
+      // valide côté serveur (sanitizeButtonUrl exige http(s)://). L'utilisateur
+      // les édite ensuite ; au moindre changement, save() repart.
+      const tmp = document.createElement("div");
+      tmp.innerHTML = pbRowHtml({
+        icon: "link", shape: "circle", show_label: false,
+        pos_x: randPx, pos_y: randPy,
+        label: `Bouton ${n + 1}`,
+        url: "https://example.com",
+      });
+      const row = tmp.firstElementChild;
+      pbList.appendChild(row);
+      wireRow(row);
+      refreshCount();
+      // Save immédiat (pas de debounce) pour persister le bouton tout neuf,
+      // même si l'utilisateur quitte la page sans le compléter.
+      save();
+      const lblInp = row.querySelector(".pb-label");
+      lblInp?.focus(); lblInp?.select();
+    });
+    refreshCount();
+  }
+
+  // Pages payantes (statut Connect + liste + création).
+  void loadPaidPages(root, data);
 }
 
 export function notifListHtml(list) {
@@ -996,6 +1694,90 @@ export function wireEditor(data) {
   }
   // Visite guidée « Milo » : lanceur manuel + ouverture auto à la 1re connexion.
   app.querySelector("#hm-tour-btn")?.addEventListener("click", () => openMiloTourPicker());
+  // Toggle dev : premium PAR UTILISATEUR. Pose/retire une ligne d'abonnement
+  // "dev" pour le compte courant côté serveur, puis recharge. Échoue proprement
+  // si l'endpoint est désactivé (prod, ou MINDLOG_DEV_PREMIUM absent).
+  app.querySelector("#dev-toggle-premium")?.addEventListener("change", async (e) => {
+    const on = e.target.checked;
+    try {
+      await api("/api/dev/premium", { method: on ? "POST" : "DELETE", headers: jsonAuth() });
+    } catch (err) {
+      e.target.checked = !on;
+      toast(err?.message || "Premium dev indisponible (NODE_ENV=production ou MINDLOG_DEV_PREMIUM absent).");
+      return;
+    }
+    location.reload();
+  });
+
+  // Dev : abonnements simulés à des espaces premium d'autres créateurs.
+  // Liste, ajout, annulation. Endpoint gardé par DEV_PREMIUM_ENABLED côté serveur.
+  const subsList = app.querySelector("#dev-space-subs");
+  if (subsList) {
+    const refreshSubs = async () => {
+      try {
+        const r = await api("/api/dev/space-subscriptions", { headers: authHeaders() });
+        const active = (r.subscriptions || []).filter((s) => s.status === "active");
+        subsList.innerHTML = active.length
+          ? active.map((s) =>
+              `<li class="opt-dev-sub-row" data-handle="${esc(s.handle)}">
+                 <a href="/@${esc(s.handle)}" target="_blank" rel="noopener">@${esc(s.handle)}</a>
+                 <span class="lbl-sm">${esc(s.provider || "stripe")}</span>
+                 <button type="button" class="btn sm danger" data-dev-sub-cancel>Annuler</button>
+               </li>`
+            ).join("")
+          : `<li class="lbl-sm">Aucun abonnement simulé.</li>`;
+        subsList.querySelectorAll("[data-dev-sub-cancel]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const handle = btn.closest("[data-handle]")?.dataset.handle;
+            if (!handle) return;
+            try {
+              await api(`/api/dev/space-subscription/${encodeURIComponent(handle)}`, {
+                method: "DELETE",
+                headers: jsonAuth(),
+              });
+              toast("Abonnement simulé retiré");
+              await refreshSubs();
+            } catch (err) { toast(err?.message || "Échec."); }
+          });
+        });
+      } catch {
+        subsList.innerHTML = `<li class="lbl-sm">Dev premium indisponible.</li>`;
+      }
+    };
+    void refreshSubs();
+    app.querySelector("#dev-space-add-btn")?.addEventListener("click", async () => {
+      const inp = app.querySelector("#dev-space-add-handle");
+      const handle = (inp?.value || "").trim().replace(/^@/, "");
+      if (!handle) { toast("Saisis un @handle"); return; }
+      try {
+        await api("/api/dev/space-subscription", {
+          method: "POST",
+          headers: jsonAuth(),
+          body: JSON.stringify({ handle }),
+        });
+        if (inp) inp.value = "";
+        toast(`Abonné(e) simulé(e) à @${handle}`);
+        await refreshSubs();
+      } catch (err) { toast(err?.message || "Échec."); }
+    });
+  }
+
+  // Swatches couleur Milo dans l'onglet Options
+  app.querySelector("#opt-swatches")?.querySelectorAll(".swatch").forEach((s) =>
+    s.addEventListener("click", () => {
+      applyAccent(s.dataset.accent);
+      try { localStorage.setItem(ACCENT_STORE, s.dataset.accent); } catch {}
+    })
+  );
+  applyAccent(storedAccent() || "#8b8ff5"); // marque le swatch actif
+
+  // Filtre des blocs Options
+  app.querySelector("#opt-search")?.addEventListener("input", (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    app.querySelectorAll("#opt-v2-grid .opt-v2-block").forEach((block) => {
+      block.hidden = !!q && !block.textContent.toLowerCase().includes(q);
+    });
+  });
   if (!localStorage.getItem(TOUR_SEEN_KEY)) {
     // On attend qu'aucun autre overlay (ex. sauvegarde E2E obligatoire à la 1re
     // connexion) ne soit ouvert, pour ne pas empiler les fenêtres modales.
@@ -1231,9 +2013,10 @@ export function wireEditor(data) {
     });
   });
 
-  // Abonnement (Mon compte) : démarrer un abonnement / ouvrir le portail Stripe.
+  // Abonnement (Mon compte) : « 1 €/mois » démarre l'abonnement ; « Gérer » ouvre
+  // la page dédiée « Espace Premium » (facturation + toutes les fonctions premium).
   app.querySelector("#opt-upgrade-btn")?.addEventListener("click", startCheckout);
-  app.querySelector("#opt-portal-btn")?.addEventListener("click", openBillingPortal);
+  app.querySelector("#opt-portal-btn")?.addEventListener("click", () => location.assign("/me/premium"));
 
   // Avatar upload depuis l'onglet Compte.
   app.querySelector("#acc-av-upload")?.addEventListener("change", async (ev) => {
@@ -1241,48 +2024,11 @@ export function wireEditor(data) {
     if (file) await uploadPhotoBlob(file);
   });
 
-  // Personnalisation Premium (colonne Accueil) : couverture + boutons (P4/P5).
-  const reloadEditor = async () => {
-    const fresh = await api("/api/me", { headers: authHeaders() });
-    renderEditor(fresh);
-  };
-  const premErr = (e) => toast(e?.message === "premium required" ? "Réservé aux comptes Premium." : (e?.message || "Échec."));
+  // Personnalisation Premium : couverture, boutons, pages payantes et facturation
+  // vivent désormais sur la page dédiée « Espace Premium » (route /me/premium →
+  // renderPremiumFull), câblée par wirePremiumPage. Ici on ne garde que le CTA
+  // d'upgrade de l'aperçu téléphone (colonne Identité).
   app.querySelector("#lt-go-premium")?.addEventListener("click", startCheckout);
-  const coverInput = app.querySelector("#cover-file");
-  coverInput?.addEventListener("change", async () => {
-    const file = coverInput.files?.[0];
-    if (!file) return;
-    const fd = new FormData();
-    fd.append("cover", file);
-    try { await api("/api/cover", { method: "POST", headers: authHeaders(), body: fd }); toast("Couverture mise à jour ✓"); await reloadEditor(); }
-    catch (e) { premErr(e); }
-  });
-  app.querySelector("#cover-remove")?.addEventListener("click", async () => {
-    try { await api("/api/cover", { method: "DELETE", headers: authHeaders() }); toast("Couverture retirée"); await reloadEditor(); }
-    catch (e) { premErr(e); }
-  });
-  app.querySelector("#pb-add")?.addEventListener("click", () => {
-    const list = app.querySelector("#pb-list");
-    if (!list) return;
-    const row = document.createElement("div");
-    row.className = "pb-row";
-    row.innerHTML = `<input class="pb-label" placeholder="Libellé" maxlength="80"><input class="pb-url" placeholder="https://…" maxlength="2000"><button type="button" class="pb-del" title="Retirer">✕</button>`;
-    list.appendChild(row);
-  });
-  app.querySelector("#pb-list")?.addEventListener("click", (e) => {
-    const del = e.target.closest?.(".pb-del");
-    if (del) del.closest(".pb-row")?.remove();
-  });
-  app.querySelector("#pb-save")?.addEventListener("click", async () => {
-    const buttons = [...app.querySelectorAll("#pb-list .pb-row")]
-      .map((r) => ({ label: r.querySelector(".pb-label")?.value.trim() || "", url: r.querySelector(".pb-url")?.value.trim() || "" }))
-      .filter((b) => b.label && b.url);
-    try { await api("/api/page/buttons", { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ buttons }) }); toast("Boutons enregistrés ✓"); }
-    catch (e) { premErr(e); }
-  });
-
-  // Pages payantes (P7) : statut Connect + liste + création. Premium uniquement.
-  void loadPaidPages(data);
 
   // Onglet « Options » : chaque bascule enregistre la préférence immédiatement.
   // « Vidéo » dépend d'« Appels » : on la désactive visuellement si les appels

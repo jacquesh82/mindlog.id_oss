@@ -53,10 +53,25 @@ export const db: DB = createDb();
 
 /** Applique les migrations Drizzle. Idempotent. À appeler au démarrage. */
 export async function initDb(): Promise<void> {
-  if (usePglite) {
-    await migratePglite(db as never, { migrationsFolder: MIGRATIONS_DIR });
-  } else {
-    await migratePg(db as never, { migrationsFolder: MIGRATIONS_DIR });
+  try {
+    if (usePglite) {
+      await migratePglite(db as never, { migrationsFolder: MIGRATIONS_DIR });
+    } else {
+      await migratePg(db as never, { migrationsFolder: MIGRATIONS_DIR });
+    }
+  } catch (e) {
+    // PGlite : si `tsx watch` est coupé pendant une migration, le WAL est tronqué
+    // et le binaire WASM (sans recovery PG complet) abort dès le démarrage suivant
+    // sur « RuntimeError: Aborted() ». Pas réparable côté WASM → guide vers le
+    // backup non-destructif.
+    if (usePglite && /aborted|wasm|RuntimeError/i.test(String((e as Error).message ?? e))) {
+      const path = process.env.PGLITE_PATH || "./data/dev-pglite";
+      console.error(`\n[db] ✗ PGlite corrompue à ${path}`);
+      console.error(`[db]   (probablement un kill pendant une migration — WAL tronqué)`);
+      console.error(`[db] → Lance :  npm run db:rescue`);
+      console.error(`[db]   (le dossier est SAUVEGARDÉ, pas supprimé)\n`);
+    }
+    throw e;
   }
 }
 

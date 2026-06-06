@@ -60,6 +60,16 @@ export function slotsFor(avail: Availability): string[] {
   return out;
 }
 
+/** Taille d'avatar sur la page publique — fixée par le propriétaire,
+ *  visible des visiteurs (donc persistée côté serveur, pas en localStorage). */
+export type AvatarSize = "s" | "l" | "xl";
+export const AVATAR_SIZES: readonly AvatarSize[] = ["s", "l", "xl"];
+
+/** Forme de l'avatar : carré (avec léger arrondi) ou cercle parfait. Bascule
+ *  côté UI au reclic sur le bouton de taille déjà actif. */
+export type AvatarShape = "square" | "circle";
+export const AVATAR_SHAPES: readonly AvatarShape[] = ["square", "circle"];
+
 /** Préférences du compte, éditées via l'onglet « Options » de la carte. */
 export interface Settings {
   allow_chat: boolean; // autoriser la messagerie chiffrée entrante
@@ -67,7 +77,12 @@ export interface Settings {
   allow_video: boolean; // proposer la vidéo (sinon appels audio seulement)
   allow_requests: boolean; // autoriser les demandes de RDV
   public_availability: boolean; // exposer ses disponibilités aux visiteurs
+  // Annuaire public : true = trouvable via /api/search. false = invisible
+  // (réservé aux comptes Premium ; le serveur ignore la valeur pour les autres).
+  listed_in_directory: boolean;
   availability: Availability; // règle de dispo par défaut (jours/week-end/périodes)
+  avatar_size: AvatarSize; // taille d'affichage de l'avatar sur la page publique
+  avatar_shape: AvatarShape; // forme : carré (default) ou cercle
 }
 
 export const SETTINGS_BOOLS = [
@@ -76,6 +91,7 @@ export const SETTINGS_BOOLS = [
   "allow_video",
   "allow_requests",
   "public_availability",
+  "listed_in_directory",
 ] as const;
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -84,7 +100,10 @@ export const DEFAULT_SETTINGS: Settings = {
   allow_video: true,
   allow_requests: true,
   public_availability: true,
+  listed_in_directory: true,
   availability: DEFAULT_AVAILABILITY,
+  avatar_size: "l",
+  avatar_shape: "circle",
 };
 
 export const DAY_FMT = /^\d{4}-\d{2}-\d{2}$/;
@@ -135,14 +154,30 @@ export function parseSettings(raw: string | null | undefined): Settings {
 }
 
 /** N'écrit que les clés connues (ignore tout champ inconnu reçu du client). */
-export async function setSettings(identityId: number, patch: Partial<Settings>): Promise<Settings> {
+export async function setSettings(
+  identityId: number,
+  patch: Partial<Settings>,
+  opts: { isPremium?: boolean } = {}
+): Promise<Settings> {
   const cur = parseSettings((await getIdentityById(identityId))?.settings);
   const next: Settings = { ...cur };
   for (const k of SETTINGS_BOOLS) {
     const v = patch[k];
-    if (typeof v === "boolean") next[k] = v;
+    if (typeof v === "boolean") {
+      // Avantage premium : seul un compte Premium peut se cacher de l'annuaire.
+      // Pour les autres, on force `listed_in_directory=true` même si le client
+      // tente de passer false.
+      if (k === "listed_in_directory" && !opts.isPremium) { next[k] = true; continue; }
+      next[k] = v;
+    }
   }
   if (patch.availability !== undefined) next.availability = sanitizeAvailability(patch.availability);
+  if (patch.avatar_size !== undefined && (AVATAR_SIZES as readonly string[]).includes(patch.avatar_size as string)) {
+    next.avatar_size = patch.avatar_size as AvatarSize;
+  }
+  if (patch.avatar_shape !== undefined && (AVATAR_SHAPES as readonly string[]).includes(patch.avatar_shape as string)) {
+    next.avatar_shape = patch.avatar_shape as AvatarShape;
+  }
   await db.update(identities).set({ settings: JSON.stringify(next) }).where(eq(identities.id, identityId));
   return next;
 }

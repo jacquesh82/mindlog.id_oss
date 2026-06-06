@@ -107,18 +107,33 @@ export async function createIdentity(
 
 export async function searchIdentities(
   q: string,
-  limit = 12
+  limit = 12,
+  opts: { includeTags?: boolean } = {}
 ): Promise<{ handle: string; display_name: string; title: string; has_photo: boolean }[]> {
   const term = `%${q.trim().replace(/[%_]/g, "")}%`;
-  // ILIKE : recherche insensible à la casse (comme le LIKE par défaut de SQLite).
+  // Filtre annuaire : exclut les comptes Premium qui se sont rendus invisibles
+  // (settings.listed_in_directory === false). Le champ settings est JSON, on
+  // s'appuie sur l'opérateur jsonb/`::jsonb` pour le filtrage.
+  // - Match sur handle, display_name, et optionnellement tags (capability Premium).
+  // - ILIKE : insensible à la casse. Les % et _ saisis sont neutralisés ci-dessus.
+  const tagJoin = opts.includeTags
+    ? sql`LEFT JOIN tags tg ON tg.identity_id = i.id`
+    : sql``;
+  const tagWhere = opts.includeTags
+    ? sql`OR tg.tag ILIKE ${term}`
+    : sql``;
   const res = await db.execute(sql`
-    SELECT i.handle, i.photo_file,
+    SELECT DISTINCT i.handle, i.photo_file,
            COALESCE(dn.value, '') AS display_name,
            COALESCE(t.value, '')  AS title
       FROM identities i
       LEFT JOIN card_fields dn ON dn.identity_id = i.id AND dn.key = 'display_name'
       LEFT JOIN card_fields t  ON t.identity_id  = i.id AND t.key  = 'title'
-     WHERE i.handle ILIKE ${term} OR dn.value ILIKE ${term}
+      ${tagJoin}
+     WHERE (i.handle ILIKE ${term} OR dn.value ILIKE ${term} ${tagWhere})
+       -- Match littéral du flag dans le JSON brut : robuste si settings invalide.
+       -- Le défaut (true) reste donc affiché tant que l'utilisateur n'a pas coché « hors annuaire ».
+       AND COALESCE(i.settings, '') NOT ILIKE '%"listed_in_directory":false%'
      ORDER BY i.handle
      LIMIT ${limit}
   `);

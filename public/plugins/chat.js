@@ -83,7 +83,7 @@ export default function register(host) {
     const colHtml = `
       <div class="card chat-card" role="region" aria-label="Conversation avec @${esc(handle)}">
         <button type="button" class="close" id="ch-close" aria-label="Fermer la conversation">✕</button>
-        <div class="section-title chat-head" style="border-top:none;padding-top:0;margin-top:0">@${esc(handle)} <span class="deg">chiffré · éphémère 🔒</span> <button type="button" class="btn sm" id="ch-verify" title="Vérifier l'identité du contact" style="margin-left:.4rem">Vérifier</button> <button type="button" class="btn sm" id="ch-timer" title="Minuterie de disparition" aria-label="Minuterie de disparition" style="display:inline-flex;align-items:center;gap:.3rem">⏲ <span id="ch-timer-label" style="font-size:.75rem;font-weight:600;color:var(--muted)">Off</span></button> <button type="button" class="btn sm" id="ch-archive" title="Archiver la conversation (lecture seule, copie locale)" aria-label="Archiver la conversation">🗄 <span id="ch-archive-label" style="font-size:.75rem;font-weight:600">Archiver</span></button> <span id="ch-vbadge" class="deg"></span></div>
+        <div class="section-title chat-head" style="border-top:none;padding-top:0;margin-top:0">@${esc(handle)} <button type="button" class="btn sm" id="ch-page" title="Voir la page publique" aria-label="Voir la page publique">${svgIcon("user", 15)}</button> <button type="button" class="btn sm" id="ch-verify" title="Vérifier l'identité du contact" aria-label="Vérifier l'identité">${svgIcon("shield", 15)}</button> <button type="button" class="btn sm" id="ch-timer" title="Minuterie de disparition" aria-label="Minuterie de disparition" style="gap:.2rem">${svgIcon("clock", 15)}<span id="ch-timer-label" style="font-size:.6rem;font-weight:700;line-height:1;display:none"></span></button> <button type="button" class="btn sm" id="ch-archive" title="Archiver la conversation (lecture seule, copie locale)" aria-label="Archiver la conversation" aria-pressed="false">${svgIcon("archive", 15)}</button> <span id="ch-vbadge" class="deg"></span></div>
         <p class="sub" id="ch-note">Conversation éphémère, chiffrée de bout en bout 🔒.</p>
         <div class="chat-log" id="ch-log"><p class="empty">Chargement…</p></div>
         <form id="ch-form" class="chat-form">
@@ -103,6 +103,10 @@ export default function register(host) {
     if (col) col.querySelector("#ch-input")?.focus({ preventScroll: true });
 
   function wireChat(overlay) {
+    // Teinte personnalisée pour les bulles "theirs" : hash du handle → hue CSS.
+    const _hue = [...handle].reduce((h, x) => (h * 31 + x.charCodeAt(0)) % 360, 0);
+    overlay.querySelector("#ch-log")?.style.setProperty("--bbl-theirs-tint", _hue);
+
     // x-device-id : permet au serveur de filtrer les enveloppes fan-out destinées
     // À CET appareil (lecture) et d'attribuer l'appareil émetteur (envoi).
     const authH = { "x-access-key": myKey, ...(host.md ? { "x-device-id": host.md.deviceId() } : {}) };
@@ -136,8 +140,8 @@ export default function register(host) {
       form.querySelectorAll("input,button").forEach((el) => (el.disabled = ro));
     }
     function updateArchiveBtn() {
-      const lbl = overlay.querySelector("#ch-archive-label");
-      if (lbl) lbl.textContent = isArchived() ? "Désarchiver" : "Archiver";
+      const btn = overlay.querySelector("#ch-archive");
+      if (btn) btn.setAttribute("aria-pressed", String(isArchived()));
     }
 
     // Animation d'arrivée : on n'anime QUE les messages réellement nouveaux
@@ -179,6 +183,9 @@ export default function register(host) {
         else { badge.textContent = "⚠️ clé changée"; badge.style.color = "var(--danger)"; }
       } catch { badge.textContent = ""; }
     }
+    overlay.querySelector("#ch-page")?.addEventListener("click", () => {
+      window.open(`/@${encodeURIComponent(handle)}`, "_blank", "noopener");
+    });
     overlay.querySelector("#ch-verify")?.addEventListener("click", () => {
       if (!peerPub) { host.toast?.("Ce contact n'a pas encore de clé."); return; }
       verify?.open(myHandle, handle, peerPub, refreshVerifyBadge);
@@ -614,11 +621,12 @@ export default function register(host) {
       const lbl = overlay.querySelector("#ch-timer-label");
       if (!lbl) return;
       if (sec >= 86400) {
-        lbl.textContent = "Off";
-        lbl.style.color = "var(--muted)";
+        lbl.style.display = "none";
+        lbl.textContent = "";
       } else {
         lbl.textContent = fmtTtl(sec);
         lbl.style.color = "var(--accent-ink)";
+        lbl.style.display = "inline";
       }
     }
 
@@ -848,13 +856,32 @@ export default function register(host) {
 
       async function manage() {
         if (!group) return;
-        const handle = prompt("Ajouter un contact au groupe (@handle) — laisser vide pour retirer :");
+        const handleValidate = (v) => {
+          const s = v.replace(/^@/, "").trim();
+          if (!s) return null; // vide accepté en 1er prompt (déclenche le retrait)
+          if (!/^[a-z0-9_-]+$/i.test(s)) return "Handle invalide (lettres, chiffres, _ ou -).";
+          return null;
+        };
+        const handle = await host.promptDialog("Ajouter un contact au groupe", {
+          placeholder: "@handle (vide pour retirer un membre)",
+          ok: "Ajouter",
+          validate: handleValidate,
+        });
         if (handle === null) return;
         const h = handle.replace(/^@/, "").trim();
         try {
           if (h) { await groups.api.addMember(gid, h); toast(`@${h} ajouté`); }
           else {
-            const rem = prompt("Retirer quel membre (@handle) ?");
+            const rem = await host.promptDialog("Retirer quel membre ?", {
+              placeholder: "@handle",
+              ok: "Retirer",
+              validate: (v) => {
+                const s = v.replace(/^@/, "").trim();
+                if (!s) return "Indiquez un @handle.";
+                if (!/^[a-z0-9_-]+$/i.test(s)) return "Handle invalide (lettres, chiffres, _ ou -).";
+                return null;
+              },
+            });
             if (rem) {
               await groups.api.removeMember(gid, rem.replace(/^@/, "").trim());
               const g2 = await groups.api.get(gid);

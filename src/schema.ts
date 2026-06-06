@@ -12,7 +12,7 @@
  *    posé au niveau applicatif via `$defaultFn`.
  */
 import { sql } from "drizzle-orm";
-import { check, integer, pgTable, primaryKey, serial, text, index, unique } from "drizzle-orm/pg-core";
+import { check, integer, pgTable, primaryKey, real, serial, text, index, unique } from "drizzle-orm/pg-core";
 
 const nowIso = () => new Date().toISOString();
 
@@ -83,7 +83,16 @@ export const connectAccounts = pgTable(
   (t) => [primaryKey({ columns: [t.identity_id] }), index("idx_connect_account").on(t.stripe_account_id)]
 );
 
-// Page dont l'accès est payant : prix fixé par le créateur, contenu déverrouillé après achat.
+// Page premium d'un créateur. Depuis l'introduction de l'« espace premium »
+// (0025), l'accès n'est PAS facturé par page — il l'est par abonnement mensuel
+// à l'espace du créateur (cf. `premiumSpace` + `spaceSubscriptions`). Le champ
+// `type` détermine la mise en forme et la lecture du `content` :
+//   - markdown : `content` = texte MD brut.
+//   - gallery  : `content` = JSON `{ items: [{ url, kind, caption? }] }`.
+//   - link     : `content` = JSON `{ url, note? }`.
+//   - file     : `content` = JSON `{ url, name, size }`.
+// `price_cents`/`currency` sont conservés pour compat (legacy one-shot) mais ne
+// sont plus exposés en UI : le prix vit côté `premium_space.price_cents`.
 export const paidPages = pgTable(
   "paid_pages",
   {
@@ -93,8 +102,9 @@ export const paidPages = pgTable(
       .references(() => identities.id, { onDelete: "cascade" }),
     slug: text("slug").notNull(),
     title: text("title").notNull(),
+    type: text("type").notNull().default("markdown"),
     content: text("content").notNull().default(""),
-    price_cents: integer("price_cents").notNull(),
+    price_cents: integer("price_cents").notNull().default(0),
     currency: text("currency").notNull().default("eur"),
     published: integer("published").notNull().default(0),
     created_at: text("created_at").notNull().$defaultFn(nowIso),
@@ -102,7 +112,8 @@ export const paidPages = pgTable(
   (t) => [unique("uq_paid_page_slug").on(t.identity_id, t.slug), index("idx_paid_pages_identity").on(t.identity_id)]
 );
 
-// Accès acheté (one-time = perpétuel). Un acheteur (compte mindlog) par page.
+// Accès direct à une page (legacy P7 one-shot). Conservé pour les achats
+// historiques ; les nouveaux accès passent par `spaceSubscriptions`.
 export const pageAccess = pgTable(
   "page_access",
   {
@@ -117,6 +128,118 @@ export const pageAccess = pgTable(
     granted_at: text("granted_at").notNull().$defaultFn(nowIso),
   },
   (t) => [unique("uq_page_access").on(t.page_id, t.buyer_identity_id)]
+);
+
+// Tarif et état Stripe de l'espace premium d'un créateur. `active=1` signifie
+// que `stripe_price_id` est créé chez Stripe et que l'espace peut être vendu.
+// 1 ligne par identité (le créateur). Le prix s'applique à tout l'espace —
+// l'accès débloque l'intégralité des pages premium publiées du créateur.
+export const premiumSpace = pgTable(
+  "premium_space",
+  {
+    identity_id: integer("identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    price_cents: integer("price_cents").notNull().default(0),
+    currency: text("currency").notNull().default("eur"),
+    stripe_product_id: text("stripe_product_id").notNull().default(""),
+    stripe_price_id: text("stripe_price_id").notNull().default(""),
+    active: integer("active").notNull().default(0),
+    // Texte Markdown introductif affiché en haut de /@handle/space (rendu HTML).
+    intro_md: text("intro_md").notNull().default(""),
+    // Idem pour la page publique /@handle (rendu dans la zone bio).
+    profile_intro_md: text("profile_intro_md").notNull().default(""),
+    // JSON {chat,call,pages,rdv,lives}. Chaque clé true ⇒ l'avantage est offert
+    // aux abonnés du space — pour chat/call, cela impose un gating server-side :
+    // les non-abonnés ne peuvent ni écrire ni appeler. Lecture via parseBenefits().
+    benefits: text("benefits").notNull().default(""),
+    updated_at: text("updated_at").notNull().$defaultFn(nowIso),
+  },
+  (t) => [primaryKey({ columns: [t.identity_id] })]
+);
+
+// Abonnement d'un visiteur à l'espace premium d'un créateur. Source de vérité =
+// Stripe (reflété par webhook). L'entitlement effectif se calcule via
+// `hasActiveSpaceSubscription()` (store/premiumSpace.ts).
+export const spaceSubscriptions = pgTable(
+  "space_subscriptions",
+  {
+    id: serial("id").primaryKey(),
+    owner_identity_id: integer("owner_identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    subscriber_identity_id: integer("subscriber_identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull().default("stripe"),
+    stripe_subscription_id: text("stripe_subscription_id").notNull().default(""),
+    // none | incomplete | trialing | active | past_due | canceled
+    status: text("status").notNull().default("none"),
+    current_period_end: text("current_period_end"),
+    cancel_at_period_end: integer("cancel_at_period_end").notNull().default(0),
+    created_at: text("created_at").notNull().$defaultFn(nowIso),
+    updated_at: text("updated_at").notNull().$defaultFn(nowIso),
+  },
+  (t) => [
+    unique("uq_space_sub").on(t.owner_identity_id, t.subscriber_identity_id),
+    index("idx_space_sub_owner").on(t.owner_identity_id),
+    index("idx_space_sub_subscriber").on(t.subscriber_identity_id),
+    index("idx_space_sub_stripe").on(t.stripe_subscription_id),
+  ]
+);
+
+// ── Lives Premium (P9, mesh WebRTC) ───────────────────────────────────────
+// Un stream live = 1 broadcaster + N viewers reliés en mesh BitTorrent-style.
+// Le serveur ne stocke que les métadonnées du stream (manifeste signé, clé
+// symétrique chiffrée pour l'owner) et le roster volatile des peers connectés.
+// AUCUN media ne transite par le serveur. La clé `Ks` n'est livrée aux abonnés
+// que via la voie E2E (chiffrée à la volée à la souscription).
+export const liveStreams = pgTable(
+  "live_streams",
+  {
+    id: text("id").primaryKey(), // uuid client
+    owner_identity_id: integer("owner_identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    title: text("title").notNull().default(""),
+    broadcaster_pub: text("broadcaster_pub").notNull().default(""), // Ed25519 pub du broadcaster
+    manifest_json: text("manifest_json").notNull().default(""), // manifeste signé (codec, qualités…)
+    key_wrap_json: text("key_wrap_json").notNull().default(""), // {Ks chiffré, métadonnées}
+    epoch: integer("epoch").notNull().default(0), // rotation Ks
+    status: text("status").notNull().default("live"), // live | ended
+    started_at: text("started_at").notNull().$defaultFn(nowIso),
+    ended_at: text("ended_at"),
+  },
+  (t) => [
+    index("idx_live_streams_owner").on(t.owner_identity_id, t.started_at),
+    index("idx_live_streams_status").on(t.status),
+  ]
+);
+
+// Roster volatile du swarm : chaque peer maintient sa présence par heartbeat.
+// `last_seen` < now - 30 s → considéré offline et écarté du roster servi aux
+// nouveaux entrants. Le score (0..100) est mesuré par le client et permet
+// d'éviter de proposer les peers dégradés comme seeds aux autres.
+export const liveSwarmMembers = pgTable(
+  "live_swarm_members",
+  {
+    stream_id: text("stream_id")
+      .notNull()
+      .references(() => liveStreams.id, { onDelete: "cascade" }),
+    identity_id: integer("identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    device_id: text("device_id").notNull(),
+    role: text("role").notNull().default("viewer"), // broadcaster | viewer
+    score: integer("score").notNull().default(50),
+    joined_at: text("joined_at").notNull().$defaultFn(nowIso),
+    last_seen: text("last_seen").notNull().$defaultFn(nowIso),
+  },
+  (t) => [
+    primaryKey({ columns: [t.stream_id, t.device_id] }),
+    index("idx_live_members_stream").on(t.stream_id, t.last_seen),
+    index("idx_live_members_identity").on(t.identity_id),
+  ]
 );
 
 // ── Multi-appareils E2E (P0, cf. docs/multidevice-proposal.md) ────────────
@@ -509,6 +632,11 @@ export const pageButtons = pgTable(
     url: text("url").notNull(),
     icon: text("icon").notNull().default(""),
     position: integer("position").notNull().default(0),
+    // Position normalisée (0..1) sur la cover-hero du profil.
+    pos_x: real("pos_x").notNull().default(0.5),
+    pos_y: real("pos_y").notNull().default(0.9),
+    shape: text("shape").notNull().default("circle"), // "circle" | "square"
+    show_label: integer("show_label").notNull().default(0), // 0=icône seule, 1=icône+label
     created_at: text("created_at").notNull().$defaultFn(nowIso),
   },
   (t) => [index("idx_page_buttons_identity").on(t.identity_id, t.position)]

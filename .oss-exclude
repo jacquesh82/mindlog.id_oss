@@ -8,14 +8,24 @@
 src/premium/
 test/premium/
 
-# Frontend — onglet compte premium
+# Frontend — onglet compte premium + page dédiée « Espace Premium »
 public/editor/tabs/account.js
+public/editor/tabs/premium.js
+
+# Lives premium (mesh WebRTC) — pages + libs front
+public/live/
 
 # Migrations premium
 drizzle/0020_premium_subscriptions.sql
 drizzle/0021_premium_page_features.sql
 drizzle/0022_billing_events.sql
 drizzle/0023_paid_pages.sql
+drizzle/0024_page_buttons_positioning.sql
+drizzle/0025_premium_space.sql
+drizzle/0026_premium_space_intro.sql
+drizzle/0027_premium_space_profile_intro.sql
+drizzle/0028_premium_space_benefits.sql
+drizzle/0029_premium_lives.sql
 
 # Docs internes
 docs/premium-offer-plan.md

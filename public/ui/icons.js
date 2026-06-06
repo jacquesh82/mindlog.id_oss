@@ -41,6 +41,7 @@ export const ICONS = {
   "chevron-right": '<path d="m9 6 6 6-6 6"/>',
   "chevron-down": '<path d="m6 9 6 6 6-6"/>',
   send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
+  archive: '<path d="M3 3h18a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M4 8h16v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M10 13h4"/>',
 };
 
 export const icon = (n, size = 20) =>

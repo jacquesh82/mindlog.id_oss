@@ -103,6 +103,8 @@ export const setSessionHint = (on) => {
 export const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
 export const TOUR_SEEN_KEY = "mindlog.tourSeen";
+export const isDev = typeof location !== "undefined" && location.hostname !== "id.mindlog.today";
+export const DEV_PREMIUM_KEY = "mindlog.dev.premium";
 
 export const DEFAULT_SETTINGS = {
   allow_chat: true,

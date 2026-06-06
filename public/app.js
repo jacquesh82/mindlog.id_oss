@@ -11,7 +11,7 @@ import { mdDecryptEnvelope, mdDeviceId, mdFanoutEncrypt, mdRecallSent, mdRegiste
 import { gApi, gLoadMessages, gRotate, gSendMessage, gSyncKeys } from "./crypto/groups.js";
 import { groupDigits, safetyNumber, sha256hex, verifyClear, verifyGet, verifyPut } from "./crypto/verify.js";
 import { CREDIT, LANG, RTL, langSelectHtml, setLangCode, t } from "./i18n.js";
-import { confirmDialog, copyText, esc, promptPassphrase, promptPin, toast } from "./ui/dom.js";
+import { confirmDialog, copyText, esc, promptDialog, promptPassphrase, promptPin, toast } from "./ui/dom.js";
 import { SOCIALS, SOCIAL_BY_KEY, avatarHtml, branchNavSvg, genericAvatarSvg, icon, isSocialKey, miloSvg, profileChipHtml, socialFieldKey, socialIcon, socialUrl } from "./ui/icons.js";
 import { ACCENTS, ACCENT_STORE, applyAccent, applyTheme, storedAccent, storedTheme, swatchesHtml, themeToggleHtml, toggleTheme } from "./theme.js";
 import { openE2eBackup, openE2eRestore, openKeyRecovery, openSafetyNumber } from "./ui/modals.js";
@@ -19,7 +19,7 @@ import { addDeckColumn, deckState, removeDeckColumn } from "./editor/deck.js";
 import { siteHeader } from "./ui/icons.js";
 import { renderStatus } from "./views/status.js";
 import { DEFAULT_AVAILABILITY, DEFAULT_SETTINGS, DOW_LETTERS, DOW_NAMES, SESSION_HINT, TOUR_SEEN_KEY, app, isLoggedIn, lastHandle, loadAuth, myHandle, myKey, normalizeAvailability, pick, relDate, setLastHandle, setMeProfile, setSessionHint, setStoredHandle, setStoredKey, storedHandle, storedKey, viewerHeaders } from "./core.js";
-import { openContactColumn, renderPrivate } from "./editor/index.js";
+import { openContactColumn, renderPremiumFull, renderPrivate } from "./editor/index.js";
 function setLang(code) { setLangCode(code); route(); }
 
 const footer = document.getElementById("footer");
@@ -206,12 +206,14 @@ function setupBrandMilo() {
   document.addEventListener("mouseout", (e) => {
     if (e.target.closest && e.target.closest(".brand-milo")) hideSoon();
   });
-  // Cliquer sur Milo (et non sur le texte de la marque) ouvre sa page @milo.
+  // Cliquer sur Milo (et non sur le texte de la marque) ouvre la page publique
+  // de l'utilisateur s'il est connecté, sinon celle de Milo (présentation).
   document.addEventListener("click", (e) => {
     if (e.target.closest && e.target.closest(".brand-milo")) {
       e.preventDefault();
       e.stopPropagation();
-      location.assign("/@milo");
+      const myH = appState.auth?.handle || myHandle?.();
+      location.assign(myH ? `/@${encodeURIComponent(myH)}` : "/@milo");
     }
   });
 }
@@ -293,8 +295,10 @@ function headerAccount(unread = 0) {
     </button>
     <div class="profile-menu" id="profile-menu" role="menu">
       <button class="pmenu-item" id="pmenu-profil" role="menuitem" type="button">${icon("user", 15)} Mon profil</button>
+      <button class="pmenu-item" id="pmenu-premium" role="menuitem" type="button">${icon("sparkles", 15)} Mon espace premium</button>
       <button class="pmenu-item" id="pmenu-theme" role="menuitem" type="button">${storedTheme() === "light" ? icon("moon", 15) + " Mode sombre" : icon("sun", 15) + " Mode clair"}</button>
       <button class="pmenu-item" id="pmenu-notifs" role="menuitem" type="button">${icon("bell", 15)} Notifications</button>
+      <button class="pmenu-item" id="pmenu-options" role="menuitem" type="button">${icon("settings", 15)} Options</button>
       <div class="pmenu-sep" role="separator"></div>
       <button class="pmenu-item pmenu-danger" data-action="logout" role="menuitem" type="button">${icon("key", 15)} ${t("nav_logout")}</button>
     </div>
@@ -340,17 +344,34 @@ function wireProfileMenu() {
   // capture:true → avant tout stopPropagation des listeners enfants
   document.addEventListener("click", (e) => {
     if (e.target.closest("#profile-menu-btn")) { _pmenu.toggle(); return; }
+    // Hors éditeur (homepage /@h, /me/premium, etc.), `__deckGoLabel` n'existe
+    // pas → on navigue vers /me en posant un indice d'onglet via sessionStorage
+    // (lu par setupTabs dans editor/index.js → ouvre le bon onglet au montage).
+    const goTab = (label) => {
+      if (window.__deckGoLabel) window.__deckGoLabel(label);
+      else {
+        try { sessionStorage.setItem("mindlog.openTab", label); } catch {}
+        location.assign("/me");
+      }
+    };
     if (e.target.closest("#pmenu-profil")) {
-      if (window.__deckGoLabel) window.__deckGoLabel("Compte");
-      else location.assign("/me");
+      // « Mon profil » = page publique (vue par les autres), pas l'onglet
+      // Compte. Si on est déjà sur /@handle, no-op (évite un refresh inutile).
+      const h = myHandle();
+      if (h) {
+        const target = `/@${encodeURIComponent(h)}`;
+        if (location.pathname !== target) location.assign(target);
+      } else goTab("Compte"); // fallback : pas connecté → éditeur
       _pmenu.close(); return;
     }
     if (e.target.closest("#pmenu-notifs")) {
       const bell = document.getElementById("notif-bell");
       if (bell) bell.click();
-      else location.assign("/me");
+      else goTab("Notifications");
       _pmenu.close(); return;
     }
+    if (e.target.closest("#pmenu-options")) { goTab("Options"); _pmenu.close(); return; }
+    if (e.target.closest("#pmenu-premium")) { _pmenu.close(); location.assign("/me/premium"); return; }
     if (!e.target.closest(".profile-menu-wrap")) _pmenu.close();
   }, true);
 
@@ -461,6 +482,7 @@ function wireHeaderSearch() {
 function route() {
   const path = decodeURIComponent(location.pathname);
   const paidPage = path.match(/^\/@([^/]+)\/p\/(.+)$/); // page payante : /@handle/p/slug
+  const spaceIndex = path.match(/^\/@([^/]+)\/space$/); // index espace privé : /@handle/space
   const profile = path.match(/^\/@(.+)$/);
   const priv = path.match(/^\/k\/(.+)$/);
   const invite = path.match(/^\/i\/(.+)$/);
@@ -474,6 +496,11 @@ function route() {
     app.dataset.view = "status";
     return renderStatus();
   }
+  if (path === "/me/premium") {
+    // Page « Espace Premium » plein écran (vraie page, back natif).
+    app.dataset.view = "premium";
+    return renderPremiumFull();
+  }
   if (path === "/me") {
     // Espace privé authentifié par cookie de session (aucune clé dans l'URL).
     app.dataset.view = "private";
@@ -482,6 +509,10 @@ function route() {
   if (priv) {
     app.dataset.view = "private";
     return renderPrivate(priv[1]);
+  }
+  if (spaceIndex) {
+    app.dataset.view = "spaceindex";
+    return renderSpaceIndex(spaceIndex[1]);
   }
   if (paidPage) {
     app.dataset.view = "paidpage";
@@ -1914,7 +1945,12 @@ function openCreate() {
   // On ne bloque PAS l'envoi côté client : le serveur tranche (et court-circuite
   // localhost), ce qui garde le développement et les tests fonctionnels.
   let turnstileToken = "";
-  if (TURNSTILE_SITE_KEY) {
+  // En dev (hôte .localhost ou loopback), le serveur ignore Turnstile — on
+  // n'instancie même pas le widget pour éviter les faux « Verification failed »
+  // sous Chrome devtools mobile-emulation (UA spoofé → CF marque suspect).
+  const _isDevHost = /(^|\.)localhost$/i.test(location.hostname)
+    || location.hostname === "127.0.0.1" || location.hostname === "::1";
+  if (TURNSTILE_SITE_KEY && !_isDevHost) {
     const renderTurnstile = () => {
       if (!window.turnstile) return setTimeout(renderTurnstile, 200);
       if (!overlay.isConnected) return; // modale fermée entre-temps
@@ -1927,6 +1963,9 @@ function openCreate() {
       });
     };
     renderTurnstile();
+  } else if (TURNSTILE_SITE_KEY && _isDevHost) {
+    const slot = overlay.querySelector("#cr-turnstile");
+    if (slot) slot.innerHTML = `<div class="dev-note">Mode dev — anti-bot désactivé</div>`;
   }
 
   const close = () => overlay.remove();
@@ -2140,6 +2179,278 @@ function openQR(url, label) {
 
 /* ============================ PROFIL PUBLIC ============================== */
 
+// Bouton « ← Retour » unifié : touch target 44×44, label visible, comportement
+// prévisible. Préfère history.back() si on est arrivé via navigation interne
+// (referrer même origine), sinon retombe sur `fallbackHref`. Annonce le lien
+// de destination via aria-label pour les lecteurs d'écran.
+function backBtnHtml(fallbackHref, ariaLabel = "Retour") {
+  return `<button type="button" class="back-btn" data-fallback="${esc(fallbackHref)}" aria-label="${esc(ariaLabel)}">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+    <span>Retour</span>
+  </button>`;
+}
+function wireBackBtn(root) {
+  root.querySelectorAll(".back-btn[data-fallback]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const fallback = btn.dataset.fallback || "/";
+      const sameOrigin = document.referrer && new URL(document.referrer, location.href).origin === location.origin;
+      if (window.history.length > 1 && sameOrigin) window.history.back();
+      else location.assign(fallback);
+    });
+  });
+}
+
+// Index de l'« Espace privé » d'un créateur (route /@handle/space).
+// Présente le titre/avatar du créateur, le tarif, la liste des pages premium,
+// et un CTA d'abonnement si le visiteur n'a pas accès. Réutilise `data.space`
+// déjà calculé côté serveur dans /api/identities/:handle.
+async function renderSpaceIndex(handle) {
+  app.innerHTML = `<p class="loading">Chargement…</p>`;
+  await loadAuth();
+  let data;
+  try {
+    data = await api(`/api/identities/${encodeURIComponent(handle.replace(/^@/, ""))}`, {
+      headers: viewerHeaders(),
+    });
+  } catch {
+    app.innerHTML = `
+      ${siteHeader({ right: headerAccount() })}
+      <div class="card" style="text-align:center;max-width:420px;margin:3rem auto">
+        <div class="empty-milo">${miloSvg(110)}</div>
+        <h1>Introuvable</h1>
+        <p class="subtitle">Aucune identité « @${esc(handle)} ».</p>
+        <a class="btn primary" href="/">Retour</a>
+      </div>`;
+    return;
+  }
+
+  const sp = data.space;
+  const isSelf = !!(data.viewer && data.viewer.handle === data.handle);
+  const canAccess = isSelf || !!sp?.subscribed;
+  const pages = Array.isArray(sp?.pages) ? sp.pages : [];
+  const price = sp?.price_cents
+    ? `${(sp.price_cents / 100).toFixed(2).replace(".", ",")} ${(sp.currency || "eur").toUpperCase()}/mois`
+    : "";
+  const pageIcon = (t) =>
+    t === "gallery" ? icon("image", 16)
+    : t === "link"  ? icon("link", 16)
+    : t === "file"  ? icon("download", 16)
+    : icon("chat", 16);
+
+  // En-tête : avatar + nom + handle du créateur, bouton retour standard.
+  const displayName =
+    data.fields?.find((f) => f.key === "display_name")?.value || data.handle;
+  const avatar = data.hasPhoto
+    ? `<img class="spx-avatar" src="/api/identities/${encodeURIComponent(data.handle)}/photo?ts=${Date.now()}" alt="">`
+    : data.handle === "milo"
+      ? `<div class="spx-avatar spx-avatar-milo">${miloSvg(56)}</div>`
+      : `<div class="spx-avatar spx-avatar-gen">${genericAvatarSvg(data.handle, (displayName[0] || "·").toUpperCase())}</div>`;
+
+  const backHref = `/@${esc(handle)}`;
+
+  // Corps : pour un visiteur, l'espace n'existe que si tarif fixé ET au moins
+  // une page publiée. Sinon (et hors propriétaire), on bascule sur l'état vide.
+  if (!sp || (!isSelf && (!pages.length || !sp.price_cents))) {
+    app.innerHTML = `
+      ${siteHeader({ right: headerAccount() })}
+      <div class="spx" role="main">
+        <div class="spx-topbar">${backBtnHtml(backHref, `Retour vers @${esc(handle)}`)}</div>
+        <div class="card spx-empty">
+          <div class="empty-milo">${miloSvg(80)}</div>
+          <h1>Pas d'espace privé</h1>
+          <p class="subtitle">@${esc(handle)} n'a pas encore publié de page réservée.</p>
+          <a class="btn" href="/@${esc(handle)}">Voir le profil de @${esc(handle)}</a>
+        </div>
+      </div>`;
+    footer.innerHTML = `<a class="brand" href="/" style="justify-content:center"><span class="brand-milo">${miloSvg(40)}</span> mindlog · id</a>`;
+    applyTheme(storedTheme() || "dark");
+    wireHeaderSearch();
+    wireProfileMenuBtn();
+    wireBackBtn(app);
+    return;
+  }
+
+  // Grille de pages : auto-fill 1→3 colonnes selon largeur écran (240px min).
+  const pagesHtml = canAccess
+    ? `<div class="spx-grid" role="list">
+         ${pages.map((p) => {
+           const isDraft = p.published === false;
+           return `<a class="spx-card${isDraft ? " is-draft" : ""}" role="listitem" href="/@${esc(handle)}/p/${esc(p.slug)}">
+             <span class="spx-card-ic">${pageIcon(p.type)}</span>
+             <span class="spx-card-title">${esc(p.title)}</span>
+             ${isDraft ? `<span class="spx-card-badge">brouillon</span>` : ""}
+             <span class="spx-card-arrow" aria-hidden="true">→</span>
+           </a>`;
+         }).join("")}
+       </div>`
+    : `<div class="spx-grid spx-grid--teaser" role="list" aria-hidden="true">
+         ${pages.map((p) =>
+           `<div class="spx-card spx-card--locked" role="listitem">
+             <span class="spx-card-ic">${pageIcon(p.type)}</span>
+             <span class="spx-card-title">${esc(p.title)}</span>
+             <span class="spx-card-lock">${icon("lock", 16)}</span>
+           </div>`).join("")}
+       </div>`;
+
+  // CTA principal de la page espace privé. Un seul bouton primaire — règle
+  // « primary-action ». Pas de tarif fixé = pas d'espace vendable → pas de CTA.
+  const cta = isSelf
+    ? `<a class="btn primary spx-cta" href="/me/premium" aria-label="Gérer mon espace privé">
+         ${icon("sparkles", 18)}<span>Gérer mon espace</span>
+       </a>`
+    : canAccess
+      ? `<div class="spx-status spx-status--ok" role="status">${icon("shield", 16)} Accès débloqué — ${pages.length} page${pages.length > 1 ? "s" : ""} disponible${pages.length > 1 ? "s" : ""}</div>`
+      : sp.price_cents
+        ? `<button type="button" class="btn primary spx-cta" id="spx-subscribe"
+               aria-label="S'abonner à l'espace privé de @${esc(handle)} pour ${esc(price)}">
+             ${icon("sparkles", 18)}
+             <span class="spx-cta-main">S'abonner pour <b>${esc(price)}</b></span>
+           </button>
+           <p class="spx-cta-sub">Accès immédiat aux ${pages.length} page${pages.length > 1 ? "s" : ""} réservée${pages.length > 1 ? "s" : ""} · résiliable à tout moment</p>`
+        : "";
+
+  app.innerHTML = `
+    ${siteHeader({ right: headerAccount() })}
+    <div class="spx" role="main">
+      <div class="spx-topbar">${backBtnHtml(backHref, `Retour vers @${esc(handle)}`)}</div>
+
+      <header class="spx-hero">
+        <div class="spx-hero-id">
+          ${avatar}
+          <div class="spx-hero-text">
+            <p class="spx-hero-eyebrow">${icon("lock", 12)} Espace privé</p>
+            <h1 class="spx-hero-title">${esc(displayName)}</h1>
+            <p class="spx-hero-meta">
+              <a href="/@${esc(handle)}">@${esc(handle)}</a>
+              <span aria-hidden="true">·</span>
+              <span>${pages.length} page${pages.length > 1 ? "s" : ""}${canAccess ? "" : " réservée" + (pages.length > 1 ? "s" : "")}</span>
+              ${price ? `<span aria-hidden="true">·</span><span class="spx-price">${esc(price)}</span>` : ""}
+            </p>
+          </div>
+        </div>
+        <div class="spx-hero-cta">${cta}</div>
+      </header>
+
+      ${sp?.intro_md ? `<section class="spx-intro" aria-label="Mot d'accueil">${mdLite(sp.intro_md)}</section>` : ""}
+
+      ${pagesHtml}
+    </div>`;
+  footer.innerHTML = `<a class="brand" href="/" style="justify-content:center"><span class="brand-milo">${miloSvg(40)}</span> mindlog · id</a>`;
+  applyTheme(storedTheme() || "dark");
+  wireHeaderSearch();
+  wireProfileMenuBtn();
+  wireBackBtn(app);
+
+  app.querySelector("#spx-subscribe")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    if (!isLoggedIn()) {
+      toast("Crée un compte (ou connecte-toi) pour t'abonner à cet espace.");
+      openCreate();
+      return;
+    }
+    // « loading-buttons » : désactive le bouton et indique la progression.
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+    const original = btn.innerHTML;
+    btn.innerHTML = `${icon("sparkles", 18)}<span class="spx-cta-main">Redirection vers le paiement…</span>`;
+    try {
+      const r = await api(`/api/space/${encodeURIComponent(handle)}/subscribe`, {
+        method: "POST",
+        headers: viewerHeaders(),
+      });
+      if (r?.url) { location.assign(r.url); return; }
+      if (r?.subscribed) { location.reload(); return; }
+      throw new Error("Abonnement indisponible pour le moment.");
+    } catch (err) {
+      toast(err?.message || "Abonnement indisponible pour le moment.");
+      btn.disabled = false;
+      btn.removeAttribute("aria-busy");
+      btn.innerHTML = original;
+    }
+  });
+}
+
+// Rend le contenu de la page premium selon son type. Le serveur a déjà
+// transformé les filenames internes en URLs servables (cf. route GET).
+//   - markdown : rendu basique avec mise en forme paragraphe + titres simples
+//   - link     : carte avec note + bouton vers l'URL externe (target=_blank)
+//   - gallery  : grille d'images/vidéos avec lightbox au clic
+//   - file     : bouton de téléchargement
+function renderPaidPageContent(data) {
+  const raw = data.content || "";
+  if (data.type === "link") {
+    let o = {};
+    try { o = JSON.parse(raw); } catch { /* tolère */ }
+    const url = o.url || "";
+    return `<div class="pp-link">
+      ${o.note ? `<p class="pp-link-note">${esc(o.note)}</p>` : ""}
+      <a class="btn primary pp-link-cta" href="${esc(url)}" target="_blank" rel="noopener noreferrer">
+        ${icon("link", 16)} Ouvrir ${esc(url.replace(/^https?:\/\//, "").slice(0, 60))} ↗
+      </a>
+    </div>`;
+  }
+  if (data.type === "gallery") {
+    let items = [];
+    try { items = (JSON.parse(raw).items || []).filter((it) => it.url); } catch { /* tolère */ }
+    if (!items.length) return `<p class="pp-empty">Aucun média pour l'instant.</p>`;
+    return `<div class="pp-gallery">${items.map((it, i) => {
+      const isVideo = it.kind === "video";
+      return `<button type="button" class="pp-gal-item" data-i="${i}" data-url="${esc(it.url)}" data-kind="${isVideo ? "video" : "image"}">
+        ${isVideo
+          ? `<video src="${esc(it.url)}" muted playsinline preload="metadata"></video>`
+          : `<img src="${esc(it.url)}" alt="${esc(it.caption || "")}" loading="lazy" />`}
+        ${it.caption ? `<span class="pp-gal-cap">${esc(it.caption)}</span>` : ""}
+      </button>`;
+    }).join("")}</div>`;
+  }
+  if (data.type === "file") {
+    let o = {};
+    try { o = JSON.parse(raw); } catch { /* tolère */ }
+    if (!o.url) return `<p class="pp-empty">Aucun fichier déposé.</p>`;
+    const fname = o.name || "fichier";
+    const size = o.size ? `<span class="pp-file-size">${(o.size/1024).toFixed(1)} Ko</span>` : "";
+    return `<div class="pp-file">
+      <div class="pp-file-ic">${icon("download", 28)}</div>
+      <div class="pp-file-body">
+        <b>${esc(fname)}</b>
+        ${size}
+      </div>
+      <a class="btn primary" href="${esc(o.url)}" download="${esc(fname)}">${icon("download", 14)} Télécharger</a>
+    </div>`;
+  }
+  // markdown : on préserve sauts de ligne, on échappe le HTML, on transforme les
+  // # titres et **gras** basiques. Pas un parseur complet, juste lisible.
+  return `<div class="pp-markdown">${mdLite(raw)}</div>`;
+}
+
+// Mini-rendu markdown (titres ##, gras **, italique *, listes, paragraphes).
+function mdLite(src) {
+  const lines = String(src || "").split("\n");
+  const out = [];
+  let inList = false;
+  for (const raw of lines) {
+    const line = esc(raw)
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|\s)\*([^*]+)\*(?=\s|$)/g, "$1<em>$2</em>");
+    const h = line.match(/^(#{1,3})\s*(\S.*)/);
+    if (h) {
+      if (inList) { out.push("</ul>"); inList = false; }
+      out.push(`<h${h[1].length}>${h[2]}</h${h[1].length}>`);
+      continue;
+    }
+    const li = line.match(/^[-*]\s+(.+)/);
+    if (li) {
+      if (!inList) { out.push("<ul>"); inList = true; }
+      out.push(`<li>${li[1]}</li>`);
+      continue;
+    }
+    if (inList) { out.push("</ul>"); inList = false; }
+    if (line.trim()) out.push(`<p>${line}</p>`);
+  }
+  if (inList) out.push("</ul>");
+  return out.join("");
+}
+
 // Page payante (Premium marketplace P7) : teaser + déverrouillage. Le contenu
 // complet n'est rendu que si le serveur confirme l'accès (achat vérifié).
 async function renderPaidPage(handle, slug) {
@@ -2159,22 +2470,40 @@ async function renderPaidPage(handle, slug) {
   }
   const price = `${(data.price_cents / 100).toFixed(2)} ${(data.currency || "eur").toUpperCase()}`;
   app.innerHTML = `
-    ${siteHeader({
-      right: headerAccount(),
-    })}
-    <div class="card pp-view" style="max-width:680px;margin:1.5rem auto">
-      <a class="lbl-sm" href="/@${esc(handle)}">← @${esc(handle)}</a>
-      <h1 style="margin:.4rem 0">${esc(data.title)}</h1>
-      ${data.access
-        ? `<div class="pp-content">${esc(data.content || "")}</div>`
-        : `<div class="pp-locked" style="text-align:center;padding:1.5rem 0">
-             <div class="empty-milo">${miloSvg(72)}</div>
-             <p>Contenu réservé. Débloquez l'accès pour le consulter.</p>
-             <button class="btn primary" id="pp-buy">${icon("tag", 16)} Débloquer pour ${esc(price)}</button>
-           </div>`}
+    ${siteHeader({ right: headerAccount() })}
+    <div class="spx" role="main">
+      <div class="spx-topbar">${backBtnHtml(`/@${esc(handle)}/space`, `Retour à l'espace privé de @${esc(handle)}`)}</div>
+      <article class="card pp-view">
+        <h1 style="margin:.2rem 0 1rem">${esc(data.title)}</h1>
+        ${data.access
+          ? renderPaidPageContent(data)
+          : `<div class="pp-locked" style="text-align:center;padding:1.5rem 0">
+               <div class="empty-milo">${miloSvg(72)}</div>
+               <p>Contenu réservé. Débloquez l'accès pour le consulter.</p>
+               <button class="btn primary" id="pp-buy">${icon("tag", 16)} Débloquer pour ${esc(price)}</button>
+             </div>`}
+      </article>
     </div>`;
   footer.innerHTML = `<a class="brand" href="/" style="justify-content:center"><span class="brand-milo">${miloSvg(40)}</span> mindlog · id</a>`;
   applyTheme(storedTheme() || "dark");
+  wireBackBtn(app);
+  // Lightbox sur clic d'une vignette galerie (réutilise le style .gal-lb).
+  app.querySelectorAll(".pp-gal-item").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const url = btn.dataset.url;
+      const kind = btn.dataset.kind;
+      const lb = document.createElement("div");
+      lb.className = "gal-lb";
+      lb.innerHTML = `<div class="gal-lb-inner">${
+        kind === "video"
+          ? `<video src="${esc(url)}" controls autoplay></video>`
+          : `<img src="${esc(url)}" />`
+      }<button class="gal-lb-close" title="Fermer">✕</button></div>`;
+      lb.addEventListener("click", (e) => { if (e.target === lb) lb.remove(); });
+      lb.querySelector(".gal-lb-close").addEventListener("click", () => lb.remove());
+      document.body.appendChild(lb);
+    });
+  });
   app.querySelector("#pp-buy")?.addEventListener("click", async () => {
     if (!isLoggedIn()) {
       toast("Crée un compte (ou connecte-toi) pour acheter cette page.");
@@ -2234,22 +2563,53 @@ async function renderPublicProfile(handle) {
   // Boutons « Discuter » + « Appel » : réservés aux contacts, placés dans la
   // colonne profil (et non plus dans l'en-tête du site / la fenêtre de chat).
   const _opts = data.options || {};
-  const _canChat = isContact && _opts.allowChat !== false;
-  const _canCall = isContact && _opts.allowCall !== false;
+  // Gating Premium : si le créateur a un tarif fixé ET bénéfices chat/call
+  // activés, les visiteurs non abonnés ne voient PAS les boutons (le
+  // serveur renvoie 402 de toute façon, on prévient l'utilisateur).
+  const _sp = data.space;
+  const _spaceGated = !!(_sp && _sp.price_cents);
+  const _benefits = _sp?.benefits || {};
+  const _hasSpaceAccess = isSelf || !!_sp?.subscribed;
+  const _chatBlockedByPremium = _spaceGated && !!_benefits.chat && !_hasSpaceAccess;
+  const _callBlockedByPremium = _spaceGated && !!_benefits.call && !_hasSpaceAccess;
+  const _canChat = isContact && _opts.allowChat !== false && !_chatBlockedByPremium;
+  const _canCall = isContact && _opts.allowCall !== false && !_callBlockedByPremium;
+  // Quand bloqué par premium, on remplace par un CTA d'abonnement plutôt que de
+  // tout masquer (l'utilisateur doit savoir comment débloquer).
+  const _premiumGateCta = (_chatBlockedByPremium || _callBlockedByPremium) && isContact && !isSelf
+    ? `<a class="btn sm primary" href="/@${esc(data.handle)}/space" title="S'abonner pour débloquer chat &amp; appel">${icon("lock", 15)} Réservé aux abonné·e·s</a>`
+    : "";
   const _contactActions =
-    _canChat || _canCall
+    _canChat || _canCall || _premiumGateCta
       ? `<div class="profile-contact-actions">
           ${_canChat ? `<button class="btn sm primary" id="chat-btn">${icon("chat", 15)} Discuter</button>` : ""}
           ${_canCall ? `<button class="btn sm" id="call-btn" title="Appel pair-à-pair"${data.pubkey ? "" : " disabled"}>${icon("camera", 15)} Appel</button>` : ""}
+          ${_premiumGateCta}
         </div>`
       : "";
   const LOG_OUT_SVG = `<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>`;
+  // Bouton d'accès à l'« Espace privé » directement depuis le cover hero
+  // (rangée d'actions sous l'identité, à côté de Discuter/Appel) : pointe vers
+  // /@handle/space, la page index dédiée (titre, prix, liste des pages, paywall).
+  // - Propriétaire (isSelf) : lien direct vers /me/premium (gestion).
+  // - Visiteur : lien vers /@handle/space (la page gère elle-même les états).
+  const _spaceBtnHtml = (() => {
+    const sp = data.space;
+    if (!sp) return "";
+    if (isSelf) {
+      return `<a class="btn sm" href="/me/premium">${icon("lock", 15)} Mon espace</a>`;
+    }
+    const n = Array.isArray(sp.pages) ? sp.pages.length : 0;
+    if (!n) return "";
+    const cls = sp.subscribed ? "btn sm primary" : "btn sm";
+    return `<a class="${cls}" href="/@${esc(data.handle)}/space">${icon("lock", 15)} Espace privé</a>`;
+  })();
   const _profileActions = {
     isSelf,
     topLeft: "",  // La barre standard (logo + recherche + chip) remplace les glass buttons
     left: "",
     right: relBtnHtml(), // Bouton relation dans la zone cover-actions (bas du hero)
-    contact: _contactActions,
+    contact: _contactActions + _spaceBtnHtml,
   };
   app.innerHTML = `
     ${siteHeader({
@@ -2311,7 +2671,40 @@ async function renderPublicProfile(handle) {
   app.querySelector("#qr-btn")?.addEventListener("click", () =>
     openQR(`${location.origin}/@${data.handle}`, `@${data.handle}`)
   );
-  app.querySelector("#chat-btn")?.addEventListener("click", () => host.chat.open(data.handle, myKey(), myHandle()));
+
+
+  // Espace privé : bouton « S'abonner » → Stripe Checkout subscription mensuelle.
+  // Si pas connecté on déclenche la création de compte (le checkout exige une
+  // identité). En dev sans Stripe Connect, l'utilisateur peut court-circuiter
+  // via Options → Dev → « + Simuler l'abonnement ».
+  app.querySelector("#pub-space-subscribe")?.addEventListener("click", async (e) => {
+    const h = e.currentTarget.dataset.handle || data.handle;
+    if (!isLoggedIn()) {
+      toast("Crée un compte (ou connecte-toi) pour t'abonner à cet espace.");
+      openCreate();
+      return;
+    }
+    try {
+      const r = await api(`/api/space/${encodeURIComponent(h)}/subscribe`, {
+        method: "POST",
+        headers: viewerHeaders(),
+      });
+      if (r?.url) location.assign(r.url);
+      else if (r?.subscribed) location.reload();
+    } catch (err) {
+      toast(err?.message || "Abonnement indisponible pour le moment.");
+    }
+  });
+  app.querySelector("#chat-btn")?.addEventListener("click", async () => {
+    if (!document.getElementById("deck")) await renderPrivate(null);
+    // Navigate to the Chat column then simulate a contact click so the
+    // conversation opens inline in comm-right (same UX as clicking a contact).
+    window.__deckGoLabel?.("Chat");
+    const item = document.querySelector(`.comm-contact-item[data-handle="${CSS.escape(data.handle)}"]`);
+    if (item) { item.click(); return; }
+    // Fallback: handle not in contact list yet, open as deck column
+    host.chat.open(data.handle, myKey(), myHandle());
+  });
   app.querySelector("#call-btn")?.addEventListener("click", () => {
     if (data.pubkey && host.call) host.call.start(data.handle, data.pubkey, { video: _opts.allowVideo !== false });
   });
@@ -2377,15 +2770,34 @@ async function renderPublicProfile(handle) {
   // ── Avatar upload (isSelf) ─────────────────────────────────────────────────
   const avFile = app.querySelector("#pub-av-file");
   if (avFile) {
-    // Taille d'affichage : S / L / XL
-    const avSizeKey = `mindlog.av_size.${data.handle}`;
-    const applyAvSize = (s) => {
-      app.querySelector(".pub-av-wrap")?.setAttribute("data-size", s || "l");
-      localStorage.setItem(avSizeKey, s);
-      app.querySelectorAll(".pub-av-size-btn").forEach(b => b.classList.toggle("active", b.dataset.size === s));
+    // Taille d'affichage : S / L / XL — persistée côté serveur (settings.avatar_size)
+    // pour être visible des visiteurs. Pas de localStorage : la source de vérité
+    // est /api/me (propriétaire) et data.avatarSize (visiteur, via /api/identities).
+    // Reclic sur la taille déjà active → bascule la FORME (circle ↔ square).
+    let currentSize = data.settings?.avatar_size || data.avatarSize || "l";
+    let currentShape = data.settings?.avatar_shape || data.avatarShape || "circle";
+    const applyAvLocal = (size, shape) => {
+      const w = app.querySelector(".pub-av-wrap");
+      if (w) { w.setAttribute("data-size", size || "l"); w.setAttribute("data-shape", shape || "circle"); }
+      app.querySelectorAll(".pub-av-size-btn").forEach(b => b.classList.toggle("active", b.dataset.size === size));
     };
-    applyAvSize(localStorage.getItem(avSizeKey) || "l");
-    app.querySelectorAll(".pub-av-size-btn").forEach(b => b.addEventListener("click", () => applyAvSize(b.dataset.size)));
+    applyAvLocal(currentSize, currentShape);
+    const persistAv = async (size, shape) => {
+      try {
+        await api("/api/me/settings", { method: "PATCH", headers: jsonAuth(), body: JSON.stringify({ avatar_size: size, avatar_shape: shape }) });
+      } catch (e) { toast(e?.message || "Échec d'enregistrement."); }
+    };
+    app.querySelectorAll(".pub-av-size-btn").forEach(b => b.addEventListener("click", () => {
+      const s = b.dataset.size;
+      if (s === currentSize) {
+        // Reclic sur la taille active → bascule la forme.
+        currentShape = currentShape === "circle" ? "square" : "circle";
+      } else {
+        currentSize = s;
+      }
+      applyAvLocal(currentSize, currentShape);
+      void persistAv(currentSize, currentShape);
+    }));
 
     avFile.addEventListener("change", async () => {
       const file = avFile.files?.[0]; if (!file) return;
@@ -2407,6 +2819,105 @@ async function renderPublicProfile(handle) {
         });
       } catch (e) { toast(e.message); }
       avFile.value = "";
+    });
+  }
+
+  // ── Badge de plan + menu Premium (isSelf) ─────────────────────────────────
+  // Premium : toggle un menu pop-over listant les fonctions débloquées (chaque
+  // item mène à /me/premium#anchor). Gratuit : redirige directement vers la
+  // page Premium (où l'utilisateur peut s'abonner ou voir l'offre).
+  const planBadge = app.querySelector("#pub-plan-badge");
+  if (planBadge) {
+    const menu = app.querySelector("#pub-plan-menu");
+    planBadge.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!menu) { location.assign("/me/premium"); return; }
+      const open = !menu.hidden;
+      menu.hidden = open;
+      planBadge.setAttribute("aria-expanded", String(!open));
+    });
+    if (menu) {
+      // Fermeture au clic dehors ou à Échap.
+      document.addEventListener("click", (e) => {
+        if (menu.hidden) return;
+        if (!menu.contains(e.target) && e.target !== planBadge) {
+          menu.hidden = true;
+          planBadge.setAttribute("aria-expanded", "false");
+        }
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !menu.hidden) {
+          menu.hidden = true;
+          planBadge.setAttribute("aria-expanded", "false");
+          planBadge.focus();
+        }
+      });
+    }
+  }
+
+  // ── Drag des badges flottants sur la cover (isSelf) ───────────────────────
+  // L'édition d'attributs (label/URL/icône/forme/show_label) vit dans
+  // /me/premium (page Gérer). Ici on permet seulement de DÉPLACER les badges,
+  // puis on PUT /api/page/buttons avec la liste complète (pos_x/pos_y + autres
+  // attributs préservés depuis data.buttons).
+  const fbtnLayer = app.querySelector("#pub-fbtn-layer");
+  if (isSelf && fbtnLayer) {
+    // État cloné — on mute uniquement pos_x/pos_y ; les autres champs restent.
+    const state = (Array.isArray(data.buttons) ? data.buttons : []).map((b) => ({
+      label: String(b.label || ""),
+      url: String(b.url || ""),
+      icon: String(b.icon || ""),
+      pos_x: Number(b.pos_x ?? 0.5),
+      pos_y: Number(b.pos_y ?? 0.9),
+      shape: b.shape === "square" ? "square" : "circle",
+      show_label: !!b.show_label,
+    }));
+    let saveTimer = null;
+    const save = () => {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(async () => {
+        try {
+          const buttons = state.filter((b) => b.label && b.url);
+          await api("/api/page/buttons", { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ buttons }) });
+        } catch (e) { toast(e?.message === "premium required" ? "Réservé aux Premium." : (e?.message || "Échec d'enregistrement.")); }
+      }, 280);
+    };
+    fbtnLayer.querySelectorAll(".pub-fbtn.is-self").forEach((el) => {
+      let dragging = false, moved = false, startX = 0, startY = 0;
+      // Bloque le drag natif du lien (Chromium/Firefox démarrent une opération
+      // de drag-and-drop sur un <a> au pointerdown, ce qui tue nos pointermove).
+      el.addEventListener("dragstart", (ev) => ev.preventDefault());
+      el.addEventListener("pointerdown", (ev) => {
+        if (ev.button !== undefined && ev.button !== 0) return;
+        ev.preventDefault(); // évite la sélection / drag fantôme
+        dragging = true; moved = false;
+        startX = ev.clientX; startY = ev.clientY;
+        el.classList.add("is-dragging");
+        el.setPointerCapture?.(ev.pointerId);
+      });
+      el.addEventListener("pointermove", (ev) => {
+        if (!dragging) return;
+        if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) > 4) moved = true;
+        if (!moved) return;
+        ev.preventDefault();
+        const rect = fbtnLayer.getBoundingClientRect();
+        const nx = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+        const ny = Math.max(0, Math.min(1, (ev.clientY - rect.top)  / rect.height));
+        const i = Number(el.dataset.i);
+        if (state[i]) { state[i].pos_x = nx; state[i].pos_y = ny; }
+        el.style.left = `${(nx * 100).toFixed(3)}%`;
+        el.style.top  = `${(ny * 100).toFixed(3)}%`;
+      });
+      const onUp = (ev) => {
+        if (!dragging) return;
+        dragging = false;
+        el.classList.remove("is-dragging");
+        el.releasePointerCapture?.(ev.pointerId);
+        if (moved) { ev.preventDefault(); ev.stopPropagation(); save(); }
+      };
+      el.addEventListener("click", (ev) => { if (moved) { ev.preventDefault(); ev.stopPropagation(); } });
+      el.addEventListener("pointerup", onUp);
+      el.addEventListener("pointercancel", onUp);
     });
   }
 
@@ -2475,7 +2986,8 @@ async function renderPublicProfile(handle) {
   }
 
   host.calendar.wire(app.querySelector(".calendar"), data.overrides || {}, false, data.handle, undefined, !isSelf);
-  app.querySelector("#ask-rdv")?.addEventListener("click", () => host.calendar.openBooking(data.handle, null));
+  // (bouton « Demander un RDV » retiré : seul le clic sur un jour libre
+  // déclenche la modale, comme indiqué par .cal-hint.)
 
   // Bio inline éditable (isSelf uniquement)
   const bioEdit = app.querySelector("#pub-bio-edit");
@@ -2683,6 +3195,14 @@ function profileCardHtml(data, profileActions = {}) {
         </div>`;
 }
 
+// Section « Espace privé » de la page publique /@handle.
+// Désormais désactivée : le bouton « Mon espace » de l'en-tête sert de point
+// d'accès aux propriétaires et abonnés, et l'abonnement passe par /@handle/space
+// (CTA dédié). On garde la fonction pour ne pas casser les appels existants.
+function spaceSectionHtml(_space, _handle, _isSelf) {
+  return "";
+}
+
 function cardViewHtml(data, editable, profileActions = "") {
   host.calendar.setAvailability(data.availability);
   const isSelf = !!(data.viewer && data.viewer.handle === data.handle);
@@ -2716,16 +3236,44 @@ function cardViewHtml(data, editable, profileActions = "") {
   const coverIsVideo = !!(coverMedia && coverMedia.type === "video");
   const coverUrl =
     (coverMedia && !coverIsVideo ? coverMedia.url : "") || get("cover") || "/static/default-cover.webp";
-  // Boutons personnalisés Premium (P5).
+  // Boutons personnalisés Premium (P5) — version positionnable. Petits boutons
+  // (cercle/carré, ~44px) flottants sur la cover-hero, position normalisée 0..1.
+  // Propriétaire : drag pour repositionner + panneau d'édition sous la cover.
+  // Visiteur : badges cliquables fixes à leur position persistée.
   const pageButtons = Array.isArray(data.buttons) ? data.buttons : [];
-  const buttonsHtml = pageButtons.length
-    ? `<div class="pub-buttons">${pageButtons
-        .map(
-          (b) =>
-            `<a class="pub-btn" href="${esc(b.url)}" target="_blank" rel="noopener nofollow noreferrer">${b.icon ? icon(b.icon, 16) : ""}<span>${esc(b.label)}</span></a>`
-        )
-        .join("")}</div>`
-    : "";
+  const ICON_HINTS = ["link", "mail", "phone", "calendar", "chat", "image", "user", "users", "tag", "sparkles", "shield", "lock", "send", "zap", "pin", "smartphone", "home", "code"];
+  const isPremium = data.plan === "premium";
+
+  // Badge flottant unique. data-id : index dans la liste (sert au drag/save).
+  const floatingBtnHtml = (b, i) => {
+    const px = Math.max(0, Math.min(1, Number(b.pos_x ?? 0.5)));
+    const py = Math.max(0, Math.min(1, Number(b.pos_y ?? 0.9)));
+    const shape = b.shape === "square" ? "square" : "circle";
+    const showLabel = !!b.show_label;
+    const labelTxt = showLabel ? `<span class="pub-fbtn-lbl">${esc(b.label)}</span>` : "";
+    // draggable="false" + dragstart preventDefault au wiring : sans ça, le
+    // navigateur démarre son drag natif de lien (icône fantôme), qui consomme
+    // les pointermove → notre drag personnalisé ne se déclenche pas.
+    // data-label : utilisé par le tooltip CSS au survol (cf. .pub-fbtn[data-label]).
+    // Pas de title= → évite le double tooltip natif + custom.
+    return `<a class="pub-fbtn pub-fbtn--${shape}${showLabel ? " has-label" : ""}${isSelf ? " is-self" : ""}"
+       data-i="${i}"
+       data-label="${esc(b.label || "")}"
+       href="${esc(b.url)}"
+       target="_blank" rel="noopener nofollow noreferrer"
+       draggable="false"
+       style="left:${(px*100).toFixed(3)}%;top:${(py*100).toFixed(3)}%;"
+       aria-label="${esc(b.label || b.url)}">${b.icon ? icon(b.icon, 18) : icon("link", 18)}${labelTxt}</a>`;
+  };
+  const floatingButtonsHtml = pageButtons.length
+    ? `<div class="pub-fbtn-layer" id="pub-fbtn-layer">${pageButtons.map(floatingBtnHtml).join("")}</div>`
+    : (isSelf ? `<div class="pub-fbtn-layer" id="pub-fbtn-layer" aria-hidden="true"></div>` : "");
+
+  // L'édition des attributs (label/url/icon/forme/show_label) se fait dans
+  // /me/premium → bouton « Gérer ». Sur la homepage, seul le DRAG des badges
+  // sur la cover est actif côté propriétaire (positionnement direct).
+  void ICON_HINTS;
+  void isPremium;
 
   const coverAv = data.hasPhoto
     ? `<img class="pub-cover-av" src="/api/identities/${encodeURIComponent(data.handle)}/photo?ts=${Date.now()}" alt="Photo de ${esc(name)}" />`
@@ -2762,7 +3310,7 @@ function cardViewHtml(data, editable, profileActions = "") {
           ${profileActions?.left || ""}
         </div>
         <div class="pub-cover-identity">
-          <div class="pub-av-wrap${profileActions?.isSelf ? " pub-av-editable" : ""}">
+          <div class="pub-av-wrap${profileActions?.isSelf ? " pub-av-editable" : ""}" data-size="${esc(data.avatarSize || data.settings?.avatar_size || "l")}" data-shape="${esc(data.avatarShape || data.settings?.avatar_shape || "circle")}">
             <div class="pub-av-photo">
               ${coverAv}${vaultBadge}
               ${profileActions?.isSelf ? `
@@ -2780,7 +3328,28 @@ function cardViewHtml(data, editable, profileActions = "") {
           </div><!-- /pub-av-wrap -->
           <div class="pub-cover-names">
             <h1 class="pub-cover-name">${esc(name)}</h1>
-            <p class="pub-cover-handle">@${esc(data.handle)}</p>
+            <div class="pub-cover-handle-row">
+              <p class="pub-cover-handle">@${esc(data.handle)}</p>
+              ${profileActions?.isSelf ? `
+                <div class="pub-plan-wrap">
+                  <button type="button" class="pub-plan-badge ${data.plan === "premium" ? "is-premium" : "is-free"}" id="pub-plan-badge" aria-haspopup="menu" aria-expanded="false" aria-controls="pub-plan-menu">
+                    ${data.plan === "premium" ? `${icon("sparkles", 12)} Premium` : `Gratuit`}
+                  </button>
+                  ${data.plan === "premium" ? `
+                  <div class="pub-plan-menu" id="pub-plan-menu" role="menu" hidden>
+                    <p class="pub-plan-menu-title">${icon("sparkles", 13)} Tes fonctions premium</p>
+                    <a class="pub-plan-item" role="menuitem" href="/me/premium#cover">${icon("image", 14)}<span><b>Couverture</b><small>Photo ou vidéo en bannière</small></span></a>
+                    <a class="pub-plan-item" role="menuitem" href="/me/premium#buttons">${icon("link", 14)}<span><b>Boutons personnalisés</b><small>Liens sur ta page publique</small></span></a>
+                    <a class="pub-plan-item" role="menuitem" href="/me/premium#pages">${icon("tag", 14)}<span><b>Pages payantes</b><small>Vente d'accès — commission 30 %</small></span></a>
+                    <a class="pub-plan-item" role="menuitem" href="/me/premium#gallery">${icon("image", 14)}<span><b>Liens galerie</b><small>Photos cliquables vers une URL</small></span></a>
+                    <a class="pub-plan-cta btn sm primary" href="/me/premium">Gérer mon abonnement →</a>
+                  </div>` : ""}
+                </div>`
+              : data.plan === "premium" ? `
+                <!-- Visiteur d'un compte premium : badge stylisé indicatif, non cliquable, pas de menu. -->
+                <span class="pub-plan-badge is-premium pub-plan-badge--readonly" aria-label="Compte Premium">${icon("sparkles", 12)} Premium</span>`
+              : ""}
+            </div>
             ${title ? `<p class="pub-cover-title">${esc(title)}</p>` : ""}
             ${location ? `<p class="pub-cover-loc">${icon("pin", 12)} ${esc(location)}</p>` : ""}
           </div>
@@ -2795,12 +3364,27 @@ function cardViewHtml(data, editable, profileActions = "") {
           <button type="button" class="pub-hero-dot" data-tab="agenda" aria-label="Calendrier"></button>
           <button type="button" class="pub-hero-dot" data-tab="gallery" aria-label="Galerie"></button>
         </div>
-        <!-- About : bio/tags/socials en bas du slide home (mobile uniquement) -->
-        ${bio || tags || socials ? `<div class="pub-cover-about">
-          ${bio ? `<p class="pub-bio">${esc(bio)}</p>` : ""}
-          ${tags}
-          ${socials ? `<div class="pub-socials">${socials}</div>` : ""}
-        </div>` : ""}
+        <!-- About : bloc espace privé + intro markdown + bio/tags/socials en bas
+             du slide home (mobile uniquement — .pub-cover-about est display:none
+             en desktop). -->
+        ${(() => {
+          const spaceHtml = spaceSectionHtml(data.space, data.handle, isSelf);
+          const profileIntroMd = data.space?.profile_intro_md || "";
+          // L'intro Markdown remplace la bio plain-text quand elle est définie :
+          // un seul bloc « présentation » au lieu de deux empilés.
+          const presentationHtml = profileIntroMd
+            ? `<section class="pub-intro" aria-label="Présentation">${mdLite(profileIntroMd)}</section>`
+            : (bio ? `<p class="pub-bio">${esc(bio)}</p>` : "");
+          if (!presentationHtml && !tags && !socials && !spaceHtml) return "";
+          return `<div class="pub-cover-about">
+            ${spaceHtml}
+            ${presentationHtml}
+            ${tags}
+            ${socials ? `<div class="pub-socials">${socials}</div>` : ""}
+          </div>`;
+        })()}
+        <!-- Calque des boutons flottants — par-dessus la cover, sous l'identity. -->
+        ${floatingButtonsHtml}
       </div>
 
       <!-- Contenu : onglets (desktop) + panneaux scrollables (mobile carousel) -->
@@ -2822,11 +3406,23 @@ function cardViewHtml(data, editable, profileActions = "") {
 
         <div class="pub-tab-body" id="pub-tab-body">
           <section id="pub-about" class="pub-tab-panel is-on" role="tabpanel" tabindex="0">
-            ${isSelf
-              ? `<textarea id="pub-bio-edit" class="pub-bio-edit" placeholder="Décrivez-vous en quelques mots…" rows="3">${esc(bio)}</textarea>`
-              : bio ? `<p class="pub-bio">${esc(bio)}</p>` : ""}
+            ${spaceSectionHtml(data.space, data.handle, isSelf)}
+            ${(() => {
+              const profileIntroMd = data.space?.profile_intro_md || "";
+              // Présentation unifiée : si intro_md, on l'affiche en HTML et on
+              // masque le textarea bio (le proprio édite l'intro via /me/premium).
+              if (profileIntroMd) {
+                return `<section class="pub-intro" aria-label="Présentation">${mdLite(profileIntroMd)}</section>${
+                  isSelf ? `<p class="pub-intro-edit-hint lbl-sm"><a href="/me/premium">${icon("user", 12)} Modifier ma présentation →</a></p>` : ""
+                }`;
+              }
+              return isSelf
+                ? `<textarea id="pub-bio-edit" class="pub-bio-edit" placeholder="Décrivez-vous en quelques mots…" rows="3">${esc(bio)}</textarea>`
+                : (bio ? `<p class="pub-bio">${esc(bio)}</p>` : "");
+            })()}
             ${tags}
-            ${buttonsHtml}
+            <!-- Boutons personnalisés : badges flottants sur la cover (pas dans la timeline). -->
+            ${isSelf ? "" : ""}
             ${socials ? `<div class="pub-socials">${socials}</div>` : ""}
             ${visible.length ? `<ul class="fields pub-fields">${visible.map((f) =>
               `<li class="field"><span class="k">${esc(f.label || f.key)}</span>${valueHtml(f.key, f.value)}</li>`
@@ -2840,8 +3436,7 @@ function cardViewHtml(data, editable, profileActions = "") {
                 ${host.calendar.html(data.overrides, false, undefined, canBook)}
               </div>
               ${isSelf || data.options?.allowRequests === false ? "" :
-                `<button class="btn primary" id="ask-rdv" style="width:100%;justify-content:center;margin-top:.75rem">
-                  ${icon("calendar", 16)} Demander un RDV</button>`}` : ""}
+                `<p class="cal-hint" role="note">${icon("calendar", 14)} <span>Choisis un <b>jour libre</b> (en vert) pour demander un RDV.</span></p>`}` : ""}
             ${upcomingGroups.length ? `
               <div class="pub-section-h${!hasAvailability ? " first" : ""}">${icon("calendar", 16)} Prochains événements</div>
               <div class="ev-agenda">
@@ -2969,7 +3564,56 @@ function openGalLightbox(root, items, startIdx) {
   update();
 }
 
+// Flèches stylisées ">" qui indiquent qu'une slide voisine existe (mobile
+// carrousel : home / agenda / gallery — gallery peut être absente). Synchro
+// à chaque changement de slide actif via syncDot/syncDots. Au clic, navigue
+// vers la slide précédente/suivante en réutilisant _pubTabGo.
+function pubSlideArrows(activeKey) {
+  // Slides actuellement disponibles dans l'ordre, en lisant les dots du DOM.
+  // (Le dot "gallery" est retiré si la galerie est vide — cf. catch sur la
+  //  requête /api/gallery → retrait du data-tab="gallery".)
+  const order = [...document.querySelectorAll(".pub-hero-dot[data-tab]")].map((d) => d.dataset.tab);
+  const left  = document.querySelector(".pub-slide-arrow--left");
+  const right = document.querySelector(".pub-slide-arrow--right");
+  if (!left || !right || !order.length) return;
+  // Sur grand écran le carrousel mobile est désactivé : on cache les flèches.
+  if (!window.matchMedia("(max-width: 767px)").matches) {
+    left.hidden = true; right.hidden = true;
+    return;
+  }
+  const i = Math.max(0, order.indexOf(activeKey));
+  left.hidden  = i <= 0;
+  right.hidden = i >= order.length - 1;
+  left.dataset.target  = i > 0 ? order[i - 1] : "";
+  right.dataset.target = i < order.length - 1 ? order[i + 1] : "";
+}
+
+// Wiring : injecte (une seule fois) les 2 flèches dans #app, HORS du scroll-
+// container .pub-hero-page — sinon leur passage display:none ↔ inline-flex au
+// fil des slides provoque un layout shift qui interrompt le scroll-snap natif.
+function wirePubSlideArrowsClicks() {
+  const appEl = document.getElementById("app");
+  if (!appEl) return;
+  if (!document.querySelector(".pub-slide-arrow")) {
+    const chev = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
+    const tpl = document.createElement("div");
+    tpl.innerHTML = `
+      <button type="button" class="pub-slide-arrow pub-slide-arrow--left" data-dir="prev" aria-label="Page précédente" hidden>${chev}</button>
+      <button type="button" class="pub-slide-arrow pub-slide-arrow--right" data-dir="next" aria-label="Page suivante" hidden>${chev}</button>`;
+    appEl.append(...tpl.children);
+  }
+  document.querySelectorAll(".pub-slide-arrow").forEach((b) => {
+    if (b.dataset.wired) return;
+    b.dataset.wired = "1";
+    b.addEventListener("click", () => {
+      const target = b.dataset.target;
+      if (target && typeof window._pubTabGo === "function") window._pubTabGo(target);
+    });
+  });
+}
+
 function wirePubTabs() {
+  wirePubSlideArrowsClicks();
   const tabs = [...document.querySelectorAll("#pub-tabs .pub-tab")];
   const allPanels = [...document.querySelectorAll(".pub-tab-panel")];
   if (!tabs.length) return;
@@ -2983,6 +3627,7 @@ function wirePubTabs() {
       t.classList.toggle("is-on", on);
       t.setAttribute("aria-selected", String(on));
     });
+    pubSlideArrows(key);
   }
 
   window._pubTabGo = (tabKey) => {
@@ -3034,6 +3679,7 @@ function wirePubSwipe() {
       t.classList.toggle("is-on", on);
       t.setAttribute("aria-selected", String(on));
     });
+    pubSlideArrows(key);
   };
   const obs = new IntersectionObserver((entries) => {
     entries.forEach((e) => {
@@ -3407,7 +4053,7 @@ onSSE("device", (d) => {
 const _plugins = [];
 Object.assign(host, {
   // utilitaires
-  esc, api, toast, confirmDialog, t,
+  esc, api, toast, confirmDialog, promptDialog, t,
   // temps réel
   connectSSE, onSSE,
   // badge non-lus de la barre de nav (mise à jour en direct depuis le plugin chat)

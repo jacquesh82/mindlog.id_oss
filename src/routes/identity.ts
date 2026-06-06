@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, rmSync, statSync } from "node:fs";
 import { extname, resolve } from "node:path";
 import {
   StoreError,
@@ -35,7 +35,7 @@ import {
   type Identity,
   type Settings,
 } from "../store.js";
-import { isPremium, getSubscription, subscriptionIsPremium, listButtons } from "../premium-api.js";
+import { isPremium, getSubscription, subscriptionIsPremium, listButtons, getSpaceInfo } from "../premium-api.js";
 import { listSessions } from "../session.js";
 import { getConversationsFor } from "../messages.js";
 import { appUrl, isMailConfigured, sendMail } from "../mailer.js";
@@ -48,7 +48,12 @@ const route = new Hono();
 const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY ?? "";
 const TURNSTILE_SITE_KEY = process.env.TURNSTILE_SITE_KEY ?? "";
 
-const isLocalHost = (host: string) => /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host);
+// Inclut les sous-domaines `*.localhost` (dev Caddy : id.mindlog.localhost) +
+// loopback v4/v6 — pour ces hôtes, Turnstile est désactivé côté serveur.
+const isLocalHost = (host: string) =>
+  /^([^.\s]+\.)*localhost(:\d+)?$/i.test(host)
+  || /^127\.0\.0\.1(:\d+)?$/.test(host)
+  || /^\[::1\](:\d+)?$/.test(host);
 
 async function verifyTurnstile(token: string, ip?: string): Promise<boolean> {
   if (!TURNSTILE_SECRET_KEY) return true;
@@ -89,6 +94,14 @@ const COVER_ALLOWED = new Map([
   ["video/webm", ".webm"],
 ]);
 const COVER_MAX = 25 * 1024 * 1024; // 25 Mo
+
+// Cache buster : mtime du fichier cover (en ms). Sert de query string `?v=…`
+// pour invalider le cache navigateur quand l'image est remplacée par une vidéo
+// (ou vice-versa) sous le même nom logique.
+function coverVersion(coverFile: string): number {
+  try { return Math.floor(statSync(resolve(DATA_DIR, coverFile)).mtimeMs); }
+  catch { return 0; }
+}
 
 function servePhoto(c: Context, id: Identity | undefined) {
   if (!id?.photo_file) return c.json({ error: "no photo" }, 404);
@@ -164,7 +177,11 @@ route.post("/api/recover", async (c) => {
 route.get("/api/search", async (c) => {
   const q = c.req.query("q")?.trim() ?? "";
   if (q.length < 1) return c.json({ results: [] });
-  return c.json({ results: await searchIdentities(q) });
+  // Capability Premium : la recherche par tags est offerte aux abonnés Premium.
+  // Les visiteurs anonymes et comptes free n'ont que handle + display_name.
+  const viewer = await currentIdentity(c);
+  const includeTags = viewer ? await isPremium(viewer.id) : false;
+  return c.json({ results: await searchIdentities(q, 12, { includeTags }) });
 });
 
 // Carte publique par handle.
@@ -185,7 +202,7 @@ route.get("/api/identities/:handle", async (c) => {
   const premium = await isPremium(id.id);
   const cover =
     premium && id.cover_file
-      ? { url: `/api/identities/${encodeURIComponent(id.handle)}/cover`, type: id.cover_type || "image" }
+      ? { url: `/api/identities/${encodeURIComponent(id.handle)}/cover?v=${coverVersion(id.cover_file)}`, type: id.cover_type || "image" }
       : null;
   return c.json({
     handle: id.handle,
@@ -197,12 +214,17 @@ route.get("/api/identities/:handle", async (c) => {
     relations: { 1: await getDirectRelations(id.id) },
     tags: await getTags(id.id),
     hasPhoto: !!id.photo_file,
+    avatarSize: settings.avatar_size,   // taille publique de l'avatar (cf. pub-av-wrap[data-size])
+    avatarShape: settings.avatar_shape, // forme publique : "circle" | "square"
     pubkey: id.pubkey,
     // Statut d'offre, public (sans détails de facturation) : pilote l'affichage
     // des fonctions Premium côté visiteur. La vérité reste serveur.
     plan: premium ? "premium" : "free",
     cover,
     buttons: premium ? await listButtons(id.id) : [],
+    // Espace premium publique : prix + statut d'abonnement du viewer + liste
+    // des pages publiées. Null si le créateur n'a rien publié et pas de tarif.
+    space: premium ? await getSpaceInfo(id.id, viewer?.id ?? null) : null,
     // Dernière connexion (max des sessions) + présence d'une clé dans le coffre E2E.
     lastSeen: (await listSessions(id.id)).reduce((m, s) => (s.lastSeen > m ? s.lastSeen : m), ""),
     hasVault: !!(await getE2eVault(id.id)).vault,
@@ -303,7 +325,7 @@ route.get("/api/me", async (c) => {
     // Couverture + boutons (vue propriétaire) : renvoyés tels quels pour l'édition ;
     // l'affichage public reste conditionné au statut Premium (cf. route publique).
     cover: id.cover_file
-      ? { url: `/api/identities/${encodeURIComponent(id.handle)}/cover`, type: id.cover_type || "image" }
+      ? { url: `/api/identities/${encodeURIComponent(id.handle)}/cover?v=${coverVersion(id.cover_file)}`, type: id.cover_type || "image" }
       : null,
     buttons: await listButtons(id.id),
     settings: parseSettings(id.settings),
@@ -317,7 +339,8 @@ route.patch("/api/me/settings", async (c) => {
   const id = await currentIdentity(c);
   if (!id) return c.json({ error: "unauthorized" }, 401);
   const patch = await readBody<Partial<Settings>>(c);
-  const settings = await setSettings(id.id, patch);
+  const premium = await isPremium(id.id);
+  const settings = await setSettings(id.id, patch, { isPremium: premium });
   return c.json({ ok: true, settings });
 });
 

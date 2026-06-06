@@ -130,6 +130,79 @@ export function promptPin(title, { confirm = false, sub = "" } = {}) {
   });
 }
 
+// Saisie texte applicative — remplace `prompt()` du navigateur. Renvoie la
+// chaîne saisie en cas de validation, ou `null` à l'annulation (Échap, clic
+// dehors, bouton Annuler) — différenciable d'une chaîne vide validée.
+// Options : default, placeholder, ok, cancel, type (text|url|email|tel|password),
+// multiline (textarea), validate(value) renvoyant un message d'erreur ou null.
+export function promptDialog(question, opts = {}) {
+  const {
+    default: def = "",
+    placeholder = "",
+    ok = "Valider",
+    cancel = "Annuler",
+    type = "text",
+    multiline = false,
+    validate = null,
+  } = opts;
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "overlay";
+    const field = multiline
+      ? `<textarea id="pd-in" rows="4" placeholder="${esc(placeholder)}">${esc(def)}</textarea>`
+      : `<input id="pd-in" type="${esc(type)}" placeholder="${esc(placeholder)}" value="${esc(def)}" />`;
+    overlay.innerHTML = `
+      <div class="panel prompt-panel" role="dialog" aria-modal="true">
+        <p class="prompt-msg">${esc(question)}</p>
+        <div class="prompt-field">${field}</div>
+        <p class="prompt-err" id="pd-err" hidden></p>
+        <div class="actions">
+          <button type="button" class="btn" id="pd-no">${esc(cancel)}</button>
+          <button type="button" class="btn primary" id="pd-yes">${esc(ok)}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const input = overlay.querySelector("#pd-in");
+    const errEl = overlay.querySelector("#pd-err");
+
+    const done = (v) => {
+      overlay.remove();
+      document.removeEventListener("keydown", onKey);
+      resolve(v);
+    };
+    const cancelOut = () => done(null);
+    const submit = () => {
+      const v = input.value;
+      if (validate) {
+        const err = validate(v);
+        if (err) {
+          errEl.textContent = err;
+          errEl.hidden = false;
+          input.focus();
+          return;
+        }
+      }
+      done(v);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") cancelOut();
+      // Entrée valide en mono-ligne ; en multiligne il faut Ctrl/⌘+Entrée
+      // (Entrée seule ajoute un retour à la ligne).
+      if (e.key === "Enter" && (!multiline || e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        submit();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    overlay.addEventListener("click", (e) => e.target === overlay && cancelOut());
+    overlay.querySelector("#pd-no").onclick = cancelOut;
+    overlay.querySelector("#pd-yes").onclick = submit;
+    input.focus();
+    if (!multiline) input.select();
+  });
+}
+
 export function copyText(text) {
   if (navigator.clipboard) return navigator.clipboard.writeText(text).catch(() => _copyFallback(text));
   _copyFallback(text);

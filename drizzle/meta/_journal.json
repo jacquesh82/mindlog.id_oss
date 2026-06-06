@@ -169,6 +169,48 @@
       "when": 1780780300000,
       "tag": "0023_paid_pages",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1780780400000,
+      "tag": "0024_page_buttons_positioning",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1780780500000,
+      "tag": "0025_premium_space",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1780780600000,
+      "tag": "0026_premium_space_intro",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1780780700000,
+      "tag": "0027_premium_space_profile_intro",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1780780800000,
+      "tag": "0028_premium_space_benefits",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1780780900000,
+      "tag": "0029_premium_lives",
+      "breakpoints": true
     }
   ]
 }

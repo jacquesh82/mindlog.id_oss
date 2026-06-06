@@ -82,7 +82,18 @@ export default function register(host) {
           const item = btn.closest(".gal-item");
           const id = item.dataset.id;
           const cur = (item.dataset.link || "").replace(/%22/g, '"');
-          const url = prompt("Lien cliquable de la photo (https://…, vide pour retirer) :", cur);
+          const url = await host.promptDialog("Lien cliquable de la photo", {
+            default: cur,
+            placeholder: "https://… (vide pour retirer)",
+            type: "url",
+            ok: "Enregistrer",
+            validate: (v) => {
+              const s = v.trim();
+              if (!s) return null; // vide = retirer le lien
+              if (!/^https?:\/\/\S+$/i.test(s)) return "URL invalide (doit commencer par http:// ou https://).";
+              return null;
+            },
+          });
           if (url === null) return;
           try {
             const r = await host.api(`/api/gallery/${id}/link`, {

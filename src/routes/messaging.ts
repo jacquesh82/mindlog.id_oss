@@ -21,6 +21,7 @@ import { parseSettings } from "../store.js";
 import { resolveDevice, resolveDevicePks } from "../devices.js";
 import { publish } from "../realtime.js";
 import { currentIdentity, readBody, notify, chatPeers } from "./_ctx.js";
+import { getContactGating } from "../premium-api.js";
 
 const route = new Hono();
 
@@ -45,6 +46,10 @@ route.post("/api/messages/:handle", async (c) => {
   if (!peers) return c.json({ error: "réservé aux contacts" }, 403);
   if (!parseSettings(peers.other.settings).allow_chat)
     return c.json({ error: "Ce contact a désactivé la messagerie." }, 403);
+  // Gating Premium : si le destinataire a chat réservé aux abonnés et que je ne
+  // le suis pas, je n'ai pas le droit d'envoyer un message.
+  const gating = await getContactGating(peers.other.id, peers.me.id);
+  if (!gating.chat) return c.json({ error: "Réservé aux abonné·e·s de cet espace." }, 402);
   const body = await readBody<{
     iv?: string;
     ciphertext?: string;
@@ -190,6 +195,9 @@ route.post("/api/signal/:handle", async (c) => {
   if (!peers) return c.json({ error: "réservé aux contacts" }, 403);
   if (!parseSettings(peers.other.settings).allow_call)
     return c.json({ error: "Ce contact a désactivé les appels." }, 403);
+  // Gating Premium : si le destinataire a appel réservé aux abonnés.
+  const gating = await getContactGating(peers.other.id, peers.me.id);
+  if (!gating.call) return c.json({ error: "Appel réservé aux abonné·e·s de cet espace." }, 402);
   const { iv, ciphertext } = await readBody<{ iv: string; ciphertext: string }>(c);
   if (typeof iv !== "string" || typeof ciphertext !== "string" || !iv || !ciphertext || ciphertext.length > 16000)
     return c.json({ error: "signal invalide" }, 400);

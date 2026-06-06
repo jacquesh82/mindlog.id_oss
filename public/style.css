@@ -67,11 +67,20 @@
   --dur-fast: 140ms;
   --dur: 220ms;
   --dur-slow: 340ms;
+  /* ── Bulles de chat (style WhatsApp) ── */
+  --bbl-theirs:      #1e2b31;
+  --bbl-theirs-fg:   #d0d8db;
+  --bbl-meta:        rgba(255,255,255,.52);
+  --bbl-ticks-read:  #53bdeb;
 }
 
 /* Mode clair — bascule via data-theme="light" sur <html> */
 :root[data-theme="light"] {
   color-scheme: light;
+  --bbl-theirs:      #ffffff;
+  --bbl-theirs-fg:   #111b21;
+  --bbl-meta:        rgba(0,0,0,.45);
+  --bbl-ticks-read:  #25a489;
   /* Surfaces lavande très désaturées (clair) — pendant doux du blue-black sombre. */
   --bg: #f3f4fb;
   --bg-soft: #e9ebf6;
@@ -413,6 +422,21 @@ body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top { display: non
 .confirm-panel { max-width: 380px; }
 .confirm-msg { margin: 0 0 1.25rem; font-size: 1rem; }
 
+/* promptDialog — saisie texte applicative (remplace prompt() du navigateur). */
+.prompt-panel { max-width: 440px; }
+.prompt-msg { margin: 0 0 .85rem; font-size: 1rem; }
+.prompt-field { margin: 0 0 .5rem; }
+.prompt-field input,
+.prompt-field textarea {
+  width: 100%; box-sizing: border-box;
+  padding: .55rem .75rem;
+  background: var(--inset); color: var(--fg);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  font: inherit;
+}
+.prompt-field textarea { resize: vertical; min-height: 4.5rem; font-family: inherit; }
+.prompt-err { margin: 0 0 .75rem; color: var(--danger); font-size: .85rem; min-height: 1.1rem; }
+
 /* Section features */
 /* Grille bento : 4 colonnes, tuiles de tailles variées (asymétrie type Apple).
    Les nouveautés privacy/comms (P2P, chiffrement multi-appareil) sont mises en
@@ -611,6 +635,192 @@ body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top { display: non
 }
 .panel h2 { margin: 0 0 .3rem; font-size: 1.25rem; }
 .panel .sub { color: var(--muted); margin: 0 0 1.25rem; font-size: .92rem; }
+
+/* Page « Espace Premium » (vue plein écran /me/premium) : barre supérieure fixe
+   avec bouton Retour + corps défilant. Pas de deck ni de bottom-nav → scroll
+   interne normal, et le bouton retour du navigateur fonctionne nativement. */
+/* Modèle scroll simple : le body scrolle nativement (pas de chaîne flex
+   fragile), le topbar reste collant en haut. Évite les problèmes de
+   100dvh + flex où le contenu interne ne pouvait plus défiler. */
+#app[data-view="premium"] {
+  min-height: 100dvh;
+  display: flex; flex-direction: column; align-items: center;
+}
+.prem-page-view {
+  width: 100%; max-width: 760px;
+  display: flex; flex-direction: column;
+}
+.prem-topbar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: .75rem;
+  padding: .75rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+.prem-topbar-title {
+  display: inline-flex; align-items: center; gap: .4rem;
+  font-weight: 700; font-size: 1.05rem;
+}
+.prem-body { padding: 1rem; padding-bottom: 4rem; }
+
+/* ── Hero « Ce que ton espace privé débloque » ──────────────────────────── */
+.prem-benefits {
+  margin: 0 0 1.5rem;
+  padding: 1.1rem 1.2rem;
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-soft));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+.prem-benefits-head {
+  display: flex; align-items: flex-start; gap: .75rem;
+  margin-bottom: .9rem;
+}
+.prem-benefits-ic {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; flex-shrink: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+  color: var(--accent-ink);
+}
+.prem-benefits-title {
+  margin: 0; font-size: 1.05rem; font-weight: 700; line-height: 1.3;
+}
+.prem-benefits-sub {
+  margin: .2rem 0 0; font-size: .85rem; color: var(--muted); line-height: 1.4;
+}
+.prem-benefits-list {
+  margin: 0; padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: .6rem;
+}
+.prem-benefit { position: relative; display: block; cursor: pointer; }
+.prem-benefit input.prem-benefit-cb {
+  position: absolute; opacity: 0; pointer-events: none;
+}
+.prem-benefit-card {
+  display: grid; grid-template-columns: 32px 1fr 22px; align-items: start; gap: .6rem;
+  padding: .65rem .75rem;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  transition: border-color .15s, background .15s, box-shadow .15s, transform .12s;
+  min-height: 56px;
+}
+.prem-benefit:hover .prem-benefit-card {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+.prem-benefit input:checked + .prem-benefit-card {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent) inset;
+}
+.prem-benefit input:focus-visible + .prem-benefit-card {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.prem-benefit input:disabled + .prem-benefit-card {
+  opacity: .55; cursor: not-allowed;
+}
+.prem-benefit-ic {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-ink);
+}
+.prem-benefit-text { min-width: 0; }
+.prem-benefit-text b { display: block; font-weight: 600; font-size: .9rem; line-height: 1.3; }
+.prem-benefit-text span { display: block; font-size: .78rem; color: var(--muted); line-height: 1.4; margin-top: .15rem; }
+.prem-benefit-check {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; margin-top: 4px;
+  border-radius: 6px;
+  border: 1.5px solid var(--line);
+  background: var(--bg-soft);
+  color: transparent;
+  transition: all .12s;
+}
+.prem-benefit input:checked + .prem-benefit-card .prem-benefit-check {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* ── Avantages de mon abonnement Premium ────────────────────────────────── */
+/* Variante des benefits : items en pile verticale, plus dense, avec un mode  */
+/* « info » pour les capabilities non-togglables (badge « Inclus »).          */
+.prem-perks-list { display: flex; flex-direction: column; gap: .5rem; }
+.prem-perk { position: relative; display: block; cursor: pointer; }
+.prem-perk.prem-perk--info { cursor: default; }
+.prem-perk input.prem-perk-cb { position: absolute; opacity: 0; pointer-events: none; }
+.prem-perk-card {
+  display: grid; grid-template-columns: 32px 1fr auto; align-items: center; gap: .65rem;
+  padding: .6rem .75rem;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  transition: border-color .15s, background .15s;
+  min-height: 52px;
+}
+.prem-perk:hover .prem-perk-card { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.prem-perk.prem-perk--info:hover .prem-perk-card { border-color: var(--line); }
+.prem-perk input:checked + .prem-perk-card {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+}
+.prem-perk input:focus-visible + .prem-perk-card { outline: 2px solid var(--accent); outline-offset: 2px; }
+.prem-perk-ic {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; flex-shrink: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-ink);
+}
+.prem-perk-text { min-width: 0; }
+.prem-perk-text b { display: block; font-weight: 600; font-size: .88rem; line-height: 1.3; }
+.prem-perk-text span { display: block; font-size: .76rem; color: var(--muted); line-height: 1.4; margin-top: .15rem; }
+.prem-perk-text code { font-size: .72em; padding: .05rem .25rem; border-radius: 3px; background: var(--bg-soft); font-family: var(--mono); }
+.prem-perk-check {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px;
+  border-radius: 6px;
+  border: 1.5px solid var(--line);
+  background: var(--bg-soft);
+  color: transparent;
+  transition: all .12s;
+}
+.prem-perk input:checked + .prem-perk-card .prem-perk-check {
+  border-color: var(--accent); background: var(--accent); color: var(--on-accent);
+}
+.prem-perk-badge {
+  font-size: .65rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  padding: .2rem .5rem; border-radius: 999px;
+  background: color-mix(in srgb, var(--success, #2ecc71) 18%, transparent);
+  color: var(--success, #2ecc71);
+}
+
+/* ── Titres de sections (Mon abonnement / Mon espace privé / Mon profil) ── */
+.prem-section-title {
+  display: flex; align-items: center; gap: .5rem;
+  margin: 1.6rem 0 .75rem;
+  font-size: .8rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .08em;
+  color: var(--muted);
+}
+.prem-section-title:first-of-type { margin-top: 0; }
+.prem-section-title svg { color: var(--accent-ink); }
+.prem-section-sub {
+  font-weight: 500; font-size: .72rem; opacity: .65;
+  text-transform: none; letter-spacing: 0;
+  margin-left: .15rem;
+}
+/* La vue Premium n'est PAS dans une cellule de deck contrainte en hauteur :
+   neutraliser la classe .col-scroll (héritée du markup partagé) pour laisser
+   le document scroller normalement. La topbar reste sticky côté document. */
+#app[data-view="premium"] .col-scroll {
+  overflow: visible; height: auto; max-height: none; flex: none;
+}
 .panel label { display: block; font-size: .82rem; color: var(--muted); margin: 0 0 .3rem; }
 .panel .group { margin-bottom: 1rem; }
 .handle-input { position: relative; display: flex; align-items: center; background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-md); padding-left: .7rem; }
@@ -694,19 +904,66 @@ body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top { display: non
   display: flex; flex-direction: column; gap: .4rem; padding: .6rem;
   background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-md); margin-bottom: .6rem;
 }
+/* ════════════════ Bulles style WhatsApp ════════════════ */
 .chat-log > .bubble {
-  max-width: 80%; padding: .5rem .75rem .4rem; border-radius: var(--r-lg); font-size: .9rem;
-  line-height: 1.42; word-break: break-word; position: relative;
-  box-shadow: var(--elev-1);
+  max-width: 78%;
+  padding: .45rem .65rem .3rem .65rem;
+  border-radius: 7.5px;
+  font-size: var(--t-sm);
+  line-height: 1.45;
+  word-break: break-word;
+  position: relative;
+  box-shadow: 0 1px 1px rgba(0,0,0,.22);
+  overflow: visible;   /* laisse la queue déborder */
+}
+/* ── Envoyé : couleur d'accent caméléon, queue droite ── */
+.chat-log > .bubble.mine {
+  align-self: flex-end;
+  background: var(--accent);
+  color: var(--on-accent);
+  border-radius: 7.5px 7.5px 2px 7.5px;
+  margin-right: 9px;
+}
+.chat-log > .bubble.mine::before {
+  content: '';
+  position: absolute;
+  bottom: 0; right: -7px;
+  border-style: solid;
+  border-width: 9px 0 0 9px;
+  border-color: transparent transparent transparent var(--accent);
+}
+/* ── Reçu : teinte dérivée du handle, queue gauche ── */
+.chat-log > .bubble.theirs {
+  align-self: flex-start;
+  /* hsl(hue 16% 19%) dark · hue issu du hash du handle (défini en JS via --bbl-theirs-tint) */
+  background: hsl(var(--bbl-theirs-tint, 200) 16% 19%);
+  color: var(--bbl-theirs-fg);
+  border: none;
+  border-radius: 7.5px 7.5px 7.5px 2px;
+  margin-left: 9px;
+}
+:root[data-theme="light"] .chat-log > .bubble.theirs {
+  background: hsl(var(--bbl-theirs-tint, 200) 28% 94%);
+  color: var(--bbl-theirs-fg);
+}
+.chat-log > .bubble.theirs::before {
+  content: '';
+  position: absolute;
+  bottom: 0; left: -7px;
+  border-style: solid;
+  border-width: 9px 9px 0 0;
+  border-color: transparent hsl(var(--bbl-theirs-tint, 200) 16% 19%) transparent transparent;
+}
+:root[data-theme="light"] .chat-log > .bubble.theirs::before {
+  border-color: transparent hsl(var(--bbl-theirs-tint, 200) 28% 94%) transparent transparent;
 }
 .chat-restore { display: flex; flex-direction: column; gap: .6rem; align-items: center; text-align: center; margin: auto; padding: 1rem; color: var(--muted); }
 .chat-restore p { margin: 0; font-size: .9rem; line-height: 1.5; }
 .chat-backup { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; justify-content: space-between; padding: .5rem .7rem; margin-bottom: .5rem; border-radius: var(--r-sm); background: var(--card, rgba(255,255,255,.05)); font-size: .82rem; line-height: 1.4; }
 .chat-backup button { flex: none; }
-.chat-log > .bubble.mine { align-self: flex-end; background: var(--accent); color: #0b0d12; border-bottom-right-radius: 5px; }
-.chat-log > .bubble.theirs { align-self: flex-start; background: var(--bg-soft); border: 1px solid var(--line); border-bottom-left-radius: 5px; }
 /* Ligne d'historique d'appel : neutre et centrée, ni « mine » ni « theirs ». */
-.chat-log > .bubble:has(.b-call) { align-self: center; background: transparent; border: 1px dashed var(--line); color: var(--muted); border-radius: 999px; padding: 4px 14px; }
+.chat-log > .bubble:has(.b-call) { align-self: center; background: transparent; border: 1px dashed var(--line); color: var(--muted); border-radius: 999px; padding: 4px 14px; margin: 0; }
+.chat-log > .bubble:has(.b-call)::before { display: none; }
 .b-call { font-size: .85em; }
 /* Entrée d'un message qui vient d'arriver (uniquement les nouveaux : cf. chat.js) */
 @keyframes bubble-in { from { opacity: 0; transform: translateY(10px) scale(.96); } to { opacity: 1; transform: none; } }
@@ -721,26 +978,41 @@ body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top { display: non
 .chat-archived-banner b { color: var(--fg); }
 .chat-log > .bubble.archived { opacity: .82; box-shadow: none; }
 .chat-form.readonly { opacity: .55; pointer-events: none; }
-.bubble .t { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: .25rem; }
-.bubble .t-time { font-size: .64rem; opacity: .6; cursor: pointer; user-select: none; }
-.bubble .t-time:hover { opacity: 1; text-decoration: underline dotted; }
+/* Ligne méta (heure + ticks) : float-right pour coller en bas à droite — */
+/* pattern WhatsApp classique. */
+.bubble .t {
+  float: right;
+  display: inline-flex; align-items: center; gap: 3px;
+  margin: .15rem 0 -.05rem .55rem;
+  line-height: 1;
+}
+.bubble .t-time {
+  font-size: .67rem;
+  color: var(--bbl-meta);
+  opacity: 1;
+  cursor: default;
+  user-select: none;
+  white-space: nowrap;
+}
+.bubble .t-time:hover { opacity: .85; text-decoration: none; }
 /* Compte à rebours avant suppression (déplié au clic sur l'heure) */
-.b-countdown { display: block; margin-top: .2rem; font-size: .62rem; opacity: .8; font-style: italic; text-align: right; }
+.b-countdown { display: block; clear: both; font-size: .61rem; opacity: .75; font-style: italic; text-align: right; margin-top: .1rem; }
 .b-countdown[hidden] { display: none; }
-.bubble.mine .b-countdown { color: #0b0d12; }
-.bubble .ticks { margin-left: .2rem; }
-.bubble .ticks.read { color: #2c7d63; opacity: 1; font-weight: 700; }
-.bubble.mine .ticks.read { color: #0b3d2c; }
+.bubble.mine .b-countdown { color: var(--on-accent); opacity: .7; }
+/* Ticks : gris = envoyé, double = reçu, bleu = lu */
+.bubble .ticks { font-size: .8rem; color: var(--bbl-meta); letter-spacing: -.08em; line-height: 1; }
+.bubble .ticks.read { color: var(--bbl-ticks-read) !important; opacity: 1; }
 /* Réactions */
 .b-reacts { display: flex; gap: .25rem; flex-wrap: wrap; margin-top: .25rem; }
 .react { font-size: .72rem; padding: .05rem .35rem; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
 .react.mine { border-color: var(--accent-ink); }
-.bubble.mine .react { background: rgba(0,0,0,.2); border-color: rgba(0,0,0,.25); color: #0b0d12; }
+.bubble.mine .react { background: rgba(0,0,0,.18); border-color: rgba(0,0,0,.22); color: var(--on-accent); }
+.bubble.theirs .react { color: var(--bbl-theirs-fg); }
 /* Actions inline sur la ligne de l'heure : visibles seulement au survol du message */
 .b-react-btn, .b-del { width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--line); background: var(--card); cursor: pointer; font-size: .8rem; line-height: 1; text-align: center; padding: 0; color: var(--fg); flex: none; opacity: 0; transition: opacity .12s ease; }
 .bubble:hover .b-react-btn, .bubble:hover .b-del,
 .b-react-btn:focus-visible, .b-del:focus-visible { opacity: 1; }
-.bubble.mine .b-react-btn, .bubble.mine .b-del { background: rgba(0,0,0,.12); border-color: rgba(0,0,0,.2); }
+.bubble.mine .b-react-btn, .bubble.mine .b-del { background: rgba(0,0,0,.14); border-color: rgba(0,0,0,.2); color: var(--on-accent); }
 .b-react-btn:hover { border-color: var(--accent-ink); }
 .b-del:hover { color: var(--danger); border-color: var(--danger); }
 /* Popover de sélection d'emoji (au niveau du panneau, pas dans le log) */
@@ -883,6 +1155,7 @@ body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top { display: non
   height: 100svh; min-height: 480px;
   display: flex; flex-direction: column; justify-content: flex-end;
   flex-shrink: 0;
+  overflow: hidden; /* indispensable : sinon la <video.pub-cover-bg> peut dépasser */
 }
 .pub-cover-bg {
   position: absolute; inset: 0; z-index: 0;
@@ -920,8 +1193,11 @@ body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top { display: non
   display: flex; gap: .5rem; align-items: center;
 }
 
-/* Avatar wrap : taille S/L/XL */
-.pub-av-wrap { position: relative; display: inline-flex; align-items: center; }
+/* Avatar wrap : taille S/L/XL. Le wrap a la taille EXACTE de la photo (les
+   boutons S/L/XL flottent à côté en position absolue, sortis du flux).
+   align-self: flex-start empêche le parent flex column (.pub-cover-identity,
+   align-items: stretch par défaut) d'étirer le wrap à 100% de largeur. */
+.pub-av-wrap { position: relative; display: inline-block; align-self: flex-start; }
 .pub-av-wrap[data-size="s"]  .pub-cover-av,
 .pub-av-wrap[data-size="s"]  .pub-cover-av-gen,
 .pub-av-wrap[data-size="s"]  .pub-cover-av-milo { width: 40px;  height: 40px; }
@@ -944,9 +1220,15 @@ body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top { display: non
 .pub-av-photo:hover .pub-av-upload-btn {
   background: rgba(0,0,0,.52); color: #fff;
 }
-/* Sélecteur de taille S/L/XL */
+/* Sélecteur de taille S/L/XL : flotte à droite de l'avatar (sortie du flux
+   pour ne pas gonfler le wrap). Aligné sur le HAUT de la photo (et non
+   centré verticalement) car l'avatar a margin-bottom — un translate(-50%)
+   sur le wrap décale visuellement vers le bas. */
 .pub-av-sizes {
-  display: flex; gap: 3px; margin-left: .5rem;
+  position: absolute;
+  top: 0;
+  left: calc(100% + .5rem);
+  display: flex; gap: 3px;
 }
 .pub-av-size-btn {
   padding: .2rem .5rem; font-size: .68rem; font-weight: 700;
@@ -995,8 +1277,25 @@ body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top { display: non
   margin-bottom: .55rem;
 }
 .pub-cover-av { object-fit: cover; display: block; }
+
+/* Forme avatar — toggle au reclic sur la taille active (cf. applyAvSize JS).
+   Par défaut le CSS de base met border-radius:50% : on l'override explicitement
+   pour la forme « square » (léger arrondi) et on RÉAFFIRME 50% en « circle »
+   pour battre toute règle plus spécifique. */
+.pub-av-wrap[data-shape="square"] .pub-cover-av,
+.pub-av-wrap[data-shape="square"] .pub-cover-av-gen,
+.pub-av-wrap[data-shape="square"] .pub-cover-av-milo,
+.pub-av-wrap[data-shape="square"] .pub-cover-av-gen svg,
+.pub-av-wrap[data-shape="square"] .pub-cover-av-milo svg { border-radius: 12px; }
+.pub-av-wrap[data-shape="circle"] .pub-cover-av,
+.pub-av-wrap[data-shape="circle"] .pub-cover-av-gen,
+.pub-av-wrap[data-shape="circle"] .pub-cover-av-milo,
+.pub-av-wrap[data-shape="circle"] .pub-cover-av-gen svg,
+.pub-av-wrap[data-shape="circle"] .pub-cover-av-milo svg { border-radius: 50%; }
+/* Le SVG remplit son conteneur (.pub-cover-av-gen / -milo) à 100% : sans ça il
+   reste figé à 60px et l'avatar « flotte » dans le cadre en taille XL (90px). */
 .pub-cover-av-gen svg,
-.pub-cover-av-milo svg { width: 60px; height: 60px; display: block; border-radius: 50%; }
+.pub-cover-av-milo svg { width: 100%; height: 100%; display: block; border-radius: 50%; }
 .pub-cover-names { display: flex; flex-direction: column; gap: .12rem; }
 .pub-cover-name {
   font-size: clamp(1.6rem, 6vw, 2.6rem); font-weight: 800;
@@ -1004,6 +1303,75 @@ body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top { display: non
   text-shadow: 0 2px 12px rgba(0,0,0,.45);
 }
 .pub-cover-handle { color: rgba(255,255,255,.75); font-size: .95rem; margin: 0; }
+
+/* Ligne @handle + badge de plan (Gratuit/Premium) côte à côte sur Ma page. */
+.pub-cover-handle-row { display: flex; align-items: center; gap: .55rem; flex-wrap: wrap; }
+.pub-plan-wrap { position: relative; display: inline-flex; }
+
+/* Badge stylisé — visible seulement en mode propriétaire (isSelf). */
+.pub-plan-badge {
+  display: inline-flex; align-items: center; gap: .28rem;
+  padding: .18rem .55rem;
+  font-size: .72rem; font-weight: 700; letter-spacing: .02em;
+  border: 1px solid rgba(255,255,255,.32); border-radius: 99px;
+  background: rgba(255,255,255,.08); color: rgba(255,255,255,.92);
+  cursor: pointer; backdrop-filter: blur(4px);
+  transition: background .15s, transform .15s, box-shadow .15s;
+}
+.pub-plan-badge:hover { background: rgba(255,255,255,.18); transform: translateY(-1px); }
+/* Variante visiteur : badge indicatif (pas un button, pas de hover, pas de menu). */
+.pub-plan-badge--readonly { cursor: default; pointer-events: none; }
+.pub-plan-badge--readonly:hover { transform: none; }
+.pub-plan-badge.is-premium {
+  background: linear-gradient(135deg, #f7c14a 0%, #e96bb1 55%, #8b5cf6 100%);
+  color: #fff; border-color: transparent;
+  box-shadow: 0 2px 12px rgba(233,107,177,.4), 0 0 16px rgba(247,193,74,.35);
+  animation: pub-plan-pulse 2.6s ease-in-out infinite;
+}
+.pub-plan-badge.is-premium:hover {
+  box-shadow: 0 4px 20px rgba(233,107,177,.55), 0 0 24px rgba(247,193,74,.55);
+}
+@keyframes pub-plan-pulse {
+  0%, 100% { box-shadow: 0 2px 8px rgba(233,107,177,.3), 0 0 10px rgba(247,193,74,.2); }
+  50%      { box-shadow: 0 4px 16px rgba(233,107,177,.55), 0 0 22px rgba(247,193,74,.5); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pub-plan-badge.is-premium { animation: none; }
+}
+
+/* Pop-over avec la liste des fonctions premium. Positionné AU-DESSUS du badge
+   (le badge est en bas du hero ; un menu vers le bas masquerait les dots de
+   navigation et la zone est tronquée par le viewport). */
+.pub-plan-menu {
+  position: absolute; bottom: calc(100% + .45rem); left: 0; z-index: 5;
+  min-width: 280px; max-width: 92vw;
+  padding: .65rem;
+  background: rgba(22,22,28,.96);
+  border: 1px solid rgba(255,255,255,.12); border-radius: var(--r-lg, 12px);
+  box-shadow: 0 12px 40px rgba(0,0,0,.55);
+  color: #fff;
+  backdrop-filter: blur(10px);
+  display: flex; flex-direction: column; gap: .35rem;
+}
+.pub-plan-menu[hidden] { display: none; }
+.pub-plan-menu-title {
+  display: flex; align-items: center; gap: .4rem;
+  margin: 0 0 .25rem; padding: .15rem .25rem;
+  font-size: .76rem; font-weight: 700; letter-spacing: .02em;
+  color: rgba(255,255,255,.65); text-transform: uppercase;
+}
+.pub-plan-item {
+  display: flex; align-items: center; gap: .6rem;
+  padding: .55rem .55rem;
+  border-radius: var(--r-sm, 8px);
+  color: #fff; text-decoration: none;
+  transition: background .12s;
+}
+.pub-plan-item:hover { background: rgba(255,255,255,.08); }
+.pub-plan-item > span { display: flex; flex-direction: column; gap: .05rem; line-height: 1.2; }
+.pub-plan-item b      { font-size: .87rem; font-weight: 600; }
+.pub-plan-item small  { font-size: .72rem; opacity: .65; }
+.pub-plan-cta { margin-top: .35rem; text-align: center; }
 .pub-cover-title  { color: rgba(255,255,255,.6);  font-size: .88rem; margin: 0; }
 .pub-cover-loc {
   color: rgba(255,255,255,.55); font-size: .78rem;
@@ -1019,6 +1387,8 @@ body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top { display: non
 }
 .pub-cover-actions .btn:hover { background: rgba(255,255,255,.25); }
 .pub-cover-actions .rel-switch { border-radius: var(--r-xl); padding: .4rem .8rem; }
+.pub-cover-actions .profile-contact-actions { margin: 0; display: contents; }
+.pub-cover-actions .profile-contact-actions .btn { flex: none; }
 
 /* Bouton relation SVG icône (dans pub-cover-top, haut-droite) */
 .rel-toggle-icon { padding: .35rem .45rem; line-height: 0; }
@@ -1152,6 +1522,51 @@ body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top { display: non
   position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); z-index: 2;
   color: rgba(255,255,255,.7); font-size: .85rem; letter-spacing: .04em;
 }
+/* Flèches stylisées ">" qui indiquent une slide voisine (mobile carrousel) :
+   FLÈCHE NUE (pas de cercle/cadre), juste le chevron blanc avec halo respirant.
+   Zone cliquable réduite à la flèche elle-même pour ne pas intercepter le swipe.
+   Cachées par défaut, affichées par pubSlideArrows() côté JS. */
+.pub-slide-arrow {
+  position: fixed; top: 50%; z-index: 4;
+  display: none; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0;
+  background: transparent; border: 0; color: #fff; cursor: pointer;
+  /* Zone cliquable réduite au strict minimum (le SVG du chevron). Le bouton
+     lui-même est transparent aux events ; seul le SVG capte le clic. Sans ça,
+     une zone de 28×28 sur les bords interceptait le geste de swipe. */
+  pointer-events: none;
+}
+.pub-slide-arrow > svg {
+  pointer-events: auto;
+  /* Animation + filter directement sur le SVG (pas sur le button transparent,
+     où le drop-shadow s'applique mal). Drop-shadows empilés = halo plus dense. */
+  animation: pub-arrow-breath 2.4s ease-in-out infinite;
+}
+.pub-slide-arrow:hover > svg { animation-play-state: paused; }
+.pub-slide-arrow--left {
+  left: .35rem;
+  transform: translateY(-50%) rotate(180deg);
+}
+.pub-slide-arrow--right { right: .35rem; transform: translateY(-50%); }
+.pub-slide-arrow:not([hidden]) { display: inline-flex; }
+.pub-slide-arrow[hidden] { display: none; }
+/* Sur grand écran on désactive (le carrousel n'existe pas en desktop). */
+@media (min-width: 768px) { .pub-slide-arrow { display: none !important; } }
+
+@keyframes pub-arrow-breath {
+  0%, 100% {
+    filter: drop-shadow(0 0 2px rgba(255,255,255,.7)) drop-shadow(0 0 4px rgba(255,255,255,.4));
+    opacity: .8;
+  }
+  50% {
+    filter: drop-shadow(0 0 4px #fff) drop-shadow(0 0 10px rgba(255,255,255,.9)) drop-shadow(0 0 18px rgba(255,255,255,.55));
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pub-slide-arrow > svg { animation: none; }
+}
+
 /* Pastilles overlay dans le héro (mobile uniquement) */
 .pub-hero-dots {
   position: absolute; bottom: 1.1rem; left: 0; right: 0; z-index: 3;
@@ -1294,8 +1709,10 @@ body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top { display: non
     width: 80px; height: 80px;
     border: 3px solid rgba(255,255,255,.6);
   }
+  /* Mobile : SVG suit le conteneur (100%/100%) — sinon il reste figé à 80px
+     pendant que .pub-cover-av-gen passe à 44/80/110px (S/L/XL). */
   .pub-cover-av-gen svg,
-  .pub-cover-av-milo svg { width: 80px; height: 80px; }
+  .pub-cover-av-milo svg { width: 100%; height: 100%; }
   .pub-av-wrap[data-size="s"] .pub-cover-av,
   .pub-av-wrap[data-size="s"] .pub-cover-av-gen,
   .pub-av-wrap[data-size="s"] .pub-cover-av-milo { width: 44px; height: 44px; }
@@ -1395,18 +1812,51 @@ body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top { display: non
 
 /* --- Tablette + Desktop ≥ 768px : héro sticky gauche + contenu droit, sans header --- */
 @media (min-width: 768px) {
+  body:has(#app[data-view="profile"] .pub-hero-page) { overflow: clip; height: 100dvh; }
+
+  /* Sur PC, le topbar revient en sticky (en flux) — il décale naturellement le
+     contenu de topbar-h sans padding manuel. La règle source-order > règle global
+     fixed du thème hero. Les couleurs/backdrop reviennent au style standard. */
+  body:has(#app[data-view="profile"] .pub-hero-page) .topbar.site-header {
+    position: sticky !important;
+    background: color-mix(in srgb, var(--bg) 88%, transparent) !important;
+    backdrop-filter: blur(18px) !important;
+    -webkit-backdrop-filter: blur(18px) !important;
+    border-bottom: 1px solid var(--line) !important;
+  }
+  body:has(#app[data-view="profile"] .pub-hero-page) .topbar.site-header .brand,
+  body:has(#app[data-view="profile"] .pub-hero-page) .topbar.site-header .brand-text,
+  body:has(#app[data-view="profile"] .pub-hero-page) .topbar.site-header .btn,
+  body:has(#app[data-view="profile"] .pub-hero-page) .topbar.site-header .profile-chip { color: var(--fg) !important; }
+  body:has(#app[data-view="profile"] .pub-hero-page) .topbar.site-header .profile-chip {
+    background: var(--bg-soft) !important; border-color: var(--line) !important;
+  }
+  body:has(#app[data-view="profile"] .pub-hero-page) .topbar.site-header input {
+    background: var(--inset) !important; color: var(--fg) !important; border-color: var(--line) !important;
+  }
+  body:has(#app[data-view="profile"] .pub-hero-page) .topbar.site-header input::placeholder { color: var(--muted) !important; }
+
   .pub-hero-page { flex-direction: row; align-items: stretch; }
   .pub-cover-hero {
     width: 42%; max-width: 460px; flex-shrink: 0;
-    height: auto; min-height: 100svh;
+    height: auto; min-height: calc(100svh - var(--topbar-h));
     position: sticky; top: 0; align-self: flex-start;
-    /* Pas de compensation topbar : le header est caché */
     margin-top: 0; padding-top: 0;
   }
   .pub-cover-identity { padding: 2rem 1.5rem 2rem; }
   .pub-cover-name { font-size: clamp(1.75rem, 3vw, 2.75rem); }
-  .pub-body { flex: 1; min-width: 0; overflow: auto; }
+  /* pub-body est le conteneur de scroll, son bord haut est déjà sous le topbar.
+     Donc pub-tabs colle à top:0 (= sous le topbar). Mettre top:topbar-h le
+     décalerait de 56px trop bas et recouvrirait le début du contenu (texte coupé).
+     scroll-padding-top = hauteur des onglets pour que le changement d'onglet
+     ne place pas le contenu sous la barre d'onglets sticky. */
+  .pub-body { flex: 1; min-width: 0; overflow: auto; scroll-padding-top: 3.5rem; }
   .pub-tabs { top: 0; }
+  /* Recherche alignée à droite dans le topbar */
+  body:has(#app[data-view="profile"] .pub-hero-page) .topbar.site-header .site-header-center {
+    flex: 0 1 auto;
+    margin-left: auto;
+  }
   .pub-tab-panel { padding: 1.75rem 2rem 3rem; max-width: 640px; margin: 0; }
   /* 2 onglets seulement : l'onglet "Accueil" est masqué, son contenu migre côté cover */
   .pub-tab[data-tab="about"] { display: none; }
@@ -1727,12 +2177,533 @@ body:has(#app[data-view="private"]) { height: 100dvh; overflow: hidden; }
 .abo-badge { font-weight: 700; padding: .2rem .65rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent-ink); }
 .abo-status.is-premium .abo-badge { background: var(--accent); color: #0b0d12; }
 .abo-until { color: var(--muted); font-size: .9rem; }
-/* Couverture vidéo (Premium P4) : même cadre que la couverture image. */
-.pub-cover-video { object-fit: cover; }
+/* Section « Espace privé » sur la page publique /@handle. Surface l'accès
+   aux pages premium pour les abonnés ET propose le checkout pour les autres. */
+.pub-space {
+  margin: 0 0 1rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+.pub-space--open { border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }
+.pub-space-head {
+  display: flex; align-items: center; gap: .4rem;
+  font-weight: 700; font-size: .92rem; margin-bottom: .55rem;
+}
+.pub-space-head svg { color: var(--accent-ink); }
+.pub-space-edit { margin-left: auto; opacity: .75; text-decoration: none; font-weight: 500; }
+.pub-space-edit:hover { opacity: 1; text-decoration: underline; }
+.pub-space-desc { font-size: .88rem; color: var(--muted); margin: 0 0 .65rem; }
+.pub-space-pages { list-style: none; margin: 0 0 .75rem; padding: 0; display: flex; flex-direction: column; gap: .35rem; }
+.pub-space-page {
+  display: flex; align-items: center; gap: .55rem;
+  padding: .55rem .75rem; border-radius: var(--r-sm);
+  background: var(--bg-soft); text-decoration: none; color: inherit;
+  transition: background .15s, transform .15s;
+}
+.pub-space-page:hover {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-soft));
+  transform: translateX(2px);
+}
+.pub-space-title { flex: 1; font-weight: 500; }
+.pub-space-arrow { opacity: .55; }
+.pub-space-page-locked {
+  display: flex; align-items: center; gap: .55rem;
+  padding: .5rem .7rem; border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--bg) 50%, transparent);
+  color: var(--muted); font-size: .9rem; opacity: .85;
+}
+.pub-space-cta { width: 100%; justify-content: center; }
+
+/* ==== Bouton « ← Retour » unifié ====
+   Touch target ≥44×44, label visible, focus ring conservé.
+   Comportement : history.back() si la page précédente est même origine,
+   sinon fallback vers data-fallback. */
+.back-btn {
+  display: inline-flex; align-items: center; gap: .45rem;
+  min-height: 44px; padding: .55rem .95rem;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: var(--bg-soft); color: inherit;
+  font-size: .9rem; font-weight: 500;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, transform .15s;
+}
+.back-btn:hover {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-soft));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+.back-btn:active { transform: translateX(-1px); }
+.back-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.back-btn svg { flex-shrink: 0; }
+
+/* ==== Page index « Espace privé » /@handle/space ====
+   Layout responsive : container 1100px max, hero deux colonnes (id+CTA)
+   sur ≥760px, grille de cartes auto-fill 1→3 colonnes selon largeur. */
+.spx { max-width: 1100px; margin: 1.25rem auto 2.5rem; padding: 0 1.25rem; }
+.spx-topbar { margin-bottom: 1.25rem; }
+
+/* Hero : avatar + identité à gauche, CTA à droite (collapse en mobile). */
+.spx-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1.25rem 2rem;
+  align-items: center;
+  padding: 1.5rem;
+  border-radius: var(--r-md);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, var(--bg-soft)), var(--bg-soft));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
+  margin-bottom: 1.5rem;
+}
+.spx-hero-id { display: flex; align-items: center; gap: 1.1rem; min-width: 0; }
+.spx-avatar {
+  width: 80px; height: 80px;
+  border-radius: 50%; object-fit: cover; flex-shrink: 0;
+  background: var(--bg);
+  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.spx-avatar-milo, .spx-avatar-gen { display: flex; align-items: center; justify-content: center; }
+.spx-hero-text { display: flex; flex-direction: column; gap: .25rem; min-width: 0; }
+.spx-hero-eyebrow {
+  display: inline-flex; align-items: center; gap: .35rem;
+  margin: 0; font-size: .72rem; font-weight: 700;
+  letter-spacing: .12em; text-transform: uppercase;
+  color: var(--accent-ink);
+}
+.spx-hero-title { margin: 0; font-size: 1.7rem; line-height: 1.15; }
+.spx-hero-meta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .35rem;
+  margin: .15rem 0 0; color: var(--muted); font-size: .92rem;
+}
+.spx-hero-meta a { color: inherit; text-decoration: none; }
+.spx-hero-meta a:hover { text-decoration: underline; }
+.spx-price { font-weight: 600; color: var(--accent-ink); }
+.spx-hero-cta { justify-self: end; display: flex; flex-direction: column; gap: .35rem; align-items: flex-end; max-width: 320px; }
+.spx-cta {
+  display: inline-flex; align-items: center; gap: .5rem;
+  padding: .85rem 1.4rem;
+  min-height: 48px; /* touch-target-size */
+  font-size: 1rem; font-weight: 600;
+  white-space: nowrap;
+}
+.spx-cta[disabled], .spx-cta[aria-busy="true"] { opacity: .8; cursor: wait; }
+.spx-cta .spx-cta-main b { font-weight: 800; }
+.spx-cta-sub {
+  margin: 0;
+  font-size: .82rem; line-height: 1.4;
+  color: var(--muted);
+  text-align: right;
+  max-width: 280px;
+}
+
+/* Statut « accès débloqué » / placeholder */
+.spx-status {
+  display: inline-flex; align-items: center; gap: .45rem;
+  padding: .6rem 1rem;
+  border-radius: 999px;
+  font-size: .88rem; color: var(--muted);
+  background: var(--bg-soft);
+}
+.spx-status--ok {
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-soft));
+}
+
+/* Grille de pages : 1→3 colonnes selon la largeur. */
+.spx-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: .75rem;
+}
+.spx-card {
+  position: relative;
+  display: flex; align-items: center; gap: .65rem;
+  padding: 1rem 1.1rem;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--bg-soft); color: inherit; text-decoration: none;
+  min-height: 64px;
+  transition: background .15s, border-color .15s, transform .15s, box-shadow .15s;
+}
+.spx-card:hover {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-soft));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  transform: translateY(-1px);
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.spx-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.spx-card-ic {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-ink); flex-shrink: 0;
+}
+.spx-card-title { flex: 1; font-weight: 600; min-width: 0; word-break: break-word; }
+.spx-card-arrow { opacity: .55; font-size: 1.15rem; flex-shrink: 0; }
+.spx-card:hover .spx-card-arrow { opacity: 1; transform: translateX(2px); }
+.spx-card.is-draft { border-style: dashed; opacity: .85; }
+.spx-card-badge {
+  font-size: .62rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  padding: .15rem .5rem; border-radius: 4px;
+  background: color-mix(in srgb, var(--muted) 28%, transparent); color: var(--muted);
+}
+.spx-card--locked { color: var(--muted); cursor: default; }
+.spx-card--locked:hover { background: var(--bg-soft); border-color: var(--line); transform: none; box-shadow: none; }
+.spx-card-lock { color: var(--muted); }
+.spx-grid--teaser .spx-card { opacity: .85; }
+
+/* État vide (créateur sans page). */
+.spx-empty {
+  text-align: center;
+  padding: 2.5rem 1.5rem;
+  display: flex; flex-direction: column; align-items: center; gap: 1rem;
+  max-width: 480px; margin: 1rem auto 0;
+}
+.spx-empty h1 { margin: 0; }
+.spx-empty .subtitle { margin: 0; color: var(--muted); }
+
+/* Mobile : hero en pile, CTA pleine largeur. */
+@media (max-width: 720px) {
+  .spx-hero {
+    grid-template-columns: 1fr;
+    padding: 1.25rem;
+  }
+  .spx-hero-cta { justify-self: stretch; align-items: stretch; max-width: none; }
+  .spx-cta { width: 100%; justify-content: center; }
+  .spx-cta-sub { text-align: center; max-width: none; }
+  .spx-hero-title { font-size: 1.45rem; }
+  .spx-avatar { width: 64px; height: 64px; }
+}
+@media (max-width: 480px) {
+  .spx { padding: 0 1rem; }
+  .spx-grid { grid-template-columns: 1fr; }
+}
+
+/* Conteneur page payante (réutilise .spx + .pp-view). */
+.spx .pp-view { margin: 0; max-width: none; }
+
+/* ── Rendu type-aware des pages premium (renderPaidPageContent) ─────────── */
+.pp-empty { text-align: center; color: var(--muted); padding: 1.5rem 0; }
+
+/* Lien externe */
+.pp-link { display: flex; flex-direction: column; gap: .75rem; }
+.pp-link-note { margin: 0; color: var(--fg); white-space: pre-wrap; }
+.pp-link-cta { align-self: flex-start; }
+
+/* Galerie publique : grille fluide, items cliquables, lightbox au clic. */
+.pp-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: .55rem;
+}
+.pp-gal-item {
+  position: relative;
+  display: block;
+  aspect-ratio: 1 / 1;
+  border: 0; padding: 0; margin: 0; cursor: pointer;
+  border-radius: var(--r-sm); overflow: hidden;
+  background: var(--bg-soft);
+  transition: transform .15s, box-shadow .15s;
+}
+.pp-gal-item:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+.pp-gal-item img, .pp-gal-item video {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.pp-gal-cap {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: .25rem .5rem;
+  font-size: .75rem; color: #fff;
+  background: linear-gradient(to top, rgba(0,0,0,.65), transparent);
+  text-align: left;
+}
+
+/* Fichier téléchargeable */
+.pp-file {
+  display: flex; align-items: center; gap: 1rem;
+  padding: 1.25rem;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--bg-soft);
+}
+.pp-file-ic {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 56px; height: 56px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-ink);
+  flex-shrink: 0;
+}
+.pp-file-body { flex: 1; min-width: 0; }
+.pp-file-body b { display: block; word-break: break-word; }
+.pp-file-size { color: var(--muted); font-size: .85rem; }
+
+/* Markdown léger */
+.pp-markdown h1, .pp-markdown h2, .pp-markdown h3 { margin: 1.25rem 0 .5rem; }
+.pp-markdown h1 { font-size: 1.5rem; }
+.pp-markdown h2 { font-size: 1.25rem; }
+.pp-markdown h3 { font-size: 1.05rem; }
+.pp-markdown p { margin: .55rem 0; line-height: 1.55; }
+.pp-markdown ul { margin: .55rem 0 .55rem 1.25rem; padding-left: .8rem; }
+.pp-markdown li { margin: .25rem 0; }
+.pp-markdown strong { color: var(--accent-ink); }
+
+/* ── Wizard : type Fichier (carte état uploadé / vide) ───────────────────── */
+.pp-file-state { margin: .25rem 0; }
+.pp-file-card {
+  display: flex; align-items: center; gap: .75rem;
+  padding: .75rem; border-radius: var(--r-sm);
+  border: 1px solid var(--line); background: var(--bg-soft);
+}
+.pp-file-card .pp-file-ic {
+  width: 36px; height: 36px; border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--accent-ink); flex-shrink: 0;
+}
+.pp-file-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pp-file-info b { word-break: break-word; }
+.pp-file-empty {
+  display: flex; flex-direction: column; align-items: center; gap: .5rem;
+  padding: 1.25rem; text-align: center;
+  border: 1.5px dashed var(--line); border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--bg) 50%, transparent);
+}
+.pp-file-empty .pp-file-ic {
+  width: 44px; height: 44px; border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent-ink);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.pp-file-empty p { margin: 0; color: var(--muted); font-size: .9rem; }
+
+/* Indication d'usage du calendrier public (visiteur) — remplace l'ancien
+   bouton « Demander un RDV ». Le RDV se prend en cliquant un jour libre. */
+.cal-hint {
+  display: flex; align-items: center; gap: .5rem;
+  margin: .75rem 0 0; padding: .7rem .9rem;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-soft));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
+  color: var(--fg); font-size: .9rem; line-height: 1.4;
+}
+.cal-hint svg { flex-shrink: 0; color: var(--accent-ink); }
+.pub-space-draft {
+  font-size: .65rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  padding: .1rem .4rem; border-radius: 4px;
+  background: color-mix(in srgb, var(--muted) 30%, transparent);
+  color: var(--muted);
+}
+.pub-space-page.is-draft { opacity: .8; border: 1px dashed color-mix(in srgb, var(--muted) 30%, var(--line)); }
+
+/* Couverture vidéo (Premium P4) : remplit le hero comme une image background-cover.
+   inset:0 hérité de .pub-cover-bg ne suffit pas — sans width/height explicites
+   le <video> garde ses dimensions intrinsèques 1080×1920 et dépasse le viewport. */
+.pub-cover-video {
+  width: 100%; height: 100%;
+  object-fit: cover; object-position: center;
+}
+
+/* Modale de cadrage couverture (ui/cover-editor.js) */
+.cover-editor { max-width: 480px; }
+.cover-editor .ce-stage {
+  display: flex; justify-content: center;
+  background: #0b0d12; border-radius: var(--r-md);
+  padding: 12px; margin: .6rem 0 .8rem;
+}
+.cover-editor .ce-frame {
+  position: relative;
+  width: 240px; aspect-ratio: 9 / 16;
+  overflow: hidden; border-radius: 18px;
+  background: #111;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+}
+.cover-editor .ce-frame:active { cursor: grabbing; }
+.cover-editor .ce-media {
+  position: absolute; left: 50%; top: 50%;
+  pointer-events: none; user-select: none; -webkit-user-drag: none;
+  max-width: none; max-height: none;
+  transform: translate(-50%, -50%);
+}
+.cover-editor .ce-loading {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: #aaa; font-size: .85rem;
+}
+.cover-editor .ce-controls { display: flex; flex-direction: column; gap: .6rem; margin-bottom: 1rem; }
+.cover-editor .ce-controls label { display: flex; align-items: center; gap: .6rem; font-size: .85rem; margin: 0; }
+.cover-editor .ce-lbl { display: inline-flex; align-items: center; gap: .3rem; min-width: 70px; color: var(--muted); }
+.cover-editor .ce-controls input[type="range"] { flex: 1; }
+.cover-editor .ce-trim-val { font-variant-numeric: tabular-nums; color: var(--muted); font-size: .8rem; min-width: 7.5em; text-align: right; }
+.cover-editor .ce-actions { display: flex; justify-content: flex-end; gap: .5rem; }
 /* Boutons personnalisés de la page publique (Premium P5). */
 .pub-buttons { display: flex; flex-direction: column; gap: .5rem; margin: .85rem 0; }
 .pub-btn { display: flex; align-items: center; justify-content: center; gap: .5rem; padding: .7rem 1rem; border-radius: var(--r-md); background: var(--accent); color: #0b0d12; font-weight: 600; text-decoration: none; }
 .pub-btn:hover { filter: brightness(1.06); }
+
+/* ── Boutons flottants personnalisables (cover-hero) ───────────────────────
+   Calque transparent qui couvre la cover et reçoit des badges position:abs
+   placés en %. La position est persistée côté serveur (pos_x, pos_y) donc
+   les visiteurs voient le même agencement.
+   Édition : drag avec pointer events sur le bouton (côté propriétaire). */
+.pub-fbtn-layer {
+  position: absolute; inset: 0;
+  pointer-events: none;            /* ne bloque pas les clics sur la cover */
+  z-index: 3;                       /* au-dessus de la cover-bg, sous identity */
+}
+.pub-fbtn {
+  position: absolute;
+  pointer-events: auto;            /* ré-active sur les boutons eux-mêmes */
+  transform: translate(-50%, -50%);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; min-width: 44px;
+  padding: 0 .6rem;
+  background: rgba(0,0,0,.55); color: #fff;
+  border: 1px solid rgba(255,255,255,.35);
+  text-decoration: none; font-size: .82rem; font-weight: 600;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 4px 14px rgba(0,0,0,.35);
+  transition: background .15s, transform .15s, box-shadow .15s, border-color .15s;
+  user-select: none; touch-action: none; /* drag fluide sur mobile */
+  -webkit-user-drag: none;               /* bloque le drag natif Safari/WebKit */
+}
+.pub-fbtn--circle           { border-radius: 50%; }
+.pub-fbtn--square           { border-radius: 8px; }
+.pub-fbtn.has-label         { width: auto; padding: 0 .85rem; gap: .4rem; min-width: 44px; }
+.pub-fbtn:hover             { background: rgba(0,0,0,.78); border-color: rgba(255,255,255,.7); }
+.pub-fbtn.is-self           { cursor: grab; }
+.pub-fbtn.is-self:active,
+.pub-fbtn.is-dragging       { cursor: grabbing; box-shadow: 0 8px 24px rgba(0,0,0,.55); transform: translate(-50%, -50%) scale(1.05); }
+.pub-fbtn-lbl               { white-space: nowrap; }
+
+/* Tooltip stylisé au survol — visible UNIQUEMENT si le libellé n'est pas déjà
+   affiché en permanence (.has-label) et si data-label est rempli. Bulle sombre
+   avec petite flèche pointant vers le badge, fade-in 150ms. */
+.pub-fbtn[data-label]:not([data-label=""]):not(.has-label)::after {
+  content: attr(data-label);
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px) scale(.95);
+  white-space: nowrap; max-width: 60vw; overflow: hidden; text-overflow: ellipsis;
+  padding: .35rem .65rem;
+  background: linear-gradient(180deg, rgba(28,28,36,.98), rgba(18,18,24,.98));
+  color: #fff;
+  font-size: .78rem; font-weight: 600; letter-spacing: .01em;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,.14);
+  box-shadow: 0 6px 18px rgba(0,0,0,.5), 0 0 0 1px rgba(0,0,0,.25);
+  opacity: 0; pointer-events: none;
+  transition: opacity .15s ease, transform .15s ease;
+  z-index: 5;
+}
+.pub-fbtn[data-label]:not([data-label=""]):not(.has-label)::before {
+  content: "";
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0; height: 0;
+  border: 6px solid transparent;
+  border-top-color: rgba(18,18,24,.98);
+  opacity: 0; pointer-events: none;
+  transition: opacity .15s ease;
+  z-index: 5;
+  filter: drop-shadow(0 2px 2px rgba(0,0,0,.35));
+}
+.pub-fbtn[data-label]:not([data-label=""]):not(.has-label):hover::after,
+.pub-fbtn[data-label]:not([data-label=""]):not(.has-label):focus-visible::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0) scale(1);
+}
+.pub-fbtn[data-label]:not([data-label=""]):not(.has-label):hover::before,
+.pub-fbtn[data-label]:not([data-label=""]):not(.has-label):focus-visible::before {
+  opacity: 1;
+}
+/* Pas de tooltip pendant le drag (gêne visuelle) ni sur réduction du mouvement. */
+.pub-fbtn.is-dragging::after,
+.pub-fbtn.is-dragging::before { opacity: 0 !important; }
+@media (prefers-reduced-motion: reduce) {
+  .pub-fbtn[data-label]::after,
+  .pub-fbtn[data-label]::before { transition: none; }
+}
+
+/* Éditeur boutons personnalisés (Ma page, propriétaire). Liste drag-and-drop
+   limite 5 entrées ; chaque ligne = icône (avec preview), libellé, URL, ✕. */
+.pub-buttons-edit {
+  display: flex; flex-direction: column; gap: .5rem;
+  margin: .85rem 0;
+  padding: .8rem;
+  background: rgba(0,0,0,.35);
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: var(--r-lg, 12px);
+  color: #fff;
+}
+.pb-edit-head {
+  display: flex; align-items: center; gap: .35rem;
+  font-size: .82rem; color: rgba(255,255,255,.85);
+}
+.pb-edit-count {
+  margin-left: auto; font-size: .72rem; opacity: .6; font-variant-numeric: tabular-nums;
+}
+.pb-edit-hint { font-size: .76rem; color: rgba(255,255,255,.6); margin: 0; }
+.pb-edit-hint a { color: var(--accent-ink, #fff); }
+.pb-edit-list { display: flex; flex-direction: column; gap: .35rem; }
+.pb-edit-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 90px) minmax(0, 1fr) minmax(0, 1.5fr) 28px 28px 28px;
+  align-items: center; gap: .35rem;
+  padding: .35rem .45rem;
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: var(--r-md, 8px);
+  transition: background .12s, opacity .12s;
+}
+.pb-edit-shape, .pb-edit-showlbl {
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.18);
+  color: #fff; cursor: pointer;
+  width: 28px; height: 28px; padding: 0; border-radius: 6px;
+  font-size: .82rem; line-height: 1; font-weight: 700;
+}
+.pb-edit-shape:hover, .pb-edit-showlbl:hover { background: rgba(255,255,255,.16); }
+.pb-edit-showlbl.on { background: rgba(255,255,255,.45); color: #0b0d12; }
+.pb-edit-hint-inline { margin-left: auto; font-size: .72rem; opacity: .55; }
+.pb-preview-ic { display: inline-flex; align-items: center; justify-content: center; color: rgba(255,255,255,.85); }
+.pb-edit-row input {
+  min-width: 0;
+  padding: .35rem .5rem;
+  font: inherit; font-size: .82rem;
+  background: rgba(0,0,0,.35); color: #fff;
+  border: 1px solid rgba(255,255,255,.1); border-radius: var(--r-sm, 6px);
+}
+.pb-edit-row input:focus { outline: none; border-color: rgba(255,255,255,.45); background: rgba(0,0,0,.6); }
+.pb-edit-del {
+  background: transparent; border: 0; color: rgba(255,255,255,.55);
+  cursor: pointer; font-size: 1rem; padding: 0; line-height: 1;
+}
+.pb-edit-del:hover { color: var(--danger, #ef4444); }
+.pb-edit-actions { display: flex; align-items: center; gap: .55rem; margin-top: .15rem; }
+.pb-edit-status { font-size: .76rem; color: rgba(255,255,255,.55); }
+/* Sur mobile : 2 lignes — icône+libellé d'abord puis URL+actions ensuite. */
+@media (max-width: 540px) {
+  .pb-edit-row {
+    grid-template-columns: 22px minmax(0, 70px) minmax(0, 1fr) 28px 28px 28px;
+    grid-template-areas:
+      "preview iconin label del del del"
+      "url     url    url   shape lbl ."
+      "url-c   url-c  url-c url-c url-c url-c";
+    row-gap: .3rem;
+  }
+  .pb-preview-ic { grid-area: preview; }
+  .pb-edit-icon  { grid-area: iconin; }
+  .pb-edit-label { grid-area: label; }
+  .pb-edit-url   { grid-area: url; grid-column: 1 / -1; }
+  .pb-edit-shape { grid-area: shape; }
+  .pb-edit-showlbl { grid-area: lbl; }
+  .pb-edit-del   { grid-area: del; }
+}
 /* Éditeur — personnalisation Premium (couverture + boutons). */
 .hm-badge.premium { background: var(--accent); color: #0b0d12; }
 .lt-premium { display: flex; flex-direction: column; gap: .7rem; margin-top: .5rem; }
@@ -1742,17 +2713,213 @@ body:has(#app[data-view="private"]) { height: 100dvh; overflow: hidden; }
 .lt-prem-label { font-size: .85rem; color: var(--muted); display: inline-flex; align-items: center; gap: .35rem; }
 .lt-prem-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
 .pb-list { display: flex; flex-direction: column; gap: .4rem; }
-.pb-row { display: grid; grid-template-columns: 1fr 1.4fr auto; gap: .4rem; }
+/* Ligne complète : preview · icône · libellé · URL · forme · show_label · ✕ */
+.pb-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 90px) minmax(0, 1fr) minmax(0, 1.5fr) 28px 28px 28px;
+  gap: .35rem; align-items: center;
+}
 .pb-row input { min-width: 0; }
+.pb-prev-ic { display: inline-flex; align-items: center; justify-content: center; color: var(--fg); }
+.pb-shape, .pb-showlbl {
+  background: transparent; border: 1px solid var(--line); border-radius: var(--r-sm, 6px);
+  cursor: pointer; color: var(--fg);
+  width: 28px; height: 28px; padding: 0;
+  font-size: .82rem; line-height: 1; font-weight: 700;
+}
+.pb-shape:hover, .pb-showlbl:hover { background: var(--inset, rgba(255,255,255,.04)); }
+.pb-showlbl.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 .pb-del { background: transparent; border: 1px solid var(--line); border-radius: var(--r-sm, 8px); cursor: pointer; color: var(--muted); padding: 0 .5rem; }
+@media (max-width: 540px) {
+  .pb-row {
+    grid-template-columns: 22px minmax(0, 80px) minmax(0, 1fr) 28px 28px 28px;
+    grid-template-areas:
+      "prev icon label del del del"
+      "url  url  url   shape lbl .";
+    row-gap: .3rem;
+  }
+  .pb-prev-ic { grid-area: prev; }
+  .pb-icon    { grid-area: icon; }
+  .pb-label   { grid-area: label; }
+  .pb-url     { grid-area: url; grid-column: 1 / -1; }
+  .pb-shape   { grid-area: shape; }
+  .pb-showlbl { grid-area: lbl; }
+  .pb-del     { grid-area: del; }
+}
 /* Galerie — bouton lien (propriétaire) + pastille (visiteur). */
 .gal-link { position: absolute; top: .35rem; left: .35rem; border: 0; border-radius: 999px; cursor: pointer; background: rgba(0,0,0,.55); color: #fff; width: 1.7rem; height: 1.7rem; opacity: .7; }
 .gal-link.on { background: var(--accent); color: #0b0d12; opacity: 1; }
 .gal-linkbadge { position: absolute; top: .35rem; left: .35rem; font-size: .9rem; filter: drop-shadow(0 1px 2px rgba(0,0,0,.6)); }
-/* Pages payantes (Premium P7). */
+/* Pages premium (Espace Premium). */
 .pp-content { white-space: pre-wrap; line-height: 1.6; }
-.pp-row { display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap; padding: .35rem 0; border-bottom: 1px solid var(--line); }
+.pp-row {
+  display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+  padding: .45rem .15rem; border-bottom: 1px solid var(--line);
+}
+.pp-row:last-child { border-bottom: 0; }
+.pp-row-ic { display: inline-flex; align-items: center; color: var(--accent-ink); opacity: .85; }
+.pp-row b { font-weight: 600; }
 .pp-new summary { cursor: pointer; color: var(--accent-ink); }
+
+/* Wizard : étape 1 = grille de cartes par type. */
+.pp-wizard {
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg-soft));
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1rem 1.1rem 1.1rem;
+  margin-top: .8rem;
+}
+.pp-form-head { margin: .2rem 0 1.1rem; padding-bottom: .65rem; border-bottom: 1px solid var(--line); }
+
+/* Formulaire — rythme vertical 16/24, labels visibles, focus visible. */
+.pp-form { display: flex; flex-direction: column; gap: 1.25rem; }
+.pp-field { display: flex; flex-direction: column; gap: .4rem; }
+.pp-field--content { gap: .55rem; }
+.pp-label {
+  font-size: .82rem; font-weight: 600; letter-spacing: .01em;
+  color: var(--fg);
+}
+.pp-required { color: var(--danger, #f87171); margin-left: .15rem; }
+.pp-help {
+  margin: 0; font-size: .78rem; line-height: 1.4;
+  color: var(--muted);
+}
+
+/* Inputs : 44px min, focus accent, transitions courtes. Couvre aussi les
+   inputs type-spécifiques injectés dans #pp-type-fields (pp-link-url, pp-md, …). */
+.pp-form input:not([type="checkbox"]):not([type="file"]):not([type="radio"]),
+.pp-form textarea {
+  min-height: 44px;
+  padding: .6rem .85rem;
+  background: var(--inset, var(--bg-soft));
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: inherit;
+  font-size: .95rem;
+  font-family: inherit;
+  width: 100%; box-sizing: border-box;
+  transition: border-color .15s, box-shadow .15s, background .15s;
+}
+.pp-form input::placeholder, .pp-form textarea::placeholder { color: color-mix(in srgb, var(--muted) 75%, transparent); }
+.pp-form input:not([type="checkbox"]):not([type="file"]):not([type="radio"]):focus,
+.pp-form textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+  background: var(--bg);
+}
+.pp-form input:invalid:not(:placeholder-shown):not([type="checkbox"]) { border-color: color-mix(in srgb, var(--danger, #f87171) 50%, var(--line)); }
+
+/* Slug : préfixe URL visible inline (read-only-distinction). */
+.pp-slug-row {
+  display: flex; align-items: stretch;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--inset, var(--bg-soft));
+  overflow: hidden;
+  transition: border-color .15s, box-shadow .15s;
+}
+.pp-slug-row:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.pp-slug-prefix {
+  display: inline-flex; align-items: center;
+  padding: 0 .65rem 0 .85rem;
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  color: var(--muted);
+  font-size: .85rem; font-family: var(--mono, ui-monospace, "SF Mono", Menlo, monospace);
+  white-space: nowrap; user-select: none;
+  border-right: 1px solid var(--line);
+}
+.pp-slug-row input {
+  flex: 1; min-width: 0;
+  min-height: 44px;
+  padding: .6rem .85rem;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  color: inherit;
+  font-family: var(--mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: .9rem;
+}
+
+/* Toggle « Publier tout de suite » — touch target 44, état clair. */
+.pp-toggle {
+  display: flex; align-items: flex-start; gap: .8rem;
+  padding: .85rem 1rem;
+  border-radius: 12px;
+  background: var(--inset, var(--bg-soft));
+  border: 1px solid var(--line);
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+  min-height: 44px;
+}
+.pp-toggle:hover { border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }
+.pp-toggle:focus-within { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+.pp-toggle-input { position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0; }
+.pp-toggle-track {
+  flex-shrink: 0;
+  position: relative;
+  width: 40px; height: 24px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 35%, transparent);
+  transition: background .2s ease;
+  margin-top: .15rem;
+}
+.pp-toggle-thumb {
+  position: absolute; top: 3px; left: 3px;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: #fff;
+  transition: transform .2s ease;
+  box-shadow: 0 1px 3px rgba(0,0,0,.3);
+}
+.pp-toggle-input:checked + .pp-toggle-track { background: var(--accent); }
+.pp-toggle-input:checked + .pp-toggle-track .pp-toggle-thumb { transform: translateX(16px); }
+.pp-toggle-text { display: flex; flex-direction: column; gap: .15rem; line-height: 1.35; }
+.pp-toggle-title { font-weight: 600; font-size: .92rem; color: var(--fg); }
+.pp-toggle-desc { font-size: .8rem; color: var(--muted); }
+
+/* Actions : secondaires à gauche, primaire à droite (primary-action). */
+.pp-actions {
+  display: flex; align-items: center; gap: .5rem;
+  flex-wrap: wrap;
+  padding-top: .6rem; margin-top: .25rem;
+  border-top: 1px solid var(--line);
+}
+.pp-actions-primary { margin-left: auto; min-height: 44px; padding: .7rem 1.25rem; font-weight: 600; }
+.pp-actions-secondary { min-height: 40px; }
+
+@media (max-width: 480px) {
+  .pp-actions { flex-direction: column-reverse; align-items: stretch; }
+  .pp-actions-primary { margin-left: 0; width: 100%; justify-content: center; }
+  .pp-actions-secondary { width: 100%; justify-content: center; }
+}
+.pp-type-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+  gap: .55rem; margin-top: .5rem;
+}
+.pp-type-card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: .25rem;
+  padding: .75rem .85rem; border-radius: 10px; cursor: pointer; text-align: left;
+  background: rgba(255,255,255,.04); border: 1px solid var(--line); color: inherit;
+  transition: background .15s, border-color .15s, transform .1s;
+}
+.pp-type-card:not([disabled]):hover { background: rgba(255,255,255,.09); border-color: var(--accent); }
+.pp-type-card:not([disabled]):active { transform: scale(.98); }
+.pp-type-card[disabled] { opacity: .45; cursor: not-allowed; }
+.pp-type-ic {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 2.2rem; height: 2.2rem; border-radius: 8px;
+  background: var(--accent-soft); color: var(--accent-ink); margin-bottom: .2rem;
+}
+.pp-type-card b { font-size: .95rem; }
+.pp-type-card .lbl-sm { line-height: 1.35; }
+
+/* (anciennes règles génériques pp-form remplacées par le bloc structuré
+   ci-dessus avec labels, helper text, toggle stylisé ; cf. ~ligne 2606.) */
+.pp-form textarea { resize: vertical; min-height: 7rem; width: 100%; box-sizing: border-box; }
 .pr-tag {
   display: inline-block; align-self: flex-start; font-size: .72rem; font-weight: 600;
   color: var(--accent-ink); background: var(--accent-soft); padding: .15rem .5rem; border-radius: 999px;
@@ -3038,9 +4205,13 @@ body { font-family: var(--font); }
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
-/* hm-dashboard n'a pas de .card wrapper → lui donner le même padding que les cartes */
+/* hm-dashboard n'a pas de .card wrapper → lui donner le même padding que les cartes.
+   display:flex + .col-scroll interne (comme les autres onglets) : le contenu défile
+   à l'intérieur de la colonne au lieu de hijacker la navigation molette du deck. */
 #app[data-view="private"] #deck .col.active > .hm-dashboard {
   padding: var(--pad);
+  display: flex;
+  flex-direction: column;
 }
 
 /* Les cartes prennent toute la largeur dans les panneaux */
@@ -3777,6 +4948,33 @@ body:has(.overlay.open) .bottom-nav { transform: translateY(100%); }
   .lt-link:hover { transform: none; }
   .lt-link:hover .lt-link-go { transform: none; }
 }
+/* — Accès direct à l'Espace Premium (top de l'aside du dashboard) — */
+.hm-space-card {
+  display: flex; align-items: center; gap: .75rem;
+  padding: .9rem 1.1rem;
+  border-radius: var(--radius, 12px);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 18%, var(--surface)), color-mix(in srgb, var(--accent) 6%, var(--surface)));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  color: inherit; text-decoration: none;
+  transition: transform .15s, box-shadow .15s, border-color .15s;
+}
+.hm-space-card:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.hm-space-ic {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+  color: var(--accent-ink); flex-shrink: 0;
+}
+.hm-space-body { display: flex; flex-direction: column; line-height: 1.3; flex: 1; min-width: 0; }
+.hm-space-body b { font-size: .98rem; }
+.hm-space-body span { font-size: .8rem; color: var(--muted); }
+.hm-space-arrow { font-size: 1.4rem; opacity: .55; flex-shrink: 0; }
+.hm-space-card:hover .hm-space-arrow { opacity: 1; transform: translateX(2px); }
+
 /* — Bloc premium dédié (aside) — */
 .hm-prem-card {
   background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, var(--surface)), var(--surface));
@@ -3993,6 +5191,38 @@ body:has(.overlay.open) .bottom-nav { transform: translateY(100%); }
   padding: 1rem;
 }
 .opt-v2-account { grid-column: 1 / -1; }
+.opt-v2-block--full { grid-column: 1 / -1; }
+.opt-swatches { display: flex; flex-wrap: wrap; gap: .55rem; }
+.opt-swatches .swatch { width: 26px; height: 26px; }
+.opt-v2-search-wrap { margin-bottom: .75rem; }
+.opt-search {
+  width: 100%; padding: .45rem .75rem; border-radius: var(--r-md);
+  border: 1px solid var(--line); background: var(--inset); color: var(--fg);
+  font: inherit; font-size: .875rem; box-sizing: border-box;
+}
+.opt-search:focus { outline: none; border-color: var(--accent-line); }
+.opt-v2-block[hidden] { display: none; }
+.opt-v2-dev { border-color: color-mix(in srgb, var(--accent-ink) 40%, var(--line)); background: color-mix(in srgb, var(--accent) 6%, var(--bg-soft)); }
+.opt-dev-badge { font-size: .65rem; font-weight: 700; letter-spacing: .08em; padding: .1rem .35rem; border-radius: 4px; background: var(--accent); color: var(--on-accent); margin-left: .3rem; text-transform: uppercase; vertical-align: middle; }
+.opt-v2-dev .opt-name { display: flex; align-items: center; gap: .3rem; }
+.opt-v2-dev .opt-desc code { font-family: var(--mono); font-size: .75em; color: var(--accent-ink); }
+
+/* Dev : abonnements simulés à des espaces premium */
+.opt-dev-subs { margin-top: 1rem; padding-top: .8rem; border-top: 1px dashed color-mix(in srgb, var(--accent-ink) 20%, var(--line)); }
+.opt-dev-list { list-style: none; margin: .2rem 0 .6rem; padding: 0; display: flex; flex-direction: column; gap: .3rem; }
+.opt-dev-sub-row {
+  display: flex; align-items: center; gap: .6rem;
+  padding: .4rem .6rem; border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg-soft));
+}
+.opt-dev-sub-row a { font-weight: 600; text-decoration: none; }
+.opt-dev-sub-row .lbl-sm { margin-left: auto; opacity: .7; }
+.opt-dev-sub-add { display: flex; gap: .4rem; }
+.opt-dev-sub-add input[type="text"] {
+  flex: 1; padding: .4rem .6rem; border-radius: var(--r-sm);
+  border: 1px solid var(--line); background: var(--bg); color: inherit; font-size: .9rem;
+}
+.opt-dev-sub-add input[type="text"]:focus { outline: none; border-color: var(--accent-line); }
 
 .opt-v2-head {
   display: flex; align-items: center; gap: .45rem;
@@ -4060,14 +5290,20 @@ body:has(.overlay.open) .bottom-nav { transform: translateY(100%); }
   .comm-layout:has(#comm-right .chat-card) .comm-right { display: flex; }
   .comm-layout:has(#comm-right .chat-card) .comm-right .chat-card .close {
     display: inline-flex !important;
+    top: .3rem !important;
+    right: .3rem !important;
+    width: 26px !important;
+    height: 26px !important;
+    font-size: .85rem !important;
   }
-  /* Chat header : autoriser le wrapping sur mobile (nowrap → truncation) */
+  /* Chat header : autoriser le wrapping + espace pour le × */
   .comm-right .chat-head {
     flex-wrap: wrap !important;
     white-space: normal !important;
     overflow: visible !important;
     height: auto !important;
-    padding-bottom: .45rem !important;
+    padding-bottom: .4rem !important;
+    padding-right: 2.2rem !important;
   }
   /* Chat form : boutons plus compacts → plus d'espace pour le champ texte */
   .comm-right .chat-form { gap: .2rem !important; }
@@ -4168,14 +5404,21 @@ body:has(.overlay.open) .bottom-nav { transform: translateY(100%); }
 .comm-right .chat-head {
   display: flex !important;
   align-items: center !important;
-  gap: .5rem !important;
-  padding: .6rem .9rem !important;
+  gap: .4rem !important;
+  padding: .5rem .75rem !important;
   border-bottom: 1px solid var(--line) !important;
   flex: none !important;
-  flex-wrap: nowrap !important;
-  white-space: nowrap !important;
-  overflow: hidden !important;
-  font-size: .84rem !important;
+  flex-wrap: wrap !important;
+  font-size: .82rem !important;
+  row-gap: .3rem !important;
+}
+/* Sur grand panneau : une seule ligne, overflow caché */
+@container comms (min-width: 601px) {
+  .comm-right .chat-head {
+    flex-wrap: nowrap !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+  }
 }
 .comm-call-actions {
   margin-left: auto; flex: none; display: flex; gap: .3rem;
@@ -4206,7 +5449,7 @@ body:has(.overlay.open) .bottom-nav { transform: translateY(100%); }
   background: var(--bg) !important;
 }
 /* Sur large pane : bulles un peu plus larges + médias qui exploitent la place */
-.comm-right .chat-log > .bubble { max-width: 74%; }
+.comm-right .chat-log > .bubble { max-width: 72%; }
 .comm-right .chat-log > .bubble .b-att-img img { max-width: min(80%, 380px) !important; }
 
 /* Formulaire : collé en bas, pas de marge supplémentaire */
@@ -4909,4 +6152,216 @@ h1, h2, h3,
 @media (prefers-reduced-motion: reduce) {
   .lt-link, .btn, .hm-section, .bnav-item svg { transition: none; }
   .btn.primary:hover, .bnav-item.active svg { transform: none; }
+}
+
+/* Intro Markdown de l'espace premium (éditeur /me/premium). Max 1/5 de la
+   hauteur viewport ; au-delà → scroll vertical à l'intérieur de la textarea. */
+.sp-intro-ta {
+  width: 100%; box-sizing: border-box;
+  min-height: 96px; max-height: 20vh; overflow-y: auto;
+  resize: vertical;
+  font: inherit; font-size: .92rem; line-height: 1.5;
+  background: var(--inset); color: var(--fg);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: .6rem .75rem;
+  transition: border-color var(--dur) var(--ease-out), box-shadow var(--dur) var(--ease-out);
+}
+.sp-intro-ta:focus {
+  outline: none; border-color: var(--accent-ink);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.sp-intro-ta::placeholder { color: var(--muted); }
+
+/* Rendu HTML de l'intro sur /@handle (zone bio publique : profil principal +
+   bas du slide home en mobile). Pas de surface encadrée — l'intro se fond dans
+   le bloc d'accueil et précède la bio. */
+.pub-intro {
+  margin: 0 0 .85rem;
+  color: var(--fg);
+  font-size: 1rem; line-height: 1.55;
+}
+/* Lien discret pour le proprio sous l'intro Markdown, redirige vers l'éditeur. */
+.pub-intro-edit-hint {
+  margin: -.4rem 0 .9rem; opacity: .7;
+}
+.pub-intro-edit-hint a {
+  display: inline-flex; align-items: center; gap: .3rem;
+  color: var(--muted); text-decoration: none;
+  font-size: .82rem;
+}
+.pub-intro-edit-hint a:hover { color: var(--accent-ink); text-decoration: underline; }
+.pub-intro > :first-child { margin-top: 0; }
+.pub-intro > :last-child  { margin-bottom: 0; }
+.pub-intro h1 { font-size: 1.4rem; font-weight: 700; margin: .9rem 0 .35rem; letter-spacing: -.01em; }
+.pub-intro h2 { font-size: 1.15rem; font-weight: 700; margin: .7rem 0 .3rem; }
+.pub-intro h3 { font-size: 1rem;    font-weight: 700; margin: .55rem 0 .25rem; }
+.pub-intro p  { margin: .35rem 0; }
+.pub-intro ul { margin: .35rem 0 .35rem 1.2rem; padding: 0; }
+.pub-intro li { margin: .15rem 0; }
+.pub-intro strong { font-weight: 700; }
+.pub-intro em     { font-style: italic; }
+
+/* Rendu HTML de l'intro sur /@handle/space — typographie douce, marges resserrées. */
+.spx-intro {
+  margin: 0 auto 1.25rem; max-width: 720px;
+  padding: 1rem 1.1rem; border-radius: var(--r-lg);
+  background: var(--card); border: 1px solid var(--line);
+  box-shadow: var(--elev-1), var(--highlight);
+  color: var(--fg);
+}
+.spx-intro > :first-child { margin-top: 0; }
+.spx-intro > :last-child  { margin-bottom: 0; }
+.spx-intro h1 { font-size: 1.35rem; margin: .8rem 0 .4rem; }
+.spx-intro h2 { font-size: 1.15rem; margin: .7rem 0 .35rem; }
+.spx-intro h3 { font-size: 1.02rem; margin: .6rem 0 .3rem; }
+.spx-intro p  { margin: .35rem 0; line-height: 1.55; }
+.spx-intro ul { margin: .35rem 0 .35rem 1.2rem; padding: 0; }
+.spx-intro li { margin: .15rem 0; }
+
+/* ====================================================================
+   Landing simple (Easy) — refonte mobile 2026
+   Objectif : tailles homogènes, rythme vertical resserré, mieux remplir
+   l'espace écran. Toutes les overrides sont scopées à .landing--simple
+   et à l'en-tête landing pour ne pas impacter les autres vues.
+   Breakpoints canoniques : 768 (md) et 480 (sm). cf. convention plus haut.
+   ==================================================================== */
+
+/* — Header landing : normalisation des contrôles sous 768 px —
+   On vise une grille d'outils à hauteur unique 40 px (touch 44 garanti
+   via min-height en pointer:coarse). Les sauts visuels disparaissent. */
+@media (max-width: 768px) {
+  #app[data-view="landing"] .topbar.site-header {
+    padding-block: .6rem .7rem;
+    padding-inline: clamp(.85rem, 3vw, 1.25rem);
+  }
+  #app[data-view="landing"] .topbar.site-header .editor-head-right {
+    gap: .35rem; flex-wrap: nowrap; row-gap: .35rem;
+  }
+  #app[data-view="landing"] .hd-tools { gap: .3rem; }
+
+  /* Tous les contrôles du header alignés sur 44 px OUTER (a11y touch).
+     - .seg : padding 2px + seg-btn 40 px = 44 outer
+     - .lang-select : <select> natif → hauteur EXPLICITE (min-height ignoré)
+     - .theme-toggle-header : carré 44 */
+  #app[data-view="landing"] .seg { padding: 2px; }
+  #app[data-view="landing"] .seg-btn { height: 40px; min-height: 0; padding: 0 .55rem; }
+  #app[data-view="landing"] .lang-select {
+    height: 44px; min-height: 0; box-sizing: border-box;
+    font-size: .82rem; padding-block: 0; line-height: 1;
+  }
+  #app[data-view="landing"] .theme-toggle-header { width: 44px; height: 44px; }
+}
+
+/* Sous 480 px : on compacte le sélecteur de langue (chevron seul + 2 lettres). */
+@media (max-width: 480px) {
+  #app[data-view="landing"] .lang-select {
+    padding-right: 1.45rem; background-position: right .45rem center;
+    min-width: 0;
+  }
+  /* Le logo brand-milo reste en zone touch large, mais visuellement
+     ramené à 36 px pour libérer de l'espace au profit des outils. */
+  #app[data-view="landing"] .brand-milo,
+  #app[data-view="landing"] .brand-milo .milo { width: 36px; height: 36px; }
+}
+
+/* — Hero landing simple : équilibre vertical et bulles contenues — */
+@media (max-width: 768px) {
+  .landing--simple .tg-hero {
+    padding-top: 1rem; padding-bottom: 1.5rem;
+    gap: 1.25rem;
+  }
+  /* Visuel Milo : descendu (220 px), disc resserré (200 px) → on récupère
+     ~80 px de hauteur sans rien sacrifier au charme. */
+  .landing--simple .tg-hero-visual { min-height: 220px; }
+  .landing--simple .tg-milo-disc { width: clamp(180px, 52vw, 240px); }
+  .landing--simple .tg-milo svg { width: 70%; height: 70%; }
+
+  /* Bulles ramenées DANS la zone visuelle (plus de débordement clippé),
+     style 2026 « glass » : translucide + flou + bord subtil. */
+  .landing--simple .tg-chip {
+    font-size: .78rem; padding: .42rem .65rem;
+    background: color-mix(in srgb, var(--card) 80%, transparent);
+    backdrop-filter: blur(8px) saturate(1.3);
+    -webkit-backdrop-filter: blur(8px) saturate(1.3);
+    border-color: color-mix(in srgb, var(--fg) 10%, transparent);
+    box-shadow: 0 8px 22px -14px rgba(0,0,0,.45);
+  }
+  [data-theme="dark"] .landing--simple .tg-chip {
+    background: color-mix(in srgb, #1a1f29 72%, transparent);
+    border-color: color-mix(in srgb, #ffffff 8%, transparent);
+  }
+  .landing--simple .tg-chip-1 { top: 6%;  left: 2%;  }
+  .landing--simple .tg-chip-2 { top: 48%; right: 2%; }
+  .landing--simple .tg-chip-3 { bottom: 4%; left: 18%; }
+
+  /* Eyebrow : plus moderne, centré sous le visuel (le hero est désormais
+     en 1 colonne, copy après visuel — voir .tg-hero-visual { order: -1 }). */
+  .landing--simple .tg-eyebrow {
+    align-self: center; margin-inline: auto;
+  }
+
+  /* Titre + lead : rythme resserré. */
+  .landing--simple .tg-h1 {
+    font-size: clamp(1.9rem, 7vw, 2.5rem);
+    margin: .8rem 0 .55rem; text-align: center;
+  }
+  .landing--simple .tg-lead {
+    font-size: 1rem; line-height: 1.5;
+    margin: 0 auto 1.2rem; max-width: 34rem; text-align: center;
+  }
+
+  /* Actions : stack vertical, deux pilules pleine largeur, même hauteur. */
+  .landing--simple .tg-actions {
+    display: flex; flex-direction: column; align-items: stretch;
+    gap: .55rem; width: 100%; max-width: 22rem;
+    margin-inline: auto;
+  }
+  .landing--simple .btn.tg-cta,
+  .landing--simple .btn.tg-ghost {
+    width: 100%; justify-content: center;
+    min-height: 48px; padding: 0 1.25rem;
+    font-size: 1rem; line-height: 1;
+  }
+
+  /* Search : alignée sur la même largeur que les CTAs, juste en-dessous. */
+  .landing--simple .tg-search {
+    width: 100%; max-width: 22rem;
+    margin: 1rem auto 0;
+  }
+  .landing--simple .tg-search .search-box { min-height: 48px; padding-left: 1rem; }
+  .landing--simple .tg-search .search-box .go { min-height: 40px; padding: 0 1rem; }
+
+  /* Lien « clé perdue » : plat, discret, centré (fini le tiret pointillé). */
+  .landing--simple .tg-lost {
+    margin: .8rem 0 0; text-align: center;
+    font-size: .85rem;
+  }
+  .landing--simple .tg-lost a {
+    border-bottom: 0;
+    text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+    text-underline-offset: 3px;
+  }
+}
+
+/* Sous 480 px : on serre encore le hero pour gagner du gris vertical. */
+@media (max-width: 480px) {
+  .landing--simple .tg-hero {
+    padding-inline: 1rem;
+    padding-block: .5rem 1.25rem;
+    gap: 1rem;
+  }
+  .landing--simple .tg-hero-visual { min-height: 200px; }
+  .landing--simple .tg-milo-disc { width: clamp(170px, 54vw, 220px); }
+
+  /* Bento : déjà 1 col en < 820 px ; on harmonise juste le padding/gap. */
+  .landing--simple .tg-bands { padding-block: 1.25rem; }
+  .landing--simple .tg-bento { gap: .75rem; }
+  .landing--simple .tg-cell { padding: 1.25rem; }
+
+  /* Final CTA : même pilule pleine largeur que dans le hero. */
+  .landing--simple .tg-final { padding-block: 2rem; padding-inline: 1rem; }
+  .landing--simple .tg-final .btn.tg-cta {
+    width: 100%; max-width: 22rem; justify-content: center;
+    min-height: 48px; padding: 0 1.25rem; margin-inline: auto;
+  }
 }

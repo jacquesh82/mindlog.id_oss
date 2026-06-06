@@ -191,6 +191,19 @@ export function renderHomeColumn(data, { photo }) {
         <!-- ===== DROITE : coup d'œil / back-office ===== -->
         <aside class="hm-aside">
 
+          <!-- Accès direct à l'Espace Premium (création/édition des pages réservées).
+               Premium seulement : sans abonnement, le bloc « Passe en Premium » ci-dessous
+               suffit comme point d'entrée vers la mise à niveau. -->
+          ${isPrem ? `
+            <a href="/me/premium" class="hm-space-card" aria-label="Ouvrir mon Espace Premium">
+              <span class="hm-space-ic">${icon("lock", 22)}</span>
+              <div class="hm-space-body">
+                <b>Mon espace privé</b>
+                <span>Pages réservées aux abonné·e·s · couverture · boutons</span>
+              </div>
+              <span class="hm-space-arrow" aria-hidden="true">→</span>
+            </a>` : ""}
+
           <!-- Bloc Premium dédié -->
           ${isPrem
             ? `<div class="hm-prem-card hm-prem-card--active">

@@ -2,7 +2,8 @@
 // confidentialité, messagerie & appels, agenda & RDV.
 // L'administration du compte (abonnement, sécurité, accès, données) se trouve
 // dans l'onglet « Mon compte » (account.js).
-import { DEFAULT_SETTINGS, DOW_LETTERS, DOW_NAMES, normalizeAvailability } from "../../core.js";
+import { DEFAULT_SETTINGS, DOW_LETTERS, DOW_NAMES, isDev, normalizeAvailability } from "../../core.js";
+import { swatchesHtml } from "../../theme.js";
 import { esc } from "../../ui/dom.js";
 import { icon } from "../../ui/icons.js";
 
@@ -16,7 +17,16 @@ export function renderOptionsColumn(data) {
     </label>`;
 
   return `<div class="card opt-v2">
-    <div class="opt-v2-grid">
+    <div class="opt-v2-search-wrap">
+      <input id="opt-search" class="opt-search" type="search" placeholder="Filtrer les options…" autocomplete="off" aria-label="Filtrer les options" />
+    </div>
+    <div class="opt-v2-grid" id="opt-v2-grid">
+
+      <div class="opt-v2-block opt-v2-block--full">
+        <div class="opt-v2-head">${icon("sparkles", 16)} Couleur de Milo</div>
+        <p class="lbl-sm" style="margin:.4rem 0 .65rem">Accentuation de l'interface</p>
+        <div class="opt-swatches" id="opt-swatches">${swatchesHtml()}</div>
+      </div>
 
       <div class="opt-v2-block">
         <div class="opt-v2-head">${icon("shield", 16)} Visibilité & Confidentialité</div>
@@ -55,6 +65,34 @@ export function renderOptionsColumn(data) {
           ${DOW_LETTERS.map((d, i) => `<button type="button" class="avail-day ${normalizeAvailability(s.availability).weekdays[i] ? "on" : ""}" data-dow="${i}" aria-pressed="${normalizeAvailability(s.availability).weekdays[i]}" title="${DOW_NAMES[i]}">${d}</button>`).join("")}
         </div>
       </div>
+
+      ${isDev ? `
+      <div class="opt-v2-block opt-v2-block--full opt-v2-dev">
+        <div class="opt-v2-head">${icon("code", 16)} Développeur <span class="opt-dev-badge">DEV</span></div>
+        <p class="lbl-sm" style="margin:0 0 .65rem">Outils dev pour <b>ce compte uniquement</b>. Nécessite <code>MINDLOG_DEV_PREMIUM=1</code> côté serveur (hors prod).</p>
+        <label class="opt-row">
+          <span class="opt-text">
+            <span class="opt-name">${icon("sparkles", 14)} Licence Premium</span>
+            <span class="opt-desc">Active le premium pour ce compte (vraie ligne d'abonnement, provider=dev).</span>
+          </span>
+          <input type="checkbox" class="opt-toggle" id="dev-toggle-premium" ${(data.subscription?.plan === "premium" || data.plan === "premium") ? "checked" : ""} />
+          <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+        </label>
+
+        <div class="opt-dev-subs">
+          <div class="opt-name" style="display:flex;align-items:center;gap:.4rem;margin-top:.2rem">
+            ${icon("users", 14)} Abonnements simulés à des espaces premium
+          </div>
+          <p class="lbl-sm" style="margin:.2rem 0 .55rem">Devenez abonné·e fictif·ve d'un créateur pour tester l'accès aux pages premium (sans passer par Stripe).</p>
+          <ul id="dev-space-subs" class="opt-dev-list">
+            <li class="lbl-sm">Chargement…</li>
+          </ul>
+          <div class="opt-dev-sub-add">
+            <input type="text" id="dev-space-add-handle" placeholder="@handle du créateur" autocomplete="off" />
+            <button type="button" class="btn sm" id="dev-space-add-btn">+ Simuler l'abonnement</button>
+          </div>
+        </div>
+      </div>` : ""}
 
     </div>
   </div>`;

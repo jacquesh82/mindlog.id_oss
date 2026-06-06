@@ -355,10 +355,27 @@ app.get("/.well-known/assetlinks.json", (c) => {
     },
   ]);
 });
+// Lives Premium : pages HTML autonomes (ne passent pas par le shell SPA pour
+// éviter d'embarquer les ~1 Mo d'app.js sur la fenêtre du live). Servies à
+// tous (publiquement) — le gating se fait dans les routes /api/live/*.
+app.get("/me/broadcast", (c) => {
+  c.header("Cache-Control", "no-store");
+  return c.html(readFileSync(resolve(PUBLIC_DIR, "live", "broadcast.html"), "utf8"));
+});
+app.get("/live/:streamId{[A-Za-z0-9-]+}", (c) => {
+  c.header("Cache-Control", "no-store");
+  return c.html(readFileSync(resolve(PUBLIC_DIR, "live", "watch.html"), "utf8"));
+});
+
 app.get("/", page);
 app.get("/me", page);
+app.get("/me/premium", page); // page « Espace Premium » plein écran (SPA)
 app.get("/status", page);
 app.get("/:handle{@[A-Za-z0-9_-]+}", page);
+// Index de l'espace privé d'un créateur (liste des pages + paywall).
+app.get("/:handle{@[A-Za-z0-9_-]+}/space", page);
+// Page premium d'un créateur (paywall + rendu type-aware côté SPA).
+app.get("/:handle{@[A-Za-z0-9_-]+}/p/:slug", page);
 app.get("/k/:key", page);
 app.get("/i/:token", page); // page d'acceptation d'invitation de contact
 

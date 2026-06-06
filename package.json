@@ -15,6 +15,7 @@
     "db:migrate": "tsx -e \"import('./src/db.ts').then(m => m.initDb()).then(() => { console.log('migrations appliquees'); process.exit(0); })\"",
     "db:migrate-from-sqlite": "tsx scripts/migrate-to-postgres.ts",
     "db:reset": "tsx scripts/reset-db.ts",
+    "db:rescue": "tsx scripts/rescue-pglite.ts",
     "db:clear-messages": "tsx scripts/delete-messages.ts",
     "test:e2e": "node e2e/run.mjs"
   },
