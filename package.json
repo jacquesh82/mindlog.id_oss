@@ -1,6 +1,6 @@
 {
   "name": "id-mindlog-today",
-  "version": "0.6.3",
+  "version": "0.7.3",
   "private": true,
   "type": "module",
   "description": "Carte d'identité en ligne, ultra simple : 1 page + API + MCP.",

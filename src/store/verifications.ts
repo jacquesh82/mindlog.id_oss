@@ -59,5 +59,6 @@ export interface CardEvent {
   link: string;
   notes: string;
   is_public: number;
+  kind: "event" | "live";
 }
 

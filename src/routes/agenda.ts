@@ -4,6 +4,17 @@ import { currentIdentity, readBody, exceeds } from "./_ctx.js";
 
 const route = new Hono();
 
+// kind 'live' n'est accepté que pour les comptes premium avec bénéfice lives activé.
+// Sinon on retombe silencieusement sur 'event' — pas d'erreur, l'UI ne propose
+// l'option qu'aux comptes éligibles.
+async function normalizeKind(identityId: number, raw: unknown): Promise<"event" | "live"> {
+  if (raw !== "live") return "event";
+  const { isPremium, getSpaceInfo } = await import("../premium-api.js");
+  if (!(await isPremium(identityId))) return "event";
+  const sp = await getSpaceInfo(identityId, identityId);
+  return sp?.benefits?.lives ? "live" : "event";
+}
+
 route.post("/api/agenda", async (c) => {
   const id = await currentIdentity(c);
   if (!id) return c.json({ error: "unauthorized" }, 401);
@@ -15,12 +26,14 @@ route.post("/api/agenda", async (c) => {
     link?: string;
     notes?: string;
     is_public?: boolean;
+    kind?: string;
   }>(c);
   if (!body.title || !body.starts_at)
     return c.json({ error: "title and starts_at required" }, 400);
   if (exceeds([[body.title, 200], [body.location, 200], [body.link, 500], [body.notes, 4000], [body.starts_at, 40], [body.ends_at, 40]]))
     return c.json({ error: "champ trop long" }, 400);
-  return c.json(await addEvent(id.id, { ...body, title: body.title, starts_at: body.starts_at }), 201);
+  const kind = await normalizeKind(id.id, body.kind);
+  return c.json(await addEvent(id.id, { ...body, title: body.title, starts_at: body.starts_at, kind }), 201);
 });
 
 route.put("/api/agenda/:id", async (c) => {
@@ -34,11 +47,14 @@ route.put("/api/agenda/:id", async (c) => {
     link?: string;
     notes?: string;
     is_public?: boolean;
+    kind?: string;
   }>(c);
   if (exceeds([[body.title, 200], [body.location, 200], [body.link, 500], [body.notes, 4000], [body.starts_at, 40], [body.ends_at, 40]]))
     return c.json({ error: "champ trop long" }, 400);
   try {
-    const updated = await updateEvent(id.id, Number(c.req.param("id")), body);
+    const patch = { ...body } as Parameters<typeof updateEvent>[2];
+    if (body.kind !== undefined) patch.kind = await normalizeKind(id.id, body.kind);
+    const updated = await updateEvent(id.id, Number(c.req.param("id")), patch);
     return updated ? c.json(updated) : c.json({ error: "not found" }, 404);
   } catch (e) {
     if (e instanceof StoreError) return c.json({ error: e.message }, e.status as 400);

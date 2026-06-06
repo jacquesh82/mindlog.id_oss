@@ -392,6 +392,8 @@ export const events = pgTable(
     link: text("link").notNull().default(""), // URL (page de l'event, visio, post réseau social)
     notes: text("notes").notNull().default(""),
     is_public: integer("is_public").notNull().default(1),
+    // 'event' (par défaut) | 'live' : un live planifié dans l'espace premium.
+    kind: text("kind").notNull().default("event"),
   },
   (t) => [index("idx_events_identity").on(t.identity_id, t.starts_at)]
 );

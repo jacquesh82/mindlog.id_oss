@@ -1539,13 +1539,16 @@ export function wireEditor(data) {
       renderPrivate(appState.key);
     })
   );
+  // Si le créateur est Premium ET a coché le bénéfice « Lives », la modale
+  // propose un type « Live » qui rend l'événement joignable par les abonnés.
+  const _liveAvailable = !!data.space?.benefits?.lives;
   app.querySelectorAll("[data-event-new]").forEach((b) =>
-    b.addEventListener("click", () => openEventModal(null))
+    b.addEventListener("click", () => openEventModal(null, { liveAvailable: _liveAvailable }))
   );
   app.querySelectorAll("[data-event-edit]").forEach((b) =>
     b.addEventListener("click", () => {
       const ev = (data.events || []).find((e) => String(e.id) === b.dataset.eventEdit);
-      if (ev) openEventModal(ev);
+      if (ev) openEventModal(ev, { liveAvailable: _liveAvailable });
     })
   );
 
@@ -2785,15 +2788,34 @@ function toLocalInput(iso) {
 // Modale composer d'événement (création ou édition), inspirée du « New meeting »
 // de Teams : titre, créneau début/fin, lieu, lien, notes, visibilité publique.
 // `event` null → création (POST /api/agenda) ; sinon édition (PUT /api/agenda/:id).
-export function openEventModal(event) {
+// opts.liveAvailable : affiche le sélecteur « Événement / Live » (créateur premium
+// avec bénéfice lives activé). Un live planifié est visible par tous mais
+// joignable uniquement par les abonné·e·s de l'espace premium.
+export function openEventModal(event, opts = {}) {
   const editing = !!event;
+  const initialKind = editing && event.kind === "live" ? "live" : "event";
+  // On expose le toggle si le créateur peut planifier un live, OU si on édite
+  // un live existant (pour permettre la rétrogradation en simple événement).
+  const showKindToggle = !!opts.liveAvailable || initialKind === "live";
   const overlay = document.createElement("div");
   overlay.className = "overlay open";
   overlay.innerHTML = `
     <div class="panel ev-modal" role="dialog" aria-modal="true" aria-labelledby="ev-modal-title">
       <button type="button" class="close" id="ev-close" aria-label="Fermer">✕</button>
       <h2 id="ev-modal-title">${editing ? "Modifier l'événement" : "Nouvel événement"}</h2>
-      <form id="ev-form" novalidate>
+      <form id="ev-form" novalidate data-kind="${initialKind}">
+        ${showKindToggle ? `
+        <div class="group ev-kind-row" role="radiogroup" aria-label="Type d'événement">
+          <button type="button" class="ev-kind-tab${initialKind === "event" ? " active" : ""}" data-kind="event" role="radio" aria-checked="${initialKind === "event"}">
+            ${icon("calendar", 14)} Événement
+          </button>
+          <button type="button" class="ev-kind-tab${initialKind === "live" ? " active" : ""}" data-kind="live" role="radio" aria-checked="${initialKind === "live"}">
+            ${icon("users", 14)} Live
+          </button>
+        </div>
+        <p class="ev-kind-hint" id="ev-kind-hint" ${initialKind === "live" ? "" : "hidden"}>
+          ${icon("lock", 12)} Diffusion réservée à tes abonné·e·s premium. L'horaire est visible publiquement.
+        </p>` : ""}
         <div class="group">
           <label for="ev-title">Titre</label>
           <input id="ev-title" name="title" maxlength="200" required placeholder="Réunion, rendez-vous, sortie…" value="${editing ? esc(event.title || "") : ""}" />
@@ -2846,7 +2868,24 @@ export function openEventModal(event) {
     renderPrivate(appState.key);
   });
 
-  overlay.querySelector("#ev-form").addEventListener("submit", async (e) => {
+  // Toggle « Événement / Live » : maintient form.dataset.kind, met à jour l'état
+  // visuel des deux onglets et révèle un hint contextuel quand on passe en Live.
+  const formEl = overlay.querySelector("#ev-form");
+  overlay.querySelectorAll(".ev-kind-tab").forEach((tab) =>
+    tab.addEventListener("click", () => {
+      const k = tab.dataset.kind === "live" ? "live" : "event";
+      formEl.dataset.kind = k;
+      overlay.querySelectorAll(".ev-kind-tab").forEach((t) => {
+        const on = t.dataset.kind === k;
+        t.classList.toggle("active", on);
+        t.setAttribute("aria-checked", on ? "true" : "false");
+      });
+      const hint = overlay.querySelector("#ev-kind-hint");
+      if (hint) hint.hidden = k !== "live";
+    })
+  );
+
+  formEl.addEventListener("submit", async (e) => {
     e.preventDefault();
     errEl.textContent = "";
     const fd = new FormData(e.target);
@@ -2864,6 +2903,7 @@ export function openEventModal(event) {
       link: (fd.get("link") || "").trim(),
       notes: (fd.get("notes") || "").trim(),
       is_public: fd.get("is_public") === "on",
+      kind: formEl.dataset.kind === "live" ? "live" : "event",
     };
     const submitBtn = e.target.querySelector("button[type=submit]");
     submitBtn.disabled = true;

@@ -100,6 +100,11 @@ export async function beginRegistration(identity: Identity) {
       transports: parseTransports(p.transports),
     })),
     authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
+    // Demande le slot hmac-secret au moment de l'enregistrement pour pouvoir
+    // dériver côté client une clé stable via l'extension PRF (cf.
+    // public/crypto/vault.js). Sans ça, libwebauthn (Linux) rejette le get()
+    // avec AuthenticatorError(2) = CTAP2_ERR_INVALID_PARAMETER.
+    extensions: { prf: {} } as Record<string, unknown>,
   });
 
   regChallenges.set(identity.id, { challenge: options.challenge, expires: Date.now() + TTL_MS });

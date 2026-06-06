@@ -67,6 +67,34 @@ function landingModeSwitchHtml() {
     </div>`;
 }
 
+// Tarif Premium adapté au pays du visiteur. Le prix réel reste 1 € (Stripe en
+// EUR côté serveur) ; l'affichage est traduit dans la devise locale pour
+// réduire la friction perçue (le visiteur US voit « $1 », pas « 1 € »).
+// Le « per » est traduit selon la LANG i18n active.
+function localPrice() {
+  const full = (typeof navigator !== "undefined" && navigator.language) || "en-US";
+  const region = (full.split("-")[1] || "").toUpperCase();
+  const EUR_REGIONS = new Set(["FR","DE","ES","IT","PT","NL","BE","AT","IE","FI","LU","GR","SK","SI","EE","LV","LT","CY","MT"]);
+  const GBP_REGIONS = new Set(["GB","UK"]);
+  const USD_REGIONS = new Set(["US","CA","AU","NZ"]);
+  const per = LANG === "fr" ? "/mois" : "/month";
+  if (GBP_REGIONS.has(region)) {
+    return { primary: "£1", per, alt: LANG === "fr" ? "≈ 1,15 €" : "≈ €1.15", currency: "GBP" };
+  }
+  if (USD_REGIONS.has(region)) {
+    return { primary: "$1", per, alt: LANG === "fr" ? "≈ 0,90 €" : "≈ €0.90", currency: "USD" };
+  }
+  if (EUR_REGIONS.has(region) || ["fr","de","es","it","pt","nl"].includes(LANG)) {
+    return {
+      primary: LANG === "fr" ? "1 €" : "€1",
+      per,
+      alt: LANG === "fr" ? "≈ 1,20 $" : "≈ $1.20",
+      currency: "EUR",
+    };
+  }
+  return { primary: LANG === "fr" ? "1 €" : "€1", per, alt: LANG === "fr" ? "≈ 1,20 $" : "≈ $1.20", currency: "EUR" };
+}
+
 // Bascule de thème intégrée à la barre (landing) — remplace le bouton flottant.
 const lpThemeToggleHtml = () =>
   `<button class="theme-toggle theme-toggle-header" id="lp-theme" type="button" aria-label="Changer de thème"></button>`;
@@ -730,26 +758,36 @@ function pricingColHtml() {
 // sur l'accueil en mode Easy ET Geek ; les CTA mènent à la création de page
 // (l'abonnement se gère ensuite dans l'espace connecté).
 function consumerPricingHtml() {
-  const plan = (cls, tag, title, price, per, li, ctaId, cta, ctaCls) =>
-    `<div class="pr-plan${cls}">
-      <span class="pr-tag">${t(tag)}</span>
-      <h3>${t(title)}</h3>
-      <div class="pr-price">${t(price)}${per ? `<span class="pr-per">${t(per)}</span>` : ""}</div>
-      <ul>${t(li)}</ul>
-      <button type="button" class="pr-cta${ctaCls}" id="${ctaId}">${t(cta)}</button>
-    </div>`;
+  const lp = localPrice();
+  // Premium : prix + « per » + équivalent dans l'autre devise, tous adaptés au
+  // pays détecté (cf. localPrice). Découverte : libellé i18n « Gratuit ».
+  const planFree = `<div class="pr-plan">
+    <span class="pr-tag">${t("cpr_free_tag")}</span>
+    <h3>${t("cpr_free_t")}</h3>
+    <div class="pr-price">${t("cpr_free_price")}</div>
+    <ul>${t("cpr_free_li")}</ul>
+    <button type="button" class="pr-cta ghost" id="cpr-free-cta">${t("cpr_free_cta")}</button>
+  </div>`;
+  const planPrem = `<div class="pr-plan feat">
+    <span class="pr-tag">${t("cpr_prem_tag")}</span>
+    <h3>${t("cpr_prem_t")}</h3>
+    <div class="pr-price">${lp.primary}<span class="pr-per">${lp.per} · ${lp.alt}</span></div>
+    <ul>${t("cpr_prem_li")}</ul>
+    <button type="button" class="pr-cta" id="cpr-prem-cta">${t("cpr_prem_cta")}</button>
+  </div>`;
   return `<section class="pricing">
     <div class="show-head"><div class="ic">${icon("tag")}</div><h2>${t("cpr_h")}</h2></div>
     <p class="pr-lead">${t("cpr_lead")}</p>
     <div class="pr-grid pr-grid--duo">
-      ${plan("", "cpr_free_tag", "cpr_free_t", "cpr_free_price", "", "cpr_free_li", "cpr-free-cta", "cpr_free_cta", " ghost")}
-      ${plan(" feat", "cpr_prem_tag", "cpr_prem_t", "cpr_prem_price", "cpr_prem_per", "cpr_prem_li", "cpr-prem-cta", "cpr_prem_cta", "")}
+      ${planFree}
+      ${planPrem}
     </div>
   </section>`;
 }
 
 // Section « Clients & universalité » : une carte par surface (web/Android/iOS/
-// Desktop/MCP) + bloc whitepaper crypto (PDF + source LaTeX sur GitHub).
+// Desktop/MCP). Le bloc whitepaper crypto a été retiré (juin 2026) — recouvert
+// par la section Souveraineté + le bandeau anti-interception P2P.
 function clientsColHtml() {
   const card = (ic, name, statusKey, statusCls, descKey) =>
     `<div class="cl-card ${statusCls}">
@@ -775,16 +813,6 @@ function clientsColHtml() {
       </div>
     </div>
 
-    <div class="cl-wp">
-      <div class="cl-wp-body">
-        <h3>${icon("code", 16)} ${t("clients_wp_h")}</h3>
-        <p>${t("clients_wp_d")}</p>
-        <div class="cl-wp-actions">
-          <a class="btn primary" href="/static/mindlog-crypto-whitepaper.pdf" target="_blank" rel="noopener">${icon("mail", 15)} ${t("clients_wp_pdf")} (PDF · 5 p.)</a>
-          <a class="btn ghost" href="${GITHUB_URL}/blob/main/docs/whitepaper/mindlog-crypto.tex" target="_blank" rel="noopener">${icon("code", 15)} ${t("clients_wp_src")}</a>
-        </div>
-      </div>
-    </div>
   </section>`;
 }
 
@@ -974,6 +1002,7 @@ function renderLanding() {
         <a href="#sec-clients">${icon("smartphone", 15)}<span>${t("col_clients")}</span></a>
         <a href="#sec-sov">${icon("shield", 15)}<span>${t("col_sov")}</span></a>
         <a href="#sec-mcp">${icon("plug", 15)}<span>${t("col_mcp")}</span></a>
+        <a href="#sec-premium">${icon("sparkles", 15)}<span>Premium</span></a>
         <a href="${GITHUB_URL}" target="_blank" rel="noopener">${icon("code", 15)}<span>${t("source")}</span></a>
         <a href="#sec-pricing">${icon("tag", 15)}<span>${t("pricing")}</span></a>
       </nav>
@@ -1009,6 +1038,29 @@ function renderLanding() {
       <section class="lp-section" id="sec-clients">${clientsColHtml()}</section>
 
       <section class="lp-section" id="sec-sov">${sovereignColHtml()}</section>
+
+      <!-- Bandeau anti-interception P2P : différenciateur clé, intercalé entre
+           Souveraineté (E2E, FR, OSS) et MCP. Réutilise le composant tg-p2p
+           introduit pour EasyMode → cohérence visuelle stricte. -->
+      <section class="lp-section" id="sec-p2p">
+        <section class="tg-p2p" aria-label="P2P">
+          <div class="tg-p2p-inner">
+            <div class="tg-p2p-diagram" aria-hidden="true">
+              <span class="tg-p2p-node a">${icon("smartphone", 22)}</span>
+              <span class="tg-p2p-line"></span>
+              <span class="tg-p2p-node b">${icon("smartphone", 22)}</span>
+              <span class="tg-p2p-server" title="mindlog hors du flux">
+                ${icon("eye-off", 16)}
+                <span>mindlog</span>
+              </span>
+            </div>
+            <div class="tg-p2p-copy">
+              <h2>${t("gp_p2p_h")}</h2>
+              <p>${t("gp_p2p_p")}</p>
+            </div>
+          </div>
+        </section>
+      </section>
 
       <section class="lp-section" id="sec-mcp"><section class="mcp" id="mcp">
       <div class="mcp-head">
@@ -1059,6 +1111,27 @@ function renderLanding() {
 
       <p class="mcp-note">${t("mcp_note")}</p>
     </section></section>
+
+      <!-- Showcase Premium : ce que débloque l'abonnement créateur·rice (6 cartes).
+           Précède immédiatement la grille de tarifs → enchaîne « ce que vous
+           débloquez » sur « le prix ». Réutilise le composant tg-prem. -->
+      <section class="lp-section" id="sec-premium">
+        <section class="tg-prem">
+          <header class="tg-prem-head">
+            <span class="tg-prem-eyebrow">${icon("sparkles", 14)} ${t("gp_prem_eyebrow")}</span>
+            <h2>${t("gp_prem_h")}</h2>
+            <p class="tg-prem-lead">${t("gp_prem_lead")}</p>
+          </header>
+          <div class="tg-prem-grid">
+            <article class="tg-prem-card"><span class="tg-prem-ic">${icon("chat", 22)}</span><h3>${t("gp_prem_s1_t")}</h3><p>${t("gp_prem_s1_d")}</p></article>
+            <article class="tg-prem-card"><span class="tg-prem-ic">${icon("camera", 22)}</span><h3>${t("gp_prem_s2_t")}</h3><p>${t("gp_prem_s2_d")}</p></article>
+            <article class="tg-prem-card"><span class="tg-prem-ic">${icon("pencil", 22)}</span><h3>${t("gp_prem_s3_t")}</h3><p>${t("gp_prem_s3_d")}</p></article>
+            <article class="tg-prem-card"><span class="tg-prem-ic">${icon("calendar", 22)}</span><h3>${t("gp_prem_s4_t")}</h3><p>${t("gp_prem_s4_d")}</p></article>
+            <article class="tg-prem-card"><span class="tg-prem-ic">${icon("zap", 22)}</span><h3>${t("gp_prem_s5_t")}</h3><p>${t("gp_prem_s5_d")}</p></article>
+            <article class="tg-prem-card"><span class="tg-prem-ic">${icon("tag", 22)}</span><h3>${t("gp_prem_s6_t")}</h3><p>${t("gp_prem_s6_d")}</p></article>
+          </div>
+        </section>
+      </section>
 
       <section class="lp-section" id="sec-pricing">${consumerPricingHtml()}${pricingColHtml()}</section>
 
@@ -1226,10 +1299,23 @@ function wireLanding() {
 }
 
 /* ------------------------ Landing « Grand public » ----------------------- */
-// Vue simplifiée, sans jargon : un héros chaleureux, 3 bénéfices clairs,
-// la recherche, deux CTA. Le détail technique reste accessible via le switch
-// vers le mode « Expert geek ».
+// Vue simplifiée, sans jargon, orientée commerciale :
+// - héros chaleureux + accroche prix locale (gratuit pour démarrer, premium 1 €)
+// - trust strip souveraineté/E2E/P2P (différenciateur clé vs Linktree/WhatsApp)
+// - 3 bénéfices clairs (bento)
+// - bandeau « médias jamais sur le parcours du flux » — anti-interception
+// - showcase 6 services Premium (chat, appel A/V, pages privées, RDV, lives,
+//   discrétion d'annuaire) : ce qui débloque l'abonnement
+// - tarifs grand public (devise auto-adaptée au pays)
+// - CTA de clôture
 function renderSimpleLanding(landingHandle) {
+  const lp = localPrice();
+  const priceTease = t("gp_price_tease")
+    .replace("{price}", esc(lp.primary))
+    .replace("{per}", esc(lp.per));
+  const premCtaLabel = t("gp_prem_cta")
+    .replace("{price}", esc(lp.primary))
+    .replace("{per}", esc(lp.per));
   app.innerHTML = `
     ${siteHeader({
       right: `${landingModeSwitchHtml()}
@@ -1255,6 +1341,8 @@ function renderSimpleLanding(landingHandle) {
             ${sessionHint() || storedKey() ? "" : `<button class="btn tg-ghost" id="login-btn">${icon("key", 16)} ${t("gp_cta_login")}</button>`}
           </div>
 
+          <p class="tg-price-tease">${icon("sparkles", 14)} ${priceTease}</p>
+
           <div class="search tg-search">
             <form class="search-box" id="search-form" role="search">
               ${icon("search")}
@@ -1274,6 +1362,17 @@ function renderSimpleLanding(landingHandle) {
           <div class="tg-chip tg-chip-1">${t("gp_chip_1")}</div>
           <div class="tg-chip tg-chip-2">${t("gp_chip_2")}</div>
           <div class="tg-chip tg-chip-3">${t("gp_chip_3")}</div>
+        </div>
+      </section>
+
+      <!-- Trust strip — 5 promesses souveraineté/privacy/P2P/OSS, en pilules -->
+      <section class="tg-trust" aria-label="${esc(t("sov_h"))}">
+        <div class="tg-trust-row">
+          <span class="tg-trust-chip"><span class="flag">🇫🇷</span>${t("gp_trust_1")}</span>
+          <span class="tg-trust-chip">${icon("lock", 14)}${t("gp_trust_2")}</span>
+          <span class="tg-trust-chip">${icon("plug", 14)}${t("gp_trust_3")}</span>
+          <span class="tg-trust-chip">${icon("eye-off", 14)}${t("gp_trust_4")}</span>
+          <span class="tg-trust-chip">${icon("code", 14)}${t("gp_trust_5")}</span>
         </div>
       </section>
 
@@ -1307,6 +1406,71 @@ function renderSimpleLanding(landingHandle) {
             <p class="tg-cell-p">${t("gp_b3_d")}</p>
             <span class="tg-cell-badge">${icon("calendar", 13)} ${t("gp_badge_3")}</span>
           </article>
+        </div>
+      </section>
+
+      <!-- Anti-interception : différenciateur clé. mindlog n'est PAS sur le
+           parcours du flux media → rien à intercepter par construction. -->
+      <section class="tg-p2p" aria-label="P2P">
+        <div class="tg-p2p-inner">
+          <div class="tg-p2p-diagram" aria-hidden="true">
+            <span class="tg-p2p-node a">${icon("smartphone", 22)}</span>
+            <span class="tg-p2p-line"></span>
+            <span class="tg-p2p-node b">${icon("smartphone", 22)}</span>
+            <span class="tg-p2p-server" title="mindlog hors du flux">
+              ${icon("eye-off", 16)}
+              <span>mindlog</span>
+            </span>
+          </div>
+          <div class="tg-p2p-copy">
+            <h2>${t("gp_p2p_h")}</h2>
+            <p>${t("gp_p2p_p")}</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Showcase Premium — 6 services débloqués par l'abonnement créateur·rice -->
+      <section class="tg-prem" id="sec-premium" aria-label="Premium">
+        <header class="tg-prem-head">
+          <span class="tg-prem-eyebrow">${icon("sparkles", 14)} ${t("gp_prem_eyebrow")}</span>
+          <h2>${t("gp_prem_h")}</h2>
+          <p class="tg-prem-lead">${t("gp_prem_lead")}</p>
+        </header>
+        <div class="tg-prem-grid">
+          <article class="tg-prem-card">
+            <span class="tg-prem-ic">${icon("chat", 22)}</span>
+            <h3>${t("gp_prem_s1_t")}</h3>
+            <p>${t("gp_prem_s1_d")}</p>
+          </article>
+          <article class="tg-prem-card">
+            <span class="tg-prem-ic">${icon("camera", 22)}</span>
+            <h3>${t("gp_prem_s2_t")}</h3>
+            <p>${t("gp_prem_s2_d")}</p>
+          </article>
+          <article class="tg-prem-card">
+            <span class="tg-prem-ic">${icon("pencil", 22)}</span>
+            <h3>${t("gp_prem_s3_t")}</h3>
+            <p>${t("gp_prem_s3_d")}</p>
+          </article>
+          <article class="tg-prem-card">
+            <span class="tg-prem-ic">${icon("calendar", 22)}</span>
+            <h3>${t("gp_prem_s4_t")}</h3>
+            <p>${t("gp_prem_s4_d")}</p>
+          </article>
+          <article class="tg-prem-card">
+            <span class="tg-prem-ic">${icon("zap", 22)}</span>
+            <h3>${t("gp_prem_s5_t")}</h3>
+            <p>${t("gp_prem_s5_d")}</p>
+          </article>
+          <article class="tg-prem-card">
+            <span class="tg-prem-ic">${icon("tag", 22)}</span>
+            <h3>${t("gp_prem_s6_t")}</h3>
+            <p>${t("gp_prem_s6_d")}</p>
+          </article>
+        </div>
+        <div class="tg-prem-cta-wrap">
+          <button class="btn tg-cta" id="tg-prem-cta">${icon("sparkles", 18)} ${esc(premCtaLabel)}</button>
+          <p class="tg-prem-note">${t("gp_prem_cta_note")}</p>
         </div>
       </section>
 
@@ -1388,6 +1552,7 @@ function wireSimpleLanding() {
   app.querySelector("#create-btn-2")?.addEventListener("click", openCreate);
   app.querySelector("#cpr-free-cta")?.addEventListener("click", openCreate);
   app.querySelector("#cpr-prem-cta")?.addEventListener("click", startPremiumUpgrade);
+  app.querySelector("#tg-prem-cta")?.addEventListener("click", startPremiumUpgrade);
   app.querySelector("#login-btn")?.addEventListener("click", openRecover);
   app.querySelector("#recover-link")?.addEventListener("click", (e) => {
     e.preventDefault();
@@ -2579,11 +2744,37 @@ async function renderPublicProfile(handle) {
   const _premiumGateCta = (_chatBlockedByPremium || _callBlockedByPremium) && isContact && !isSelf
     ? `<a class="btn sm primary" href="/@${esc(data.handle)}/space" title="S'abonner pour débloquer chat &amp; appel">${icon("lock", 15)} Réservé aux abonné·e·s</a>`
     : "";
+  // ── Bouton « Live » sous Discuter/Appel ──────────────────────────────────
+  // S'affiche quand le créateur a activé le bénéfice « lives » de son espace
+  // ET qu'un live à venir (kind='live') est planifié dans son agenda. Le badge
+  // remonte le nombre de lives planifiés. Cible :
+  //   - propriétaire : /me/broadcast (démarrage / planification)
+  //   - abonné       : /@handle/space (hub des lives — gate déjà débloquée)
+  //   - visiteur     : /@handle/space (CTA d'abonnement)
+  const _livesEnabled = _spaceGated && !!_benefits.lives;
+  const _nowTs = Date.now();
+  const _upcomingLives = _livesEnabled
+    ? (data.events || []).filter((e) => e.kind === "live" && (() => {
+        const t = new Date(e.starts_at).getTime();
+        return Number.isFinite(t) && t >= _nowTs;
+      })())
+    : [];
+  const _liveCount = _upcomingLives.length;
+  const _showLiveBtn = _livesEnabled && (isSelf || _liveCount > 0);
+  const _liveBadge = _liveCount > 0
+    ? `<span class="btn-badge" aria-label="${_liveCount} live${_liveCount > 1 ? "s" : ""} planifié${_liveCount > 1 ? "s" : ""}">${_liveCount}</span>`
+    : "";
+  const _liveBtnHtml = _showLiveBtn
+    ? (isSelf
+        ? `<a class="btn sm" href="/me/broadcast" target="_blank" rel="noopener" title="Démarrer ou planifier un live">${icon("users", 15)} Live${_liveBadge}</a>`
+        : `<a class="btn sm" href="/@${esc(data.handle)}/space" title="${_hasSpaceAccess ? "Accéder aux lives" : "S'abonner pour suivre les lives"}">${icon("users", 15)} Live${_liveBadge}</a>`)
+    : "";
   const _contactActions =
-    _canChat || _canCall || _premiumGateCta
+    _canChat || _canCall || _premiumGateCta || _liveBtnHtml
       ? `<div class="profile-contact-actions">
           ${_canChat ? `<button class="btn sm primary" id="chat-btn">${icon("chat", 15)} Discuter</button>` : ""}
           ${_canCall ? `<button class="btn sm" id="call-btn" title="Appel pair-à-pair"${data.pubkey ? "" : " disabled"}>${icon("camera", 15)} Appel</button>` : ""}
+          ${_liveBtnHtml}
           ${_premiumGateCta}
         </div>`
       : "";
@@ -3724,12 +3915,14 @@ function eventCardHtml(e, editable, now) {
   const past = ((end && !isNaN(end) ? end : start).getTime() || 0) < now;
   const t0 = fmtHm(start);
   const t1 = fmtHm(end);
+  const isLive = e.kind === "live";
   const meta = [
+    isLive ? `<span class="ev-live-tag">${icon("users", 12)}Live</span>` : "",
     e.location ? `<span class="ev-loc">${icon("pin", 13)}${esc(e.location)}</span>` : "",
     e.link ? `<a class="ev-link" href="${esc(e.link)}" target="_blank" rel="noopener noreferrer" title="${esc(e.link)}">${icon("link", 13)}Lien</a>` : "",
     editable && e.is_public === 0 ? `<span class="ev-private">${icon("lock", 12)}Privé</span>` : "",
   ].filter(Boolean).join("");
-  return `<article class="ev-card${past ? " past" : ""}">
+  return `<article class="ev-card${past ? " past" : ""}${isLive ? " ev-card-live" : ""}">
       <div class="ev-time"><span class="ev-t0">${esc(t0) || "—"}</span>${t1 ? `<span class="ev-t1">${esc(t1)}</span>` : ""}</div>
       <div class="ev-main">
         <div class="ev-title">${esc(e.title)}</div>

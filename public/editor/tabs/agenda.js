@@ -23,9 +23,9 @@ export function renderAgendaColumn(data, { reqFilterChips, requestsHtml, dayLoad
   const upcomingHtml = upcoming.length
     ? `<div class="agenda-upcoming">
         <div class="agenda-upcoming-title">${icon("clock", 12)} Prochains</div>
-        ${upcoming.map(e => `<div class="agenda-upcoming-item">
+        ${upcoming.map(e => `<div class="agenda-upcoming-item${e.kind === "live" ? " is-live" : ""}">
           <span class="agenda-upcoming-time">${fmtDate(e.starts_at)}</span>
-          <span class="agenda-upcoming-name">${esc(e.title || "")}</span>
+          <span class="agenda-upcoming-name">${e.kind === "live" ? `${icon("users", 11)} ` : ""}${esc(e.title || "")}</span>
         </div>`).join("")}
       </div>`
     : `<div class="agenda-upcoming"><p class="empty" style="text-align:center;padding:.6rem 0;font-size:.82rem">Aucun événement à venir</p></div>`;

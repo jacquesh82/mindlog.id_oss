@@ -3180,8 +3180,34 @@ select:focus { outline: none; border-color: var(--accent-ink); box-shadow: 0 0 0
 .ev-public-row input { width: auto; }
 .btn.danger.ghost { background: none; color: var(--danger); border-color: transparent; margin-right: auto; font-weight: 500; }
 .btn.danger.ghost:hover { background: rgba(240,113,122,.1); border-color: rgba(240,113,122,.4); filter: none; }
+/* Sélecteur de type : Événement ⇄ Live (n'apparaît que pour les comptes Premium
+   ayant activé le bénéfice « lives » de leur espace privé). */
+.ev-kind-row { display: inline-flex; gap: .25rem; padding: .25rem; background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-md); margin: 0 0 .2rem; }
+.ev-kind-tab { display: inline-flex; align-items: center; gap: .3rem; padding: .35rem .7rem; border: 0; background: transparent; color: var(--muted); border-radius: calc(var(--r-md) - 3px); font: inherit; font-size: .82rem; cursor: pointer; transition: background var(--dur) var(--ease-out), color var(--dur) var(--ease-out); }
+.ev-kind-tab:hover { color: var(--fg); }
+.ev-kind-tab.active { background: var(--accent); color: #0b0d12; font-weight: 600; }
+.ev-kind-tab.active svg { color: #0b0d12; }
+.ev-kind-hint { display: flex; align-items: center; gap: .35rem; margin: 0 0 .6rem; padding: .4rem .55rem; font-size: .78rem; color: var(--muted); background: var(--accent-soft, rgba(255,255,255,.04)); border: 1px dashed var(--accent-line); border-radius: var(--r-sm); }
+.ev-kind-hint svg { color: var(--accent-ink); flex: none; }
 @media (max-width: 560px) {
   .ev-modal .ev-grid2 { grid-template-columns: 1fr; }
+}
+
+/* Badge « Live » sur les cartes d'événement et indicateur sur l'agenda éditeur. */
+.ev-live-tag { display: inline-flex; align-items: center; gap: .25rem; padding: .05rem .4rem; font-size: .7rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #0b0d12; background: var(--accent); border-radius: 999px; }
+.ev-live-tag svg { color: #0b0d12; }
+.ev-card-live::before { background: var(--accent); }
+.agenda-upcoming-item.is-live .agenda-upcoming-name { color: var(--accent-ink); font-weight: 600; }
+.agenda-upcoming-item.is-live .agenda-upcoming-name svg { color: var(--accent-ink); vertical-align: -2px; }
+
+/* Compteur de lives planifiés à droite du bouton « Live » dans les actions
+   de contact (sous le hero de /@handle). Petite pastille ronde aux couleurs
+   d'accent — visuellement cohérente avec les autres badges du site. */
+.profile-contact-actions .btn .btn-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 1.1rem; height: 1.1rem; padding: 0 .35rem;
+  margin-left: .35rem; font-size: .7rem; font-weight: 700;
+  color: #0b0d12; background: var(--accent); border-radius: 999px; line-height: 1;
 }
 
 /* Disponibilités */
@@ -5687,13 +5713,15 @@ body:has(#app[data-view="private"]) #footer { display: none !important; }
   --tg-blue-deep: color-mix(in srgb, var(--accent) 64%, #0b0d12);
 }
 
-.landing--simple {
-  padding: 0; margin: 0; max-width: none;
-  /* Conteneur partagé : toutes les sections EASY s'alignent sur la même largeur
-     et la même gouttière → bords gauche/droit cohérents (hero ↔ bento ↔ tour ↔
-     CTA ↔ footer). */
+/* Variables de gabarit partagées par les DEUX landings (Easy + Geek) : largeur
+   maxi et gouttière cohérentes pour le hero, les bandes, le bandeau P2P et le
+   showcase Premium. Déclarées sur `.landing` pour rester scopées à la home. */
+.landing {
   --lp-maxw: 1120px;
   --lp-pad: clamp(1.2rem, 4vw, 2.5rem);
+}
+.landing--simple {
+  padding: 0; margin: 0; max-width: none;
 }
 /* `.landing` est un flex column align-items:center → un enfant sans largeur
    explicite se rétracte à son contenu (c'est ce qui décalait « Take a tour »).
@@ -6364,4 +6392,223 @@ h1, h2, h3,
     width: 100%; max-width: 22rem; justify-content: center;
     min-height: 48px; padding: 0 1.25rem; margin-inline: auto;
   }
+}
+
+/* ============================================================
+   v3 commercial — Easy landing : price tease, trust strip,
+   bandeau P2P, showcase Premium. Tout greffé sur le design
+   tg-* (Telegram-like) pour une cohérence visuelle stricte.
+   ============================================================ */
+
+/* Sticker prix sous les CTA du hero — passerelle gratuit → premium */
+.tg-price-tease {
+  display: inline-flex; align-items: center; gap: .45rem;
+  margin: .9rem 0 0; font-size: .92rem;
+  color: var(--muted);
+}
+.tg-price-tease strong {
+  color: var(--tg-blue-2); font-weight: 700;
+  background: color-mix(in srgb, var(--tg-blue-1) 16%, transparent);
+  padding: .1em .45em; border-radius: var(--r-xs);
+}
+[data-theme="dark"] .tg-price-tease strong { color: var(--tg-blue-1); }
+.tg-price-tease svg { color: var(--tg-blue-2); flex: none; }
+[data-theme="dark"] .tg-price-tease svg { color: var(--tg-blue-1); }
+
+/* Trust strip — 5 promesses souveraineté/E2E/P2P/no-phone/OSS */
+.landing--simple > .tg-trust { width: 100%; }
+.tg-trust {
+  position: relative; z-index: 1;
+  max-width: var(--lp-maxw); margin: 0 auto;
+  padding: 0 var(--lp-pad);
+}
+.tg-trust-row {
+  display: flex; flex-wrap: wrap; justify-content: center; gap: .55rem;
+  padding: .9rem 1rem; border-radius: 999px;
+  background: var(--card); border: 1px solid var(--line);
+  box-shadow: var(--elev-1);
+}
+.tg-trust-chip {
+  display: inline-flex; align-items: center; gap: .45rem;
+  font-size: .85rem; font-weight: 600; color: var(--fg);
+  padding: .35rem .7rem; border-radius: 999px;
+  background: color-mix(in srgb, var(--tg-blue-1) 8%, transparent);
+}
+.tg-trust-chip svg { color: var(--tg-blue-2); flex: none; }
+[data-theme="dark"] .tg-trust-chip svg { color: var(--tg-blue-1); }
+.tg-trust-chip .flag { font-size: 1.05rem; line-height: 1; }
+
+/* Bandeau P2P — différenciateur clé (anti-interception) */
+.landing--simple > .tg-p2p { width: 100%; }
+.tg-p2p {
+  position: relative; z-index: 1;
+  max-width: var(--lp-maxw); margin: 0 auto;
+  padding: clamp(1.5rem, 4vw, 2.5rem) var(--lp-pad);
+}
+.tg-p2p-inner {
+  display: grid; grid-template-columns: minmax(220px, 320px) 1fr;
+  gap: clamp(1.5rem, 4vw, 3rem); align-items: center;
+  background:
+    radial-gradient(120% 80% at 0% 0%, color-mix(in srgb, var(--tg-blue-1) 16%, transparent) 0%, transparent 60%),
+    var(--card);
+  border: 1px solid var(--line); border-radius: var(--r-xl);
+  padding: clamp(1.4rem, 3vw, 2.2rem);
+  box-shadow: var(--elev-1), var(--highlight);
+}
+.tg-p2p-copy h2 {
+  font-size: clamp(1.4rem, 2.6vw, 1.9rem); font-weight: 800;
+  letter-spacing: -.01em; margin: 0 0 .6rem;
+}
+.tg-p2p-copy p { color: var(--muted); margin: 0; line-height: 1.55; font-size: 1rem; }
+.tg-p2p-copy strong { color: var(--fg); }
+
+/* Diagramme : appareil A ───── appareil B, mindlog isolé en dessous (barré) */
+.tg-p2p-diagram {
+  position: relative;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 1rem 0 2.6rem;
+  min-height: 130px;
+}
+.tg-p2p-node {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 56px; height: 56px; border-radius: 50%;
+  background: linear-gradient(180deg, var(--tg-blue-1), var(--tg-blue-2));
+  color: #fff; flex: none;
+  box-shadow: 0 8px 20px -10px color-mix(in srgb, var(--tg-blue-2) 60%, transparent);
+}
+[data-theme="dark"] .tg-p2p-node { color: var(--on-accent); }
+.tg-p2p-line {
+  flex: 1; height: 3px; margin: 0 .6rem; position: relative;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--tg-blue-1) 60%, transparent),
+    color-mix(in srgb, var(--tg-blue-2) 60%, transparent));
+  border-radius: 999px;
+}
+.tg-p2p-line::before,
+.tg-p2p-line::after {
+  content: ""; position: absolute; top: 50%; transform: translateY(-50%);
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #fff; box-shadow: 0 0 0 3px var(--tg-blue-2);
+  animation: tg-p2p-pulse 2.4s ease-in-out infinite;
+}
+.tg-p2p-line::before { left: 12%; animation-delay: 0s; }
+.tg-p2p-line::after  { right: 12%; animation-delay: 1.2s; }
+@keyframes tg-p2p-pulse {
+  0%, 100% { opacity: 1; transform: translateY(-50%) scale(1); }
+  50%      { opacity: .35; transform: translateY(-50%) scale(.7); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tg-p2p-line::before, .tg-p2p-line::after { animation: none; }
+}
+.tg-p2p-server {
+  position: absolute; left: 50%; bottom: 0; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: .35rem;
+  font-size: .8rem; font-weight: 700; color: var(--muted);
+  padding: .35rem .65rem; border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 8%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--muted) 35%, transparent);
+}
+.tg-p2p-server::after {
+  /* Barre rouge fine en travers — « hors du parcours du flux ». */
+  content: ""; position: absolute; left: 8px; right: 8px; top: 50%;
+  height: 2px; background: #d24a4a; border-radius: 999px;
+  transform: rotate(-8deg); opacity: .85;
+}
+.tg-p2p-server svg { flex: none; }
+
+@media (max-width: 720px) {
+  .tg-p2p-inner { grid-template-columns: 1fr; padding: 1.4rem; }
+  .tg-p2p-diagram { padding: .5rem 0 2.4rem; }
+}
+
+/* Showcase Premium — 6 services débloqués par l'abonnement créateur·rice */
+.landing--simple > .tg-prem { width: 100%; }
+.tg-prem {
+  position: relative; z-index: 1;
+  max-width: var(--lp-maxw); margin: 0 auto;
+  padding: clamp(2.5rem, 6vw, 4rem) var(--lp-pad);
+}
+.tg-prem-head { text-align: center; max-width: 42rem; margin: 0 auto 1.8rem; }
+.tg-prem-eyebrow {
+  display: inline-flex; align-items: center; gap: .4rem;
+  font-size: .8rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--tg-blue-2);
+  background: color-mix(in srgb, var(--tg-blue-1) 18%, transparent);
+  padding: .35rem .7rem; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--tg-blue-1) 30%, transparent);
+}
+.tg-prem-eyebrow svg { color: inherit; }
+.tg-prem-head h2 {
+  font-size: clamp(1.7rem, 3.5vw, 2.4rem); font-weight: 800;
+  letter-spacing: -.01em; margin: .9rem 0 .6rem;
+}
+.tg-prem-lead {
+  color: var(--muted); line-height: 1.55; margin: 0;
+  font-size: clamp(1rem, 1.5vw, 1.1rem);
+}
+.tg-prem-lead strong { color: var(--fg); }
+
+.tg-prem-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: clamp(.9rem, 1.8vw, 1.3rem);
+}
+.tg-prem-card {
+  display: flex; flex-direction: column; gap: .55rem;
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: var(--r-xl); padding: clamp(1.2rem, 2.2vw, 1.7rem);
+  box-shadow: var(--elev-1), var(--highlight);
+  transition: transform var(--dur-fast) var(--ease-spring),
+              border-color var(--dur) var(--ease-out),
+              box-shadow var(--dur) var(--ease-out);
+  position: relative; overflow: hidden;
+}
+.tg-prem-card::before {
+  content: ""; position: absolute; inset: 0;
+  background: radial-gradient(120% 80% at 0% 0%,
+    color-mix(in srgb, var(--tg-blue-1) 16%, transparent) 0%,
+    transparent 55%);
+  pointer-events: none; opacity: .7;
+}
+.tg-prem-card:hover {
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--tg-blue-1) 45%, var(--line));
+  box-shadow: var(--elev-2), var(--highlight);
+}
+.tg-prem-ic {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; border-radius: var(--r-lg);
+  background: linear-gradient(180deg, var(--tg-blue-1), var(--tg-blue-2));
+  color: #fff;
+  box-shadow: 0 6px 14px -6px color-mix(in srgb, var(--tg-blue-2) 50%, transparent);
+  position: relative; z-index: 1;
+}
+[data-theme="dark"] .tg-prem-ic { color: var(--on-accent); }
+.tg-prem-card h3 {
+  font-size: 1.08rem; font-weight: 800; letter-spacing: -.01em;
+  margin: .25rem 0 0; position: relative; z-index: 1;
+}
+.tg-prem-card p {
+  color: var(--muted); margin: 0; line-height: 1.5; font-size: .94rem;
+  position: relative; z-index: 1;
+}
+
+.tg-prem-cta-wrap {
+  margin-top: clamp(1.6rem, 3vw, 2.4rem);
+  text-align: center;
+}
+.tg-prem-note {
+  margin: .8rem 0 0; color: var(--muted); font-size: .85rem;
+}
+
+@media (max-width: 1040px) {
+  .tg-prem-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 620px) {
+  .tg-prem-grid { grid-template-columns: 1fr; }
+  .tg-trust-row { padding: .7rem .8rem; gap: .35rem; }
+  .tg-trust-chip { font-size: .8rem; padding: .3rem .55rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tg-prem-card { transition: border-color var(--dur) var(--ease-out); }
+  .tg-prem-card:hover { transform: none; box-shadow: var(--elev-1), var(--highlight); }
 }

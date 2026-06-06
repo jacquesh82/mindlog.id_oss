@@ -28,6 +28,7 @@ export async function addEvent(
     link?: string;
     notes?: string;
     is_public?: boolean;
+    kind?: "event" | "live";
   }
 ): Promise<CardEvent> {
   if (
@@ -48,9 +49,10 @@ export async function addEvent(
       link: input.link ?? "",
       notes: input.notes ?? "",
       is_public: input.is_public === false ? 0 : 1,
+      kind: input.kind === "live" ? "live" : "event",
     })
     .returning();
-  return ins[0];
+  return ins[0] as CardEvent;
 }
 
 export async function updateEvent(
@@ -64,6 +66,7 @@ export async function updateEvent(
     link?: string;
     notes?: string;
     is_public?: boolean;
+    kind?: "event" | "live";
   }
 ): Promise<CardEvent | null> {
   if (
@@ -81,13 +84,14 @@ export async function updateEvent(
   if (input.link !== undefined) patch.link = input.link;
   if (input.notes !== undefined) patch.notes = input.notes;
   if (input.is_public !== undefined) patch.is_public = input.is_public ? 1 : 0;
+  if (input.kind !== undefined) patch.kind = input.kind === "live" ? "live" : "event";
   if (Object.keys(patch).length === 0) return getEvents(identityId, true).then((rows) => rows.find((e) => e.id === id) ?? null);
   const r = await db
     .update(eventsTable)
     .set(patch)
     .where(and(eq(eventsTable.id, id), eq(eventsTable.identity_id, identityId)))
     .returning();
-  return r[0] ?? null;
+  return (r[0] as CardEvent | undefined) ?? null;
 }
 
 export async function deleteEvent(identityId: number, id: number): Promise<boolean> {
