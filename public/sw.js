@@ -29,10 +29,21 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches
-      .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
-      .then(() => self.clients.claim())
+    (async () => {
+      const keys = await caches.keys();
+      await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)));
+      // Purge en plus toute entrée /static/live/* du cache courant — au cas où
+      // une version précédente du SW (sans exclusion) en aurait stocké. Ces
+      // assets sont désormais toujours réseau-direct.
+      try {
+        const cache = await caches.open(CACHE);
+        const reqs = await cache.keys();
+        for (const r of reqs) {
+          if (new URL(r.url).pathname.startsWith("/static/live/")) await cache.delete(r);
+        }
+      } catch { /* ignore */ }
+      await self.clients.claim();
+    })()
   );
 });
 
@@ -42,10 +53,14 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return; // CDN tiers → réseau direct
   // Endpoints dynamiques : jamais d'interception (E2E, SSE, OAuth, le SW lui-même).
+  // Les assets du module Live évoluent vite (mesh/viewer/broadcaster) et sont
+  // chargés uniquement pendant un live — pas de bénéfice offline, gros risque de
+  // stale (un viewer servi avec un mesh.js obsolète restait à « 0 pairs »).
   if (
     url.pathname.startsWith("/api/") ||
     url.pathname.startsWith("/mcp") ||
     url.pathname.startsWith("/oauth") ||
+    url.pathname.startsWith("/static/live/") ||
     url.pathname === "/sw.js"
   )
     return;
