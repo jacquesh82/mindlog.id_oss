@@ -858,6 +858,7 @@ export function renderEditor(data) {
     Galerie: { label: "Galerie", ic: "image" },
     Options: { label: "Options", ic: "settings" },
     Chat: { label: "Chat", ic: "chat" },
+    Live: { label: "Live", ic: "radio" },
   };
   app.setAttribute("data-view", "private");
   app.innerHTML = `
@@ -879,7 +880,7 @@ export function renderEditor(data) {
        // Réseau · Agenda · Galerie · Options. « Mon ID » (Identité) est accessible
        // depuis l'Accueil (« Modifier ma carte ») ; les Notifications via la cloche
        // du header. L'ordre est fixe et chaque label n'apparaît qu'une fois.
-       const NAV = ["Chat", "Relations", "Agenda", "Compte"];
+       const NAV = ["Chat", "Live", "Relations", "Agenda", "Compte"];
        const navBtn = ({ i, label }) => {
          const cfg = BNAV[label] || { label, ic: "circle" };
          const isChat = label === "Chat";
@@ -2799,55 +2800,94 @@ export function openEventModal(event, opts = {}) {
   const showKindToggle = !!opts.liveAvailable || initialKind === "live";
   const overlay = document.createElement("div");
   overlay.className = "overlay open";
+  // Layout : tout le contenu mode-spécifique porte [data-only="event"|"live"]
+  // ou [data-when="..."] et CSS gère la bascule via form[data-kind]. Pas de
+  // re-render DOM au switch, juste une transition propre.
   overlay.innerHTML = `
-    <div class="panel ev-modal" role="dialog" aria-modal="true" aria-labelledby="ev-modal-title">
+    <div class="panel ev-modal" data-kind="${initialKind}" role="dialog" aria-modal="true" aria-labelledby="ev-modal-title">
       <button type="button" class="close" id="ev-close" aria-label="Fermer">✕</button>
-      <h2 id="ev-modal-title">${editing ? "Modifier l'événement" : "Nouvel événement"}</h2>
+      <div class="ev-header">
+        <h2 id="ev-modal-title">
+          <span data-when="event">${editing ? "Modifier l'événement" : "Nouvel événement"}</span>
+          <span data-when="live">${editing ? "Modifier le live" : "Nouveau live"}</span>
+        </h2>
+        <span class="ev-live-badge" data-only="live" aria-hidden="true"><span class="ev-live-dot"></span> EN DIRECT</span>
+      </div>
       <form id="ev-form" novalidate data-kind="${initialKind}">
         ${showKindToggle ? `
         <div class="group ev-kind-row" role="radiogroup" aria-label="Type d'événement">
           <button type="button" class="ev-kind-tab${initialKind === "event" ? " active" : ""}" data-kind="event" role="radio" aria-checked="${initialKind === "event"}">
-            ${icon("calendar", 14)} Événement
+            ${icon("calendar", 16)}
+            <span class="ev-kind-label">Événement</span>
+            <span class="ev-kind-sub">RDV, sortie, réunion…</span>
           </button>
           <button type="button" class="ev-kind-tab${initialKind === "live" ? " active" : ""}" data-kind="live" role="radio" aria-checked="${initialKind === "live"}">
-            ${icon("users", 14)} Live
+            ${icon("users", 16)}
+            <span class="ev-kind-label">Live</span>
+            <span class="ev-kind-sub">Diffusion mindlog · id</span>
           </button>
         </div>
-        <p class="ev-kind-hint" id="ev-kind-hint" ${initialKind === "live" ? "" : "hidden"}>
-          ${icon("lock", 12)} Diffusion réservée à tes abonné·e·s premium. L'horaire est visible publiquement.
-        </p>` : ""}
+        <div class="ev-live-hint" data-only="live" role="note">
+          ${icon("lock", 14)}
+          <div><strong>Live chiffré sur mindlog · id</strong> — diffusion mesh P2P réservée à tes abonné·e·s premium. L'horaire reste visible publiquement sur ta page.</div>
+        </div>` : ""}
         <div class="group">
-          <label for="ev-title">Titre</label>
-          <input id="ev-title" name="title" maxlength="200" required placeholder="Réunion, rendez-vous, sortie…" value="${editing ? esc(event.title || "") : ""}" />
+          <label for="ev-title">Titre <span class="req" aria-hidden="true">*</span></label>
+          <input id="ev-title" name="title" maxlength="200" required aria-required="true"
+                 placeholder="Réunion, rendez-vous, sortie…"
+                 data-placeholder-live="Sujet du live, masterclass, Q&amp;R…"
+                 value="${editing ? esc(event.title || "") : ""}" />
         </div>
         <div class="group ev-grid2">
           <div>
-            <label for="ev-start">Début</label>
-            <input id="ev-start" name="starts_at" type="datetime-local" required value="${editing ? toLocalInput(event.starts_at) : ""}" />
+            <label for="ev-start">Début <span class="req" aria-hidden="true">*</span></label>
+            <input id="ev-start" name="starts_at" type="datetime-local" required aria-required="true" value="${editing ? toLocalInput(event.starts_at) : ""}" />
           </div>
           <div>
             <label for="ev-end">Fin <span class="opt">(optionnel)</span></label>
             <input id="ev-end" name="ends_at" type="datetime-local" value="${editing ? toLocalInput(event.ends_at) : ""}" />
           </div>
         </div>
-        <div class="group">
+        <div class="group" data-only="event">
           <label for="ev-loc">Lieu <span class="opt">(optionnel)</span></label>
           <input id="ev-loc" name="location" maxlength="200" placeholder="Adresse, salle, visio…" value="${editing ? esc(event.location || "") : ""}" />
         </div>
-        <div class="group">
+        <div class="group" data-only="event">
           <label for="ev-link">Lien <span class="opt">(optionnel)</span></label>
           <input id="ev-link" name="link" type="url" maxlength="500" placeholder="https://…" value="${editing ? esc(event.link || "") : ""}" />
         </div>
         <div class="group">
-          <label for="ev-notes">Notes <span class="opt">(optionnel)</span></label>
-          <textarea id="ev-notes" name="notes" rows="3" maxlength="4000" placeholder="Détails, ordre du jour…">${editing ? esc(event.notes || "") : ""}</textarea>
+          <label for="ev-notes">
+            <span data-when="event">Notes <span class="opt">(optionnel)</span></span>
+            <span data-when="live">Description du live <span class="opt">(visible publiquement)</span></span>
+          </label>
+          <textarea id="ev-notes" name="notes" rows="3" maxlength="4000"
+                    placeholder="Détails, ordre du jour…"
+                    data-placeholder-live="Qu'est-ce qui se passe pendant ce live ?">${editing ? esc(event.notes || "") : ""}</textarea>
         </div>
-        <label class="ev-public-row"><input type="checkbox" id="ev-public" name="is_public" ${editing ? (event.is_public !== 0 ? "checked" : "") : "checked"} /> <span>Visible publiquement sur ma page</span></label>
+        <label class="ev-toggle-row ev-notify-row" data-only="live">
+          <input type="checkbox" id="ev-notify" name="notify_subs" ${editing ? (event.notify_subs ? "checked" : "") : "checked"} />
+          <div class="ev-toggle-text">
+            <strong>${icon("bell", 14)} Notifier mes abonné·e·s à l'ouverture</strong>
+            <small>Email + notification in-app dès que tu lances la diffusion.</small>
+          </div>
+        </label>
+        <label class="ev-toggle-row ev-public-row">
+          <input type="checkbox" id="ev-public" name="is_public" ${editing ? (event.is_public !== 0 ? "checked" : "") : "checked"} />
+          <div class="ev-toggle-text">
+            <strong>${icon("eye", 14)} Visible publiquement sur ma page</strong>
+            <small data-when="event">Apparaît dans tes événements à venir sur ton profil.</small>
+            <small data-when="live">Le créneau est annoncé ; l'accès au flux reste réservé aux abonné·e·s.</small>
+          </div>
+        </label>
         <div class="err" id="ev-err"></div>
         <div class="actions">
           ${editing ? `<button type="button" class="btn danger ghost" id="ev-delete">${icon("trash", 15)} Supprimer</button>` : ""}
           <button type="button" class="btn" id="ev-cancel">Annuler</button>
-          <button type="submit" class="btn primary">${editing ? "Enregistrer" : "Ajouter"}</button>
+          <button type="submit" class="btn primary" id="ev-submit">
+            <span data-when="event">${editing ? "Enregistrer" : "Ajouter"}</span>
+            <span data-when="live">${editing ? "Enregistrer le live" : "Planifier le live"}</span>
+          </button>
         </div>
       </form>
     </div>`;
@@ -2868,20 +2908,31 @@ export function openEventModal(event, opts = {}) {
     renderPrivate(appState.key);
   });
 
-  // Toggle « Événement / Live » : maintient form.dataset.kind, met à jour l'état
-  // visuel des deux onglets et révèle un hint contextuel quand on passe en Live.
+  // Toggle « Événement / Live » : maintient form.dataset.kind (CSS gère la
+  // bascule des éléments [data-only]/[data-when]) et swap les placeholders qui
+  // sont des attributs, donc inaccessibles à CSS.
   const formEl = overlay.querySelector("#ev-form");
+  const swapPlaceholders = (k) => {
+    overlay.querySelectorAll("[data-placeholder-live]").forEach((el) => {
+      if (!("placeholderDefault" in el.dataset)) el.dataset.placeholderDefault = el.placeholder;
+      el.placeholder = k === "live" ? el.dataset.placeholderLive : el.dataset.placeholderDefault;
+    });
+  };
+  swapPlaceholders(initialKind);
+  const panelEl = overlay.querySelector(".ev-modal");
   overlay.querySelectorAll(".ev-kind-tab").forEach((tab) =>
     tab.addEventListener("click", () => {
       const k = tab.dataset.kind === "live" ? "live" : "event";
       formEl.dataset.kind = k;
+      // Duplique data-kind sur le panel pour les éléments hors-form (badge
+      // EN DIRECT du header) — évite la dépendance à :has() pour le ciblage.
+      panelEl.dataset.kind = k;
       overlay.querySelectorAll(".ev-kind-tab").forEach((t) => {
         const on = t.dataset.kind === k;
         t.classList.toggle("active", on);
         t.setAttribute("aria-checked", on ? "true" : "false");
       });
-      const hint = overlay.querySelector("#ev-kind-hint");
-      if (hint) hint.hidden = k !== "live";
+      swapPlaceholders(k);
     })
   );
 
@@ -2895,15 +2946,20 @@ export function openEventModal(event, opts = {}) {
     if (!title) { errEl.textContent = "Le titre est requis."; return; }
     if (!start) { errEl.textContent = "La date de début est requise."; return; }
     if (end && new Date(end) < new Date(start)) { errEl.textContent = "La fin doit suivre le début."; return; }
+    const kind = formEl.dataset.kind === "live" ? "live" : "event";
     const payload = {
       title,
       starts_at: new Date(start).toISOString(),
       ends_at: end ? new Date(end).toISOString() : null,
-      location: (fd.get("location") || "").trim(),
-      link: (fd.get("link") || "").trim(),
+      // En mode live, lieu et lien externe n'ont pas de sens (le lieu = la
+      // plateforme, le lien = /live/:id auto-généré) → on n'envoie que pour
+      // les vrais événements.
+      location: kind === "event" ? (fd.get("location") || "").trim() : "",
+      link: kind === "event" ? (fd.get("link") || "").trim() : "",
       notes: (fd.get("notes") || "").trim(),
       is_public: fd.get("is_public") === "on",
-      kind: formEl.dataset.kind === "live" ? "live" : "event",
+      kind,
+      notify_subs: kind === "live" ? fd.get("notify_subs") === "on" : false,
     };
     const submitBtn = e.target.querySelector("button[type=submit]");
     submitBtn.disabled = true;

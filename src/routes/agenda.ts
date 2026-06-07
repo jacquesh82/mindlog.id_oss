@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { StoreError, addEvent, deleteEvent, updateEvent, setDayStatus } from "../store.js";
+import { notifyLiveScheduled } from "../premium-api.js";
 import { currentIdentity, readBody, exceeds } from "./_ctx.js";
 
 const route = new Hono();
@@ -27,13 +28,22 @@ route.post("/api/agenda", async (c) => {
     notes?: string;
     is_public?: boolean;
     kind?: string;
+    notify_subs?: boolean;   // demandé côté modale en mode live (case cochée par défaut)
   }>(c);
   if (!body.title || !body.starts_at)
     return c.json({ error: "title and starts_at required" }, 400);
   if (exceeds([[body.title, 200], [body.location, 200], [body.link, 500], [body.notes, 4000], [body.starts_at, 40], [body.ends_at, 40]]))
     return c.json({ error: "champ trop long" }, 400);
   const kind = await normalizeKind(id.id, body.kind);
-  return c.json(await addEvent(id.id, { ...body, title: body.title, starts_at: body.starts_at, kind }), 201);
+  const created = await addEvent(id.id, { ...body, title: body.title, starts_at: body.starts_at, kind });
+  // Live planifié + opt-in du créateur → notifie les abonné·e·s. On ne stocke
+  // pas notify_subs en base : c'est un trigger one-shot à la création/édition.
+  // L'implémentation vit dans src/premium/ et est branchée via premium-api ;
+  // en build OSS (premium non installé), l'appel est un no-op silencieux.
+  if (kind === "live" && body.notify_subs === true) {
+    notifyLiveScheduled(id.id, { title: body.title, starts_at: body.starts_at });
+  }
+  return c.json(created, 201);
 });
 
 route.put("/api/agenda/:id", async (c) => {

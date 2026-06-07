@@ -3173,24 +3173,147 @@ select:focus { outline: none; border-color: var(--accent-ink); box-shadow: 0 0 0
 }
 
 /* ===== Modale composer d'événement (création / édition) ===== */
-.ev-modal { max-width: 480px; }
+.ev-modal { max-width: 520px; }
 .ev-modal .ev-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
 .ev-modal .opt { color: var(--muted); font-weight: 400; }
-.ev-public-row { display: flex; align-items: center; gap: .5rem; font-size: .88rem; color: var(--fg); margin: .2rem 0 .6rem; cursor: pointer; }
-.ev-public-row input { width: auto; }
+.ev-modal .req { color: #ef4444; margin-left: .15rem; font-weight: 700; }
 .btn.danger.ghost { background: none; color: var(--danger); border-color: transparent; margin-right: auto; font-weight: 500; }
 .btn.danger.ghost:hover { background: rgba(240,113,122,.1); border-color: rgba(240,113,122,.4); filter: none; }
-/* Sélecteur de type : Événement ⇄ Live (n'apparaît que pour les comptes Premium
-   ayant activé le bénéfice « lives » de leur espace privé). */
-.ev-kind-row { display: inline-flex; gap: .25rem; padding: .25rem; background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-md); margin: 0 0 .2rem; }
-.ev-kind-tab { display: inline-flex; align-items: center; gap: .3rem; padding: .35rem .7rem; border: 0; background: transparent; color: var(--muted); border-radius: calc(var(--r-md) - 3px); font: inherit; font-size: .82rem; cursor: pointer; transition: background var(--dur) var(--ease-out), color var(--dur) var(--ease-out); }
-.ev-kind-tab:hover { color: var(--fg); }
-.ev-kind-tab.active { background: var(--accent); color: #0b0d12; font-weight: 600; }
-.ev-kind-tab.active svg { color: #0b0d12; }
-.ev-kind-hint { display: flex; align-items: center; gap: .35rem; margin: 0 0 .6rem; padding: .4rem .55rem; font-size: .78rem; color: var(--muted); background: var(--accent-soft, rgba(255,255,255,.04)); border: 1px dashed var(--accent-line); border-radius: var(--r-sm); }
-.ev-kind-hint svg { color: var(--accent-ink); flex: none; }
+
+/* ----- Header : titre + badge EN DIRECT (visible uniquement en mode live) ----- */
+.ev-modal .ev-header { display: flex; align-items: center; gap: .55rem; margin-bottom: .8rem; }
+.ev-modal .ev-header h2 { margin: 0; }
+.ev-live-badge {
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .15rem .55rem;
+  background: #ef4444; color: white;
+  border-radius: 999px;
+  font-size: .68rem; font-weight: 700; letter-spacing: .06em;
+}
+.ev-live-dot {
+  width: .42rem; height: .42rem; border-radius: 50%; background: white;
+  animation: ev-live-pulse 1.4s infinite;
+}
+@keyframes ev-live-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .4; transform: scale(.85); } }
+@media (prefers-reduced-motion: reduce) {
+  .ev-live-dot { animation: none; }
+}
+
+/* ----- Bascule [data-only] / [data-when] selon le kind du form ----- */
+/* Par défaut on cache les éléments scoping le mode live (l'event est par
+   défaut un simple événement) et on montre ceux scoping le mode event. */
+.ev-modal [data-only="live"],
+.ev-modal [data-when="live"] { display: none !important; }
+.ev-modal form[data-kind="live"] [data-only="event"],
+.ev-modal form[data-kind="live"] [data-when="event"] { display: none !important; }
+.ev-modal form[data-kind="live"] [data-only="live"],
+.ev-modal form[data-kind="live"] [data-when="live"] { display: revert !important; }
+.ev-modal form[data-kind="live"] .ev-notify-row[data-only="live"] { display: flex !important; }
+.ev-modal form[data-kind="live"] .ev-live-badge[data-only="live"] { display: inline-flex !important; }
+/* Badge EN DIRECT vit dans .ev-header (hors form) → on duplique data-kind sur
+   le panel .ev-modal côté JS pour le ciblage sans :has(). */
+.ev-modal[data-kind="live"] .ev-live-badge { display: inline-flex !important; }
+
+/* ----- Pills Événement / Live : 2 colonnes, 2 lignes (label + sous-titre) ----- */
+.ev-modal .ev-kind-row {
+  display: grid; grid-template-columns: 1fr 1fr; gap: .4rem;
+  padding: .3rem;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  margin: 0 0 .7rem;
+}
+.ev-modal .ev-kind-tab {
+  display: flex; flex-direction: column; align-items: center; gap: .15rem;
+  padding: .55rem .5rem;
+  border: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  border-radius: calc(var(--r-md) - 3px);
+  font: inherit; font-size: .82rem; cursor: pointer;
+  transition: background 180ms var(--ease-out), color 180ms var(--ease-out),
+              border-color 180ms var(--ease-out);
+}
+.ev-modal .ev-kind-tab:hover { color: var(--fg); background: rgba(0,0,0,.03); }
+[data-theme="dark"] .ev-modal .ev-kind-tab:hover { background: rgba(255,255,255,.04); }
+.ev-modal .ev-kind-tab:focus-visible {
+  outline: 2px solid #2563eb; outline-offset: 2px;
+}
+.ev-modal .ev-kind-tab.active {
+  background: var(--surf-1, #ffffff);
+  color: var(--fg);
+  box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 2px 8px rgba(0,0,0,.06);
+}
+[data-theme="dark"] .ev-modal .ev-kind-tab.active {
+  background: var(--surf-1, #1a1c22);
+}
+.ev-modal .ev-kind-tab[data-kind="event"].active { border-color: rgba(37,99,235,.45); color: #2563eb; }
+.ev-modal .ev-kind-tab[data-kind="live"].active  { border-color: rgba(239,68,68,.5);  color: #ef4444; }
+.ev-modal .ev-kind-tab .ev-kind-label { font-weight: 600; font-size: .9rem; }
+.ev-modal .ev-kind-tab .ev-kind-sub   { font-size: .7rem; opacity: .7; }
+
+/* ----- Hint card mode live (encadré rouge avec liseré gauche) ----- */
+.ev-modal .ev-live-hint {
+  display: flex; align-items: flex-start; gap: .55rem;
+  padding: .6rem .75rem;
+  margin: 0 0 .8rem;
+  background: rgba(239,68,68,.08);
+  border: 1px solid rgba(239,68,68,.22);
+  border-left: 3px solid #ef4444;
+  border-radius: var(--r-sm);
+  font-size: .82rem; line-height: 1.4;
+}
+.ev-modal .ev-live-hint svg { color: #ef4444; flex: none; margin-top: 2px; }
+.ev-modal .ev-live-hint strong { color: #ef4444; }
+
+/* ----- Toggle rows (notify + public) : carte avec icône + sous-texte ----- */
+.ev-modal .ev-toggle-row {
+  display: flex; align-items: flex-start; gap: .6rem;
+  padding: .55rem .7rem;
+  margin: 0 0 .5rem;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: .88rem; color: var(--fg);
+  cursor: pointer;
+  transition: background 150ms var(--ease-out), border-color 150ms var(--ease-out);
+}
+.ev-modal .ev-toggle-row:hover { background: rgba(0,0,0,.025); }
+[data-theme="dark"] .ev-modal .ev-toggle-row:hover { background: rgba(255,255,255,.03); }
+.ev-modal .ev-toggle-row input[type="checkbox"] { margin-top: .15rem; flex: none; width: auto; }
+.ev-modal .ev-toggle-text { display: flex; flex-direction: column; gap: .12rem; flex: 1; }
+.ev-modal .ev-toggle-text strong { display: inline-flex; align-items: center; gap: .35rem; font-size: .85rem; font-weight: 600; }
+.ev-modal .ev-toggle-text small { font-size: .72rem; opacity: .7; line-height: 1.3; }
+.ev-modal .ev-toggle-text svg { flex: none; }
+/* Notify : accent rouge live (renforce que c'est une action diffusion) */
+.ev-modal .ev-notify-row { background: rgba(239,68,68,.06); border-color: rgba(239,68,68,.22); }
+.ev-modal .ev-notify-row .ev-toggle-text strong { color: #ef4444; }
+
+/* ----- Liseré rouge sur le form en mode live + submit rouge ----- */
+.ev-modal form[data-kind="live"] {
+  border-left: 3px solid #ef4444;
+  padding-left: 1rem;
+  margin-left: -1rem;
+  transition: border-color 200ms var(--ease-out);
+}
+.ev-modal form[data-kind="event"] {
+  border-left: 3px solid transparent;
+  padding-left: 1rem;
+  margin-left: -1rem;
+}
+.ev-modal form[data-kind="live"] .actions .btn.primary {
+  background: #ef4444;
+  border-color: #ef4444;
+  color: white;
+}
+.ev-modal form[data-kind="live"] .actions .btn.primary:hover {
+  background: #dc2626;
+  border-color: #dc2626;
+}
+
 @media (max-width: 560px) {
   .ev-modal .ev-grid2 { grid-template-columns: 1fr; }
+  .ev-modal .ev-kind-tab { padding: .5rem .35rem; }
 }
 
 /* Badge « Live » sur les cartes d'événement et indicateur sur l'agenda éditeur. */
@@ -6611,4 +6734,92 @@ h1, h2, h3,
 @media (prefers-reduced-motion: reduce) {
   .tg-prem-card { transition: border-color var(--dur) var(--ease-out); }
   .tg-prem-card:hover { transform: none; box-shadow: var(--elev-1), var(--highlight); }
+}
+
+/* ===== Plugin LIVE — onglet sidebar ===== */
+.live-col { padding: 1rem; }
+.live-col-h h2 { font-size: 1.15rem; }
+.live-col-h svg { color: #ef4444; }
+.live-col-body { display: flex; flex-direction: column; gap: 1.1rem; margin-top: 1rem; }
+
+.live-section {
+  display: flex; flex-direction: column; gap: .5rem;
+}
+.live-section-h {
+  margin: 0;
+  font-size: .78rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--muted, #94a3b8);
+}
+
+/* Cartes cliquables : ligne dot/icône + body texte */
+.live-card {
+  display: flex; align-items: center; gap: .75rem;
+  padding: .7rem .85rem;
+  background: var(--inset, rgba(255,255,255,.04));
+  border: 1px solid var(--line, rgba(255,255,255,.06));
+  border-radius: 10px;
+  color: inherit; text-decoration: none;
+  transition: background 150ms var(--ease-out, ease-out),
+              border-color 150ms var(--ease-out, ease-out),
+              transform 120ms var(--ease-out, ease-out);
+}
+.live-card:hover { background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.12); transform: translateY(-1px); }
+.live-card-body { display: flex; flex-direction: column; gap: .12rem; min-width: 0; }
+.live-card-body strong { font-size: .92rem; }
+.live-card-body small { font-size: .76rem; opacity: .68; }
+
+.live-card-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px;
+  background: rgba(37, 99, 235, .15);
+  color: #2563eb;
+  border-radius: 50%;
+  font-weight: 700; font-size: 14px; flex: none;
+}
+
+/* Dot rouge animé pour les lives en cours (mien ou autres) */
+.live-dot {
+  width: .65rem; height: .65rem; border-radius: 50%;
+  background: #ef4444; box-shadow: 0 0 8px #ef4444;
+  animation: live-col-pulse 1.4s infinite;
+  flex: none;
+}
+@keyframes live-col-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .45; transform: scale(.85); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-dot { animation: none; }
+}
+
+/* Variantes : ma diffusion en cours (rouge), CTA démarrer (bleu primaire) */
+.live-card--mine-on, .live-card--now {
+  background: rgba(239, 68, 68, .08);
+  border-color: rgba(239, 68, 68, .25);
+}
+.live-card--mine-on:hover, .live-card--now:hover {
+  background: rgba(239, 68, 68, .14);
+  border-color: rgba(239, 68, 68, .4);
+}
+.live-card--mine-on strong, .live-card--now strong { color: #ef4444; }
+
+.live-card--cta {
+  background: rgba(37, 99, 235, .08);
+  border-color: rgba(37, 99, 235, .25);
+}
+.live-card--cta:hover {
+  background: rgba(37, 99, 235, .14);
+  border-color: rgba(37, 99, 235, .4);
+}
+.live-card--cta strong { color: #2563eb; }
+.live-card--cta .live-card-icon { background: rgba(37, 99, 235, .2); color: #2563eb; }
+
+.live-card--sched .live-card-icon { background: rgba(148, 163, 184, .15); color: var(--muted, #94a3b8); }
+
+.live-empty {
+  padding: 1.2rem;
+  background: var(--inset, rgba(255,255,255,.03));
+  border: 1px dashed var(--line, rgba(255,255,255,.1));
+  border-radius: 10px;
+  text-align: center;
 }

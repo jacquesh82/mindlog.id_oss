@@ -70,6 +70,10 @@ type GetSpaceInfoFn = (ownerId: number, viewerId: number | null) => Promise<Spac
 // Résultat = { chat:true, call:true } quand l'action est permise (par défaut OSS).
 // `senderId` est null pour un visiteur non connecté.
 type GetContactGatingFn = (recipientId: number, senderId: number | null) => Promise<{ chat: boolean; call: boolean }>;
+// Notifications « live » — appelées depuis le core (route agenda) lors d'une
+// planification d'événement kind=live. En build OSS, l'implémentation par
+// défaut est un no-op : aucun import de `src/premium/*` n'a lieu.
+type NotifyLiveScheduledFn = (ownerId: number, event: { title: string; starts_at: string }) => void;
 
 let _isPremium: IsPremiumFn = async () => false;
 let _getSubscription: GetSubscriptionFn = async () => undefined;
@@ -78,6 +82,7 @@ let _sanitizeButtonUrl: SanitizeUrlFn = () => null;
 let _subscriptionIsPremium: SubscriptionIsPremiumFn = () => false;
 let _getSpaceInfo: GetSpaceInfoFn = async () => null;
 let _getContactGating: GetContactGatingFn = async () => ({ chat: true, call: true });
+let _notifyLiveScheduled: NotifyLiveScheduledFn = () => { /* no-op en OSS */ };
 
 export function installPremium(impl: {
   isPremium: IsPremiumFn;
@@ -87,6 +92,7 @@ export function installPremium(impl: {
   subscriptionIsPremium: SubscriptionIsPremiumFn;
   getSpaceInfo: GetSpaceInfoFn;
   getContactGating: GetContactGatingFn;
+  notifyLiveScheduled?: NotifyLiveScheduledFn;
 }): void {
   _isPremium = impl.isPremium;
   _getSubscription = impl.getSubscription;
@@ -95,6 +101,7 @@ export function installPremium(impl: {
   _subscriptionIsPremium = impl.subscriptionIsPremium;
   _getSpaceInfo = impl.getSpaceInfo;
   _getContactGating = impl.getContactGating;
+  if (impl.notifyLiveScheduled) _notifyLiveScheduled = impl.notifyLiveScheduled;
 }
 
 export const isPremium = (id: number): Promise<boolean> => _isPremium(id);
@@ -110,3 +117,7 @@ export const getSpaceInfo = (ownerId: number, viewerId: number | null): Promise<
 // les abonnés actifs (et lui-même) peuvent contacter ; sinon comportement libre.
 export const getContactGating = (recipientId: number, senderId: number | null): Promise<{ chat: boolean; call: boolean }> =>
   _getContactGating(recipientId, senderId);
+// Délègue au module Premium si présent ; sinon no-op silencieux. Le caller
+// (route agenda) ne sait pas si l'implém est branchée, et n'a pas à savoir.
+export const notifyLiveScheduled: NotifyLiveScheduledFn = (ownerId, event) =>
+  _notifyLiveScheduled(ownerId, event);

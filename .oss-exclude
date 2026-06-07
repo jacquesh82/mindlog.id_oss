@@ -12,8 +12,9 @@ test/premium/
 public/editor/tabs/account.js
 public/editor/tabs/premium.js
 
-# Lives premium (mesh WebRTC) — pages + libs front
+# Lives premium (mesh WebRTC) — pages + libs front + plugin sidebar deck
 public/live/
+public/plugins/live.js
 
 # Migrations premium
 drizzle/0020_premium_subscriptions.sql
@@ -29,6 +30,7 @@ drizzle/0029_premium_lives.sql
 
 # Docs internes
 docs/premium-offer-plan.md
+docs/features-oss-vs-premium.md
 
 # Scripts d'administration
 scripts/gen-admin-certs.sh

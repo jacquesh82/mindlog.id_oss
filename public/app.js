@@ -4365,7 +4365,7 @@ function initGdprBanner() {
 (async () => {
   const v = window.__APP_V__ ? `?v=${encodeURIComponent(window.__APP_V__)}` : "";
   initGdprBanner();
-  for (const name of ["calendar", "chat", "gallery", "call"]) {
+  for (const name of ["calendar", "chat", "gallery", "call", "live"]) {
     try {
       const mod = await import(`./plugins/${name}.js${v}`);
       mod.default(host);
