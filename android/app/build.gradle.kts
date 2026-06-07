@@ -54,6 +54,9 @@ dependencies {
     implementation(project(":feature:notifications"))
     implementation(project(":feature:chat"))
     implementation(project(":feature:call"))
+    implementation(project(":feature:gallery"))
+    implementation(project(":feature:premium"))
+    implementation(project(":feature:live"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)

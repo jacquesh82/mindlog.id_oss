@@ -73,7 +73,9 @@ export function securityHeaders(): MiddlewareHandler {
     "font-src 'self' data: https://fonts.gstatic.com",
     "media-src 'self' blob:",
     "connect-src 'self' https://challenges.cloudflare.com",
-    "frame-src https://challenges.cloudflare.com",
+    // 'self' : pages internes embarquées (ex. /live/broadcast et /live/:id dans
+    // le panneau droit de l'onglet Échanges). Cloudflare Turnstile reste autorisé.
+    "frame-src 'self' https://challenges.cloudflare.com",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",

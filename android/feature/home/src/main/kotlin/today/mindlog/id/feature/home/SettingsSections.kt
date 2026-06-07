@@ -102,9 +102,36 @@ import javax.inject.Inject
 
 @Composable
 internal fun AppearanceSection(
-    state: SettingsUiState, onSetAccent: (String) -> Unit,
+    state: SettingsUiState,
+    onSetAccent: (String) -> Unit,
+    onSetThemeMode: (today.mindlog.id.core.designsystem.theme.ThemeMode) -> Unit,
 ) {
         SettingsCard("Apparence", Icons.Default.Palette) {
+            Text(
+                "Mode",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp),
+            )
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                ThemeModeChip(
+                    label = "Système",
+                    selected = state.themeMode == today.mindlog.id.core.designsystem.theme.ThemeMode.SYSTEM,
+                    onClick = { onSetThemeMode(today.mindlog.id.core.designsystem.theme.ThemeMode.SYSTEM) },
+                )
+                ThemeModeChip(
+                    label = "Clair",
+                    selected = state.themeMode == today.mindlog.id.core.designsystem.theme.ThemeMode.LIGHT,
+                    onClick = { onSetThemeMode(today.mindlog.id.core.designsystem.theme.ThemeMode.LIGHT) },
+                )
+                ThemeModeChip(
+                    label = "Sombre",
+                    selected = state.themeMode == today.mindlog.id.core.designsystem.theme.ThemeMode.DARK,
+                    onClick = { onSetThemeMode(today.mindlog.id.core.designsystem.theme.ThemeMode.DARK) },
+                )
+            }
             Text(
                 "Couleur d'accentuation",
                 style = MaterialTheme.typography.bodyLarge,
@@ -142,6 +169,22 @@ internal fun AppearanceSection(
                 }
             }
         }
+}
+
+@Composable
+private fun ThemeModeChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val container = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+    val content = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+    Box(
+        modifier = Modifier
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(20.dp))
+            .background(container)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, style = MaterialTheme.typography.labelLarge, color = content)
+    }
 }
 
 @Composable

@@ -60,6 +60,17 @@ import {
   bookedSlots,
   SLOT_MINUTES,
   type Identity,
+  createGroup,
+  listGroups,
+  getGroup,
+  addGroupMember,
+  removeGroupMember,
+  leaveGroup,
+  promoteGroupMember,
+  demoteGroupMember,
+  transferGroupOwnership,
+  renameGroup,
+  groupMemberIds,
 } from "./store.js";
 import { isPremium } from "./premium-api.js";
 import { publish } from "./realtime.js";
@@ -631,6 +642,165 @@ export function buildCloudMcpServer(me: Identity): McpServer {
       await deleteIdentity(me.id);
       return ok({ deleted: true });
     }
+  );
+
+  /* ------------------------------ Groupes -------------------------------- */
+  // Milo peut gérer la membership (créer, ajouter, retirer, promouvoir, transférer),
+  // mais PAS envoyer/lire de messages : ceux-ci sont chiffrés E2E côté client
+  // (sender keys) et le serveur ne voit que des blobs opaques.
+
+  server.registerTool(
+    "list_groups",
+    {
+      description: "Liste MES groupes (id, nom, membres, mon rôle owner/admin/member).",
+      inputSchema: {},
+      annotations: RO("Mes groupes"),
+    },
+    async () => ok({ groups: await listGroups(me.id) })
+  );
+
+  server.registerTool(
+    "get_group",
+    {
+      description: "Détail d'un groupe dont je suis membre (membres, owner, historique d'événements).",
+      inputSchema: { id: z.string().describe("UUID du groupe.") },
+      annotations: RO("Détail d'un groupe"),
+    },
+    ({ id }) =>
+      guard(async () => {
+        const g = await getGroup(me.id, id);
+        if (!g) throw new StoreError(404, "Groupe introuvable ou accès refusé.");
+        return g;
+      })
+  );
+
+  server.registerTool(
+    "create_group",
+    {
+      description:
+        "Crée un nouveau groupe (je deviens owner). Les membres listés doivent être MES contacts " +
+        "réciproques. Le contenu des messages reste chiffré côté client — je ne participe pas à l'envoi.",
+      inputSchema: {
+        name: z.string().min(1).max(80).describe("Nom du groupe (1..80 caractères)."),
+        members: z.array(z.string()).describe("Handles à inviter, ex. ['alice','@bob']."),
+      },
+      annotations: WR("Créer un groupe"),
+    },
+    ({ name, members }) =>
+      guard(async () => {
+        const g = await createGroup(me.id, name, members);
+        for (const mid of await groupMemberIds(g.id)) if (mid !== me.id) publish(mid, "group", { gid: g.id });
+        return g;
+      })
+  );
+
+  server.registerTool(
+    "add_group_member",
+    {
+      description: "Ajoute un contact à un de MES groupes (owner ou admin uniquement).",
+      inputSchema: { id: z.string(), handle: z.string() },
+      annotations: WR("Ajouter au groupe"),
+    },
+    ({ id, handle }) =>
+      guard(async () => {
+        await addGroupMember(me.id, id, handle);
+        for (const mid of await groupMemberIds(id)) publish(mid, "group", { gid: id });
+        return { added: handle };
+      })
+  );
+
+  server.registerTool(
+    "remove_group_member",
+    {
+      description: "Retire un membre (owner ou admin). L'owner ne peut pas être retiré.",
+      inputSchema: { id: z.string(), handle: z.string() },
+      annotations: DES("Retirer du groupe"),
+    },
+    ({ id, handle }) =>
+      guard(async () => {
+        const before = await groupMemberIds(id);
+        const ok2 = await removeGroupMember(me.id, id, handle);
+        if (ok2) for (const mid of before) publish(mid, "group", { gid: id });
+        return { removed: ok2 };
+      })
+  );
+
+  server.registerTool(
+    "leave_group",
+    {
+      description:
+        "Quitte un groupe. Si je suis owner, je dois d'abord transférer la propriété (sauf si je suis seul).",
+      inputSchema: { id: z.string() },
+      annotations: DES("Quitter un groupe"),
+    },
+    ({ id }) =>
+      guard(async () => {
+        const before = await groupMemberIds(id);
+        const ok2 = await leaveGroup(me.id, id);
+        if (ok2) for (const mid of before) if (mid !== me.id) publish(mid, "group", { gid: id });
+        return { left: ok2 };
+      })
+  );
+
+  server.registerTool(
+    "promote_group_member",
+    {
+      description: "Promeut un membre simple en admin (owner uniquement).",
+      inputSchema: { id: z.string(), handle: z.string() },
+      annotations: WR("Promouvoir admin"),
+    },
+    ({ id, handle }) =>
+      guard(async () => {
+        await promoteGroupMember(me.id, id, handle);
+        for (const mid of await groupMemberIds(id)) publish(mid, "group", { gid: id });
+        return { promoted: handle };
+      })
+  );
+
+  server.registerTool(
+    "demote_group_member",
+    {
+      description: "Rétrograde un admin en membre simple (owner uniquement).",
+      inputSchema: { id: z.string(), handle: z.string() },
+      annotations: WR("Rétrograder admin"),
+    },
+    ({ id, handle }) =>
+      guard(async () => {
+        await demoteGroupMember(me.id, id, handle);
+        for (const mid of await groupMemberIds(id)) publish(mid, "group", { gid: id });
+        return { demoted: handle };
+      })
+  );
+
+  server.registerTool(
+    "transfer_group_ownership",
+    {
+      description:
+        "Transfère la propriété d'un groupe à un autre membre (owner uniquement). L'ancien owner devient admin.",
+      inputSchema: { id: z.string(), handle: z.string() },
+      annotations: DES("Transférer la propriété"),
+    },
+    ({ id, handle }) =>
+      guard(async () => {
+        await transferGroupOwnership(me.id, id, handle);
+        for (const mid of await groupMemberIds(id)) publish(mid, "group", { gid: id });
+        return { ownerNow: handle };
+      })
+  );
+
+  server.registerTool(
+    "rename_group",
+    {
+      description: "Renomme un groupe (owner ou admin).",
+      inputSchema: { id: z.string(), name: z.string().min(1).max(80) },
+      annotations: WR("Renommer un groupe"),
+    },
+    ({ id, name }) =>
+      guard(async () => {
+        await renameGroup(me.id, id, name);
+        for (const mid of await groupMemberIds(id)) publish(mid, "group", { gid: id });
+        return { name };
+      })
   );
 
   return server;

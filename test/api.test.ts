@@ -780,16 +780,18 @@ async function makeTrio() {
   return { a, b, c };
 }
 
-test("groupe : création (admin) + membres reçoivent + lecture/écriture", async () => {
+test("groupe : création (owner) + membres reçoivent + lecture/écriture", async () => {
   const { a, b, c } = await makeTrio();
   const create = await app.request("/api/groups", {
     method: "POST", headers: keyHeaders(a.access_key),
     body: JSON.stringify({ name: "Amis", members: ["bob", "carol"] }),
   });
   assert.equal(create.status, 201);
-  const g = (await create.json()) as { id: string; members: { handle: string; role: string }[] };
+  const g = (await create.json()) as { id: string; owner: string; members: { handle: string; role: string }[] };
   assert.equal(g.members.length, 3);
-  assert.equal(g.members.find((m) => m.handle === "alice")?.role, "admin");
+  assert.equal(g.members.find((m) => m.handle === "alice")?.role, "owner");
+  assert.equal(g.members.find((m) => m.handle === "bob")?.role, "member");
+  assert.equal(g.owner, "alice");
   // bob voit le groupe
   const bobGroups = (await (await app.request("/api/groups", { headers: { "x-access-key": b.access_key } })).json()) as { groups: { id: string }[] };
   assert.ok(bobGroups.groups.some((x) => x.id === g.id));
@@ -802,16 +804,16 @@ test("groupe : création (admin) + membres reçoivent + lecture/écriture", asyn
   assert.equal(msgs.messages.at(-1)?.ciphertext, "Y2lwaGVy");
 });
 
-test("groupe : non-membre refusé (403) + ajout/retrait admin-only", async () => {
+test("groupe : non-membre refusé (403) + ajout/retrait owner-or-admin", async () => {
   const { a, b, c } = await makeTrio();
   const dave = await makeUser("dave");
   await addRelation(a.id, "dave"); await addRelation(dave.id, "alice");
   const g = (await (await app.request("/api/groups", { method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ name: "G", members: ["bob"] }) })).json()) as { id: string };
   // carol pas membre → lecture 403
   assert.equal((await app.request(`/api/groups/${g.id}/messages`, { headers: { "x-access-key": c.access_key } })).status, 403);
-  // bob (non-admin) ne peut pas ajouter → 403
+  // bob (membre simple) ne peut pas ajouter → 403
   assert.equal((await app.request(`/api/groups/${g.id}/members`, { method: "POST", headers: keyHeaders(b.access_key), body: JSON.stringify({ handle: "dave" }) })).status, 403);
-  // alice (admin) ajoute dave → ok, dave membre
+  // alice (owner) ajoute dave → ok
   assert.equal((await app.request(`/api/groups/${g.id}/members`, { method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ handle: "dave" }) })).status, 200);
   assert.equal((await app.request(`/api/groups/${g.id}/messages`, { headers: { "x-access-key": dave.access_key } })).status, 200);
   // alice retire dave → ok
@@ -824,4 +826,71 @@ test("groupe : création avec non-contact → 400", async () => {
   await makeUser("bob"); // pas contact
   const res = await app.request("/api/groups", { method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ name: "X", members: ["bob"] }) });
   assert.equal(res.status, 400);
+});
+
+test("groupe : owner promeut bob, bob (admin) ajoute carol", async () => {
+  const { a, b, c } = await makeTrio();
+  // Anti-spam : un admin ne peut ajouter qu'un de SES contacts réciproques.
+  await addRelation(b.id, "carol"); await addRelation(c.id, "bob");
+  const g = (await (await app.request("/api/groups", {
+    method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ name: "G", members: ["bob"] }),
+  })).json()) as { id: string };
+  // bob simple membre → ne peut pas ajouter carol
+  assert.equal((await app.request(`/api/groups/${g.id}/members`, { method: "POST", headers: keyHeaders(b.access_key), body: JSON.stringify({ handle: "carol" }) })).status, 403);
+  // alice promeut bob
+  assert.equal((await app.request(`/api/groups/${g.id}/promote`, { method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ handle: "bob" }) })).status, 200);
+  // bob (admin, contact de carol) ajoute carol → ok
+  assert.equal((await app.request(`/api/groups/${g.id}/members`, { method: "POST", headers: keyHeaders(b.access_key), body: JSON.stringify({ handle: "carol" }) })).status, 200);
+  const detail = (await (await app.request(`/api/groups/${g.id}`, { headers: { "x-access-key": a.access_key } })).json()) as { members: { handle: string; role: string }[] };
+  assert.equal(detail.members.find((m) => m.handle === "bob")?.role, "admin");
+  assert.equal(detail.members.find((m) => m.handle === "carol")?.role, "member");
+  // bob (admin) NE peut PAS promouvoir carol — réservé à l'owner
+  assert.equal((await app.request(`/api/groups/${g.id}/promote`, { method: "POST", headers: keyHeaders(b.access_key), body: JSON.stringify({ handle: "carol" }) })).status, 403);
+});
+
+test("groupe : owner ne peut pas être retiré, ne peut pas quitter avec membres", async () => {
+  const { a, b } = await makeTrio();
+  const g = (await (await app.request("/api/groups", {
+    method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ name: "G", members: ["bob"] }),
+  })).json()) as { id: string };
+  // alice promeut bob admin, bob tente de retirer l'owner alice → 400
+  assert.equal((await app.request(`/api/groups/${g.id}/promote`, { method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ handle: "bob" }) })).status, 200);
+  assert.equal((await app.request(`/api/groups/${g.id}/members/alice`, { method: "DELETE", headers: { "x-access-key": b.access_key } })).status, 400);
+  // owner ne peut pas quitter avec d'autres membres
+  assert.equal((await app.request(`/api/groups/${g.id}/leave`, { method: "POST", headers: keyHeaders(a.access_key), body: "{}" })).status, 400);
+  // bob (admin) quitte → ok
+  assert.equal((await app.request(`/api/groups/${g.id}/leave`, { method: "POST", headers: keyHeaders(b.access_key), body: "{}" })).status, 200);
+  // owner seul peut maintenant quitter (le groupe est dissous)
+  assert.equal((await app.request(`/api/groups/${g.id}/leave`, { method: "POST", headers: keyHeaders(a.access_key), body: "{}" })).status, 200);
+  assert.equal((await app.request(`/api/groups/${g.id}`, { headers: { "x-access-key": a.access_key } })).status, 404);
+});
+
+test("groupe : transfer ownership change owner_id et rôles", async () => {
+  const { a, b } = await makeTrio();
+  const g = (await (await app.request("/api/groups", {
+    method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ name: "G", members: ["bob"] }),
+  })).json()) as { id: string };
+  // alice transfère à bob
+  assert.equal((await app.request(`/api/groups/${g.id}/transfer`, { method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ handle: "bob" }) })).status, 200);
+  const detail = (await (await app.request(`/api/groups/${g.id}`, { headers: { "x-access-key": b.access_key } })).json()) as { owner: string; members: { handle: string; role: string }[]; role: string };
+  assert.equal(detail.owner, "bob");
+  assert.equal(detail.role, "owner");
+  assert.equal(detail.members.find((m) => m.handle === "alice")?.role, "admin");
+  assert.equal(detail.members.find((m) => m.handle === "bob")?.role, "owner");
+  // alice (ex-owner, désormais admin) NE peut PAS retransférer
+  assert.equal((await app.request(`/api/groups/${g.id}/transfer`, { method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ handle: "alice" }) })).status, 403);
+});
+
+test("groupe : renommage (admin+) journalisé dans events", async () => {
+  const { a } = await makeTrio();
+  const g = (await (await app.request("/api/groups", {
+    method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ name: "Old", members: ["bob"] }),
+  })).json()) as { id: string };
+  assert.equal((await app.request(`/api/groups/${g.id}`, { method: "PATCH", headers: keyHeaders(a.access_key), body: JSON.stringify({ name: "New" }) })).status, 200);
+  const detail = (await (await app.request(`/api/groups/${g.id}`, { headers: { "x-access-key": a.access_key } })).json()) as { name: string; events: { kind: string; payload: { oldName?: string; newName?: string } | null }[] };
+  assert.equal(detail.name, "New");
+  // la création + un join + le rename → events doit contenir le rename
+  const rn = detail.events.find((e) => e.kind === "rename");
+  assert.ok(rn);
+  assert.equal(rn?.payload?.newName, "New");
 });

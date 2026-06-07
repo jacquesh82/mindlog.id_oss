@@ -1,8 +1,9 @@
 // Domaine « groups » — extrait de src/store.ts (barrel). Voir docs si besoin.
 import { randomUUID } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db.js";
 import {
+  groupEvents,
   groupMembers,
   groups as groupsTable,
   identities,
@@ -16,33 +17,127 @@ import { BookingRequest } from "./requests.js";
 import { RelationSummary, RelationType, addRelation, summariesByIds } from "./relations.js";
 
 /* ---- Groupes (Option M : appartenance persistée, messages éphémères) ---- */
+//
+// Rôles :
+//   - owner  : créateur, unique. Promote/demote admin, transfert, suppression.
+//   - admin  : ajoute/retire membres.
+//   - member : envoie + quitte.
+// Toute action de membership est journalisée dans `group_events` (audit).
 
-export const MAX_GROUP_MEMBERS = 32;
-export interface GroupMemberInfo { handle: string; role: string; }
-export interface GroupInfo { id: string; name: string; members: GroupMemberInfo[]; role: string }
+export const MAX_GROUP_MEMBERS = 128;
+export type GroupRole = "owner" | "admin" | "member";
+export interface GroupMemberInfo { handle: string; role: GroupRole }
+export interface GroupEventInfo {
+  id: number;
+  kind: string;
+  actor: string;
+  target: string | null;
+  payload: Record<string, unknown> | null;
+  created_at: string;
+}
+export interface GroupInfo {
+  id: string;
+  name: string;
+  members: GroupMemberInfo[];
+  role: GroupRole;
+  owner: string;
+  events?: GroupEventInfo[];
+}
 
-export async function memberRole(gid: string, id: number): Promise<string | null> {
+async function logGroupEvent(
+  gid: string,
+  kind: string,
+  actorId: number,
+  targetId: number | null,
+  payload: Record<string, unknown> | null = null
+): Promise<void> {
+  await db.insert(groupEvents).values({
+    group_id: gid,
+    kind,
+    actor_id: actorId,
+    target_id: targetId ?? undefined,
+    payload: payload ? JSON.stringify(payload) : "",
+    created_at: new Date().toISOString(),
+  });
+}
+
+async function recentGroupEvents(gid: string, limit = 50): Promise<GroupEventInfo[]> {
+  const rows = await db
+    .select({
+      id: groupEvents.id,
+      kind: groupEvents.kind,
+      actor_id: groupEvents.actor_id,
+      target_id: groupEvents.target_id,
+      payload: groupEvents.payload,
+      created_at: groupEvents.created_at,
+    })
+    .from(groupEvents)
+    .where(eq(groupEvents.group_id, gid))
+    .orderBy(desc(groupEvents.created_at))
+    .limit(limit);
+  if (!rows.length) return [];
+  const ids = Array.from(new Set(rows.flatMap((r) => [r.actor_id, r.target_id].filter((x): x is number => !!x))));
+  const idMap = new Map<number, string>();
+  if (ids.length) {
+    const ih = await db
+      .select({ id: identities.id, handle: identities.handle })
+      .from(identities)
+      .where(inArray(identities.id, ids));
+    for (const r of ih) idMap.set(r.id, r.handle);
+  }
+  return rows
+    .map((r) => ({
+      id: r.id,
+      kind: r.kind,
+      actor: idMap.get(r.actor_id) ?? "?",
+      target: r.target_id ? (idMap.get(r.target_id) ?? null) : null,
+      payload: r.payload ? safeJson(r.payload) : null,
+      created_at: r.created_at,
+    }))
+    .reverse(); // chronologique pour l'affichage
+}
+const safeJson = (s: string): Record<string, unknown> | null => {
+  try { const v = JSON.parse(s); return v && typeof v === "object" ? v : null; } catch { return null; }
+};
+
+export async function memberRole(gid: string, id: number): Promise<GroupRole | null> {
   const r = await db
     .select({ role: groupMembers.role })
     .from(groupMembers)
     .where(and(eq(groupMembers.group_id, gid), eq(groupMembers.identity_id, id)))
     .limit(1);
-  return r.at(0)?.role ?? null;
+  return (r.at(0)?.role as GroupRole | undefined) ?? null;
 }
 export const isGroupMember = async (gid: string, id: number) => (await memberRole(gid, id)) !== null;
+/** Vrai si l'identité a au moins le rôle admin (admin OU owner). */
+export async function isGroupAdmin(gid: string, id: number): Promise<boolean> {
+  const r = await memberRole(gid, id);
+  return r === "admin" || r === "owner";
+}
 
 /** Handles + rôles des membres d'un groupe. */
 export async function groupMembersInfo(gid: string): Promise<GroupMemberInfo[]> {
-  return db
+  const rows = await db
     .select({ handle: identities.handle, role: groupMembers.role })
     .from(groupMembers)
     .innerJoin(identities, eq(identities.id, groupMembers.identity_id))
     .where(eq(groupMembers.group_id, gid));
+  return rows.map((r) => ({ handle: r.handle, role: r.role as GroupRole }));
 }
 /** Ids des membres (pour fan-out SSE / notifications). */
 export async function groupMemberIds(gid: string): Promise<number[]> {
   const rows = await db.select({ id: groupMembers.identity_id }).from(groupMembers).where(eq(groupMembers.group_id, gid));
   return rows.map((r) => r.id);
+}
+
+async function ownerHandle(gid: string): Promise<string> {
+  const rows = await db
+    .select({ handle: identities.handle })
+    .from(groupsTable)
+    .innerJoin(identities, eq(identities.id, groupsTable.owner_id))
+    .where(eq(groupsTable.id, gid))
+    .limit(1);
+  return rows.at(0)?.handle ?? "";
 }
 
 /** Détail d'un groupe si `meId` en est membre, sinon null. */
@@ -51,7 +146,14 @@ export async function getGroup(meId: number, gid: string): Promise<GroupInfo | n
   if (!role) return null;
   const g = await db.select({ name: groupsTable.name }).from(groupsTable).where(eq(groupsTable.id, gid)).limit(1);
   if (!g.length) return null;
-  return { id: gid, name: g[0].name, members: await groupMembersInfo(gid), role };
+  return {
+    id: gid,
+    name: g[0].name,
+    members: await groupMembersInfo(gid),
+    role,
+    owner: await ownerHandle(gid),
+    events: await recentGroupEvents(gid),
+  };
 }
 
 /** Groupes dont `meId` est membre. */
@@ -63,67 +165,146 @@ export async function listGroups(meId: number): Promise<GroupInfo[]> {
   const out: GroupInfo[] = [];
   for (const m of mine) {
     const g = await db.select({ name: groupsTable.name }).from(groupsTable).where(eq(groupsTable.id, m.gid)).limit(1);
-    if (g.length) out.push({ id: m.gid, name: g[0].name, members: await groupMembersInfo(m.gid), role: m.role });
+    if (g.length) {
+      out.push({
+        id: m.gid,
+        name: g[0].name,
+        members: await groupMembersInfo(m.gid),
+        role: m.role as GroupRole,
+        owner: await ownerHandle(m.gid),
+      });
+    }
   }
   return out;
 }
 
-/** Crée un groupe ; les membres doivent être des contacts réciproques de l'admin. */
-export async function createGroup(adminId: number, name: string, memberHandles: string[]): Promise<GroupInfo> {
+/** Crée un groupe ; les membres doivent être des contacts réciproques de l'owner. */
+export async function createGroup(ownerId: number, name: string, memberHandles: string[]): Promise<GroupInfo> {
   const ids: number[] = [];
   for (const h of memberHandles) {
     const o = await getIdentityByHandle(h.replace(/^@/, ""));
     if (!o) throw new StoreError(404, `Contact introuvable : ${h}`);
-    if (o.id === adminId) continue;
-    if (!(await areContacts(adminId, o.id))) throw new StoreError(400, `@${o.handle} n'est pas un contact réciproque.`);
+    if (o.id === ownerId) continue;
+    if (!(await areContacts(ownerId, o.id))) throw new StoreError(400, `@${o.handle} n'est pas un contact réciproque.`);
     if (!ids.includes(o.id)) ids.push(o.id);
   }
   if (ids.length + 1 > MAX_GROUP_MEMBERS) throw new StoreError(400, "Groupe trop grand.");
   const id = randomUUID();
   const now = new Date().toISOString();
   const gname = name.slice(0, 80);
-  await db.insert(groupsTable).values({ id, name: gname, created_at: now });
+  await db.insert(groupsTable).values({ id, name: gname, owner_id: ownerId, created_at: now });
   await db.insert(groupMembers).values([
-    { group_id: id, identity_id: adminId, role: "admin", joined_at: now },
-    ...ids.map((i) => ({ group_id: id, identity_id: i, role: "member", joined_at: now })),
+    { group_id: id, identity_id: ownerId, role: "owner", joined_at: now },
+    ...ids.map((i) => ({ group_id: id, identity_id: i, role: "member" as const, joined_at: now })),
   ]);
-  return { id, name: gname, members: await groupMembersInfo(id), role: "admin" };
+  await logGroupEvent(id, "create", ownerId, null, gname ? { name: gname } : null);
+  for (const i of ids) await logGroupEvent(id, "join", ownerId, i);
+  return { id, name: gname, members: await groupMembersInfo(id), role: "owner", owner: (await getIdentityById(ownerId))?.handle ?? "" };
 }
 
-/** Ajoute un membre (admin uniquement ; contact réciproque de l'admin). */
-export async function addGroupMember(adminId: number, gid: string, handle: string): Promise<void> {
-  if ((await memberRole(gid, adminId)) !== "admin") throw new StoreError(403, "Réservé à l'administrateur.");
+/** Ajoute un membre (admin/owner uniquement ; contact réciproque de l'actor). */
+export async function addGroupMember(actorId: number, gid: string, handle: string): Promise<void> {
+  if (!(await isGroupAdmin(gid, actorId))) throw new StoreError(403, "Réservé aux administrateurs.");
   const o = await getIdentityByHandle(handle.replace(/^@/, ""));
   if (!o) throw new StoreError(404, "Contact introuvable.");
-  if (!(await areContacts(adminId, o.id))) throw new StoreError(400, "Pas un contact réciproque.");
+  if (!(await areContacts(actorId, o.id))) throw new StoreError(400, "Pas un contact réciproque.");
   const count = (await groupMemberIds(gid)).length;
   if (count + 1 > MAX_GROUP_MEMBERS) throw new StoreError(400, "Groupe trop grand.");
-  await db
+  const r = await db
     .insert(groupMembers)
     .values({ group_id: gid, identity_id: o.id, role: "member", joined_at: new Date().toISOString() })
-    .onConflictDoNothing();
+    .onConflictDoNothing()
+    .returning({ id: groupMembers.identity_id });
+  if (r.length) await logGroupEvent(gid, "join", actorId, o.id);
 }
 
-/** Retire un membre (admin uniquement ; pas soi-même — utiliser leaveGroup). */
-export async function removeGroupMember(adminId: number, gid: string, handle: string): Promise<boolean> {
-  if ((await memberRole(gid, adminId)) !== "admin") throw new StoreError(403, "Réservé à l'administrateur.");
+/** Retire un membre (admin/owner ; impossible de retirer l'owner ; pas soi-même). */
+export async function removeGroupMember(actorId: number, gid: string, handle: string): Promise<boolean> {
+  if (!(await isGroupAdmin(gid, actorId))) throw new StoreError(403, "Réservé aux administrateurs.");
   const o = await getIdentityByHandle(handle.replace(/^@/, ""));
-  if (!o || o.id === adminId) return false;
+  if (!o || o.id === actorId) return false;
+  const targetRole = await memberRole(gid, o.id);
+  if (targetRole === "owner") throw new StoreError(400, "L'owner ne peut pas être retiré.");
   const r = await db
     .delete(groupMembers)
     .where(and(eq(groupMembers.group_id, gid), eq(groupMembers.identity_id, o.id)))
     .returning({ id: groupMembers.identity_id });
+  if (r.length) await logGroupEvent(gid, "kick", actorId, o.id);
   return r.length > 0;
 }
 
-/** Quitte un groupe. Si plus aucun membre, le groupe est supprimé. */
+/** Quitte un groupe. L'owner doit transférer d'abord. Si plus aucun membre, suppression. */
 export async function leaveGroup(meId: number, gid: string): Promise<boolean> {
+  const role = await memberRole(gid, meId);
+  if (!role) return false;
+  if (role === "owner") {
+    // Tolérance : si l'owner est seul, on autorise la dissolution.
+    const others = (await groupMemberIds(gid)).filter((i) => i !== meId);
+    if (others.length) throw new StoreError(400, "Transférez la propriété avant de quitter.");
+  }
   const r = await db
     .delete(groupMembers)
     .where(and(eq(groupMembers.group_id, gid), eq(groupMembers.identity_id, meId)))
     .returning({ id: groupMembers.identity_id });
+  if (r.length) await logGroupEvent(gid, "leave", meId, null);
   if (!(await groupMemberIds(gid)).length) await db.delete(groupsTable).where(eq(groupsTable.id, gid));
   return r.length > 0;
+}
+
+/** Promeut un membre au rang d'admin (owner uniquement). */
+export async function promoteGroupMember(ownerId: number, gid: string, handle: string): Promise<void> {
+  if ((await memberRole(gid, ownerId)) !== "owner") throw new StoreError(403, "Réservé à l'owner.");
+  const o = await getIdentityByHandle(handle.replace(/^@/, ""));
+  if (!o) throw new StoreError(404, "Contact introuvable.");
+  const role = await memberRole(gid, o.id);
+  if (role !== "member") throw new StoreError(400, "Pas un membre simple.");
+  await db
+    .update(groupMembers)
+    .set({ role: "admin" })
+    .where(and(eq(groupMembers.group_id, gid), eq(groupMembers.identity_id, o.id)));
+  await logGroupEvent(gid, "promote", ownerId, o.id);
+}
+
+/** Rétrograde un admin en membre simple (owner uniquement). */
+export async function demoteGroupMember(ownerId: number, gid: string, handle: string): Promise<void> {
+  if ((await memberRole(gid, ownerId)) !== "owner") throw new StoreError(403, "Réservé à l'owner.");
+  const o = await getIdentityByHandle(handle.replace(/^@/, ""));
+  if (!o) throw new StoreError(404, "Contact introuvable.");
+  const role = await memberRole(gid, o.id);
+  if (role !== "admin") throw new StoreError(400, "Pas un administrateur.");
+  await db
+    .update(groupMembers)
+    .set({ role: "member" })
+    .where(and(eq(groupMembers.group_id, gid), eq(groupMembers.identity_id, o.id)));
+  await logGroupEvent(gid, "demote", ownerId, o.id);
+}
+
+/** Transfère la propriété (owner uniquement). L'ancien owner devient admin. */
+export async function transferGroupOwnership(ownerId: number, gid: string, handle: string): Promise<void> {
+  if ((await memberRole(gid, ownerId)) !== "owner") throw new StoreError(403, "Réservé à l'owner.");
+  const o = await getIdentityByHandle(handle.replace(/^@/, ""));
+  if (!o || o.id === ownerId) throw new StoreError(400, "Cible invalide.");
+  if (!(await isGroupMember(gid, o.id))) throw new StoreError(400, "Pas un membre.");
+  await db
+    .update(groupMembers)
+    .set({ role: "admin" })
+    .where(and(eq(groupMembers.group_id, gid), eq(groupMembers.identity_id, ownerId)));
+  await db
+    .update(groupMembers)
+    .set({ role: "owner" })
+    .where(and(eq(groupMembers.group_id, gid), eq(groupMembers.identity_id, o.id)));
+  await db.update(groupsTable).set({ owner_id: o.id }).where(eq(groupsTable.id, gid));
+  await logGroupEvent(gid, "transfer", ownerId, o.id);
+}
+
+/** Renomme un groupe (admin/owner). */
+export async function renameGroup(actorId: number, gid: string, name: string): Promise<void> {
+  if (!(await isGroupAdmin(gid, actorId))) throw new StoreError(403, "Réservé aux administrateurs.");
+  const trimmed = name.slice(0, 80);
+  const prev = await db.select({ name: groupsTable.name }).from(groupsTable).where(eq(groupsTable.id, gid)).limit(1);
+  if (!prev.length) throw new StoreError(404, "Groupe introuvable.");
+  await db.update(groupsTable).set({ name: trimmed }).where(eq(groupsTable.id, gid));
+  await logGroupEvent(gid, "rename", actorId, null, { oldName: prev[0].name, newName: trimmed });
 }
 
 export async function removeRelation(identityId: number, relatedHandle: string): Promise<boolean> {

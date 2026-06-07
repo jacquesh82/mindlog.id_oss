@@ -11,6 +11,7 @@ import today.mindlog.id.core.data.AuthRepository
 import today.mindlog.id.core.data.CardRepository
 import today.mindlog.id.core.data.E2eRepository
 import today.mindlog.id.core.data.SessionInfo
+import today.mindlog.id.core.designsystem.theme.ThemeMode
 import javax.inject.Inject
 
 data class SettingsUiState(
@@ -24,6 +25,7 @@ data class SettingsUiState(
     val publicUrl: String = "",
     val accessKey: String = "",
     val accentHex: String? = null,
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val sessions: List<SessionInfo> = emptyList(),
     /** Code PIN d'appairage à présenter dans une boîte de dialogue (puis null). */
     val linkPin: String? = null,
@@ -52,6 +54,11 @@ class SettingsViewModel @Inject constructor(
         }
         viewModelScope.launch {
             accentRepository.accent.collect { hex -> _state.update { it.copy(accentHex = hex) } }
+        }
+        viewModelScope.launch {
+            accentRepository.themeMode.collect { raw ->
+                _state.update { it.copy(themeMode = ThemeMode.fromString(raw)) }
+            }
         }
         viewModelScope.launch {
             runCatching { cardRepository.accountFlags() }.getOrNull()?.let { flags ->
@@ -103,6 +110,9 @@ class SettingsViewModel @Inject constructor(
 
     /** Change la couleur d'accentuation (appliquée au thème en direct). */
     fun setAccent(hex: String) = accentRepository.set(hex)
+
+    /** Sélectionne le mode de thème (system/light/dark). */
+    fun setThemeMode(mode: ThemeMode) = accentRepository.setThemeMode(mode.storeValue)
 
     /** Met à jour l'email de récupération (optimiste ; chaîne vide = retrait). */
     fun setRecoveryEmail(email: String) {

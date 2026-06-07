@@ -528,9 +528,16 @@ export const attachments = pgTable(
 // Groupes de discussion (Option M) : appartenance persistée (métadonnée), mais
 // les messages restent ÉPHÉMÈRES (table messages, pair = "g:<id>", TTL 24 h) et le
 // contenu E2E (sender keys). Le serveur ne voit jamais le contenu ni les clés.
+//
+// Modèle de rôles (cf. docs/groups-proposal.md §0) :
+//   - owner  : créateur, peut promouvoir/rétrograder admins, transférer la propriété ;
+//   - admin  : ajoute/retire membres ;
+//   - member : envoie + quitte.
 export const groups = pgTable("groups", {
   id: text("id").primaryKey(), // uuid client
   name: text("name").notNull().default(""),
+  // Owner explicite (= créateur sauf transfert). Nullable pour compat backfill.
+  owner_id: integer("owner_id").references(() => identities.id, { onDelete: "set null" }),
   created_at: text("created_at").notNull().$defaultFn(nowIso),
 });
 
@@ -543,10 +550,29 @@ export const groupMembers = pgTable(
     identity_id: integer("identity_id")
       .notNull()
       .references(() => identities.id, { onDelete: "cascade" }),
-    role: text("role").notNull().default("member"), // admin | member
+    role: text("role").notNull().default("member"), // owner | admin | member
     joined_at: text("joined_at").notNull().$defaultFn(nowIso),
   },
   (t) => [primaryKey({ columns: [t.group_id, t.identity_id] }), index("idx_group_members_identity").on(t.identity_id)]
+);
+
+// Audit léger des changements de membership/role (rendu en bandeaux système dans
+// la conversation). Pas de contenu de message, juste qui a fait quoi sur qui.
+export const groupEvents = pgTable(
+  "group_events",
+  {
+    id: serial("id").primaryKey(),
+    group_id: text("group_id")
+      .notNull()
+      .references(() => groups.id, { onDelete: "cascade" }),
+    // create | join | leave | kick | promote | demote | transfer | rename
+    kind: text("kind").notNull(),
+    actor_id: integer("actor_id").notNull(),
+    target_id: integer("target_id"),
+    payload: text("payload").notNull().default(""), // JSON optionnel (ex. {oldName,newName})
+    created_at: text("created_at").notNull().$defaultFn(nowIso),
+  },
+  (t) => [index("idx_group_events_group").on(t.group_id, t.created_at)]
 );
 
 // Invitations de contact (sans annuaire) : jeton à usage unique partagé par

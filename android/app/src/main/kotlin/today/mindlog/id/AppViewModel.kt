@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import today.mindlog.id.core.data.AccentRepository
 import today.mindlog.id.core.data.AuthState
 import today.mindlog.id.core.data.AuthRepository
 import today.mindlog.id.core.data.E2eRepository
@@ -16,6 +17,7 @@ import javax.inject.Inject
 class AppViewModel @Inject constructor(
     authRepository: AuthRepository,
     private val e2e: E2eRepository,
+    private val accentRepository: AccentRepository,
 ) : ViewModel() {
     val authState: StateFlow<AuthState> = authRepository.authState.stateIn(
         scope = viewModelScope,
@@ -25,6 +27,11 @@ class AppViewModel @Inject constructor(
 
     /** La clé E2E locale n'est pas encore sauvegardée dans le coffre serveur. */
     val needsBackup: StateFlow<Boolean> = e2e.needsBackup
+
+    /** Visite Milo déjà vue ? (one-shot, persisté). */
+    val miloTourSeen: StateFlow<Boolean> = accentRepository.miloTourSeen
+
+    fun setMiloTourSeen(seen: Boolean) = accentRepository.setMiloTourSeen(seen)
 
     /** Sauvegarde biométrique : à appeler APRÈS authentification biométrique réussie. */
     fun backupWithBiometric(onDone: (Boolean) -> Unit) {

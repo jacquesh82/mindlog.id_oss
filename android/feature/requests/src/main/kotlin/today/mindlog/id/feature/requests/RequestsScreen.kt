@@ -43,6 +43,7 @@ import today.mindlog.id.core.model.RequestStatus
 @Composable
 fun RequestsRoute(
     onBack: () -> Unit,
+    showBack: Boolean = true,
     viewModel: RequestsViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -56,6 +57,7 @@ fun RequestsRoute(
         onDelete = viewModel::delete,
         onErrorShown = viewModel::clearError,
         onBack = onBack,
+        showBack = showBack,
     )
 }
 
@@ -68,6 +70,7 @@ internal fun RequestsScreen(
     onDelete: (Long) -> Unit,
     onErrorShown: () -> Unit,
     onBack: () -> Unit,
+    showBack: Boolean = true,
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -83,8 +86,10 @@ internal fun RequestsScreen(
             TopAppBar(
                 title = { Text("Demandes de RDV") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Retour")
+                    if (showBack) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Retour")
+                        }
                     }
                 },
             )

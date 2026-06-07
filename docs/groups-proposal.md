@@ -1,9 +1,21 @@
-# Proposition — Messagerie de groupe E2E (sender keys)
+# Protocole — Messagerie de groupe E2E (sender keys)
 
-Statut : **proposition de conception** (rien d'implémenté). Objectif : permettre des
-conversations à plusieurs, **chiffrées de bout en bout**, en gardant autant que possible
-le modèle actuel : **messages éphémères** (blobs opaques, TTL 24 h) et **serveur qui ne
-voit jamais le contenu ni les clés**.
+Statut : **conception arrêtée** (cf. §0). Objectif : permettre des conversations à
+plusieurs, **chiffrées de bout en bout**, en gardant autant que possible le modèle
+actuel : **messages éphémères** (blobs opaques, TTL 24 h) et **serveur qui ne voit
+jamais le contenu ni les clés**.
+
+## 0. Décisions arrêtées (2026-06-07)
+
+| Question | Décision |
+|---|---|
+| Crypto | **Sender Keys** (megolm-like). On accepte la PCS réduite et la rotation à chaque membership change. Pas de fan-out pairwise même pour petits groupes : on vise la cohérence avec un protocole unique. |
+| Persistance | **Option M** — table d'appartenance serveur, messages éphémères TTL 24 h, contenu jamais lu. |
+| Membership | **Owner unique + admins**. Owner = créateur, permanent tant que le groupe existe (peut nommer/révoquer des admins, transfert d'owner via action explicite). Admins ajoutent/retirent membres. Membres simples : envoi + quitter. |
+| Source contacts | **Relations existantes + recherche par handle**. Pas d'import carnet pour V1. |
+| Périmètre | **OSS** — feature de base, comme le chat 1:1. Parité tous clients (web, Android, MCP). |
+| Taille max | **128 membres** (limite molle V1, anti-abus du fan-out SKDM ; configurable côté serveur). |
+| Multi-appareil | Le roster/sender key vivent **par appareil** (comme les ratchets 1:1). Les SKDM sont fan-outés par (member × device) via les ratchets existants. Pas de stockage du roster dans le coffre E2E pour V1. |
 
 ## 1. Choix cryptographique : sender keys (façon « megolm » / Signal group v1)
 
@@ -146,11 +158,168 @@ pairwise** ; les sender keys si on vise des groupes plus larges.
 4. **Android** : miroir (repos, stores, écrans), test d'interop contre les vecteurs.
 5. **Rotations** : membership change → rotation des sender keys + rediffusion.
 
-## 9. Points ouverts à trancher
+## 9. Contrat — schéma SQL (Drizzle)
 
-- **Option Z vs M** (métadonnée d'appartenance serveur) — *je recommande M*.
-- **Sender keys vs fan‑out pairwise** selon la taille de groupe cible.
-- **Multi‑appareil des groupes** (le roster/sender keys sont per‑device ; faut‑il les mettre
-  dans le coffre ? cela ajoute de la surface).
-- **Taille max de groupe** et limites (anti‑abus du fan‑out).
-- **Admins/permissions** (qui peut ajouter/retirer).
+Migration (numéro à attribuer au moment de l'implémentation) :
+
+```sql
+CREATE TABLE groups (
+  id          text PRIMARY KEY,                  -- uuid v4
+  owner_iid   text NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+  name        text NOT NULL,
+  avatar_url  text,
+  key_epoch   integer NOT NULL DEFAULT 1,        -- ++ à chaque leave/kick
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE group_members (
+  group_id    text NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  member_iid  text NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+  role        text NOT NULL CHECK (role IN ('owner','admin','member')),
+  added_by    text REFERENCES identities(id),
+  joined_at   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (group_id, member_iid)
+);
+CREATE INDEX idx_group_members_member ON group_members(member_iid);
+
+CREATE TABLE group_messages (
+  id           text PRIMARY KEY,                 -- uuid v4
+  group_id     text NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  sender_iid   text NOT NULL,
+  sender_dev   text NOT NULL,                    -- device id (cf. multidevice)
+  epoch        integer NOT NULL,                 -- key_epoch utilisé
+  iter         integer NOT NULL,                 -- compteur chain ratchet
+  iv           bytea NOT NULL,
+  ciphertext   bytea NOT NULL,
+  sig          bytea NOT NULL,                   -- ECDSA P-256 (DER)
+  sig_key_id   text NOT NULL,                    -- handle vers group_sender_keys
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  expires_at   timestamptz NOT NULL              -- created_at + 24h (prune job)
+);
+CREATE INDEX idx_group_messages_group_time ON group_messages(group_id, created_at DESC);
+
+CREATE TABLE group_sender_keys (
+  group_id        text NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  epoch           integer NOT NULL,
+  recipient_iid   text NOT NULL,
+  recipient_dev   text NOT NULL,
+  sender_iid      text NOT NULL,
+  sender_dev      text NOT NULL,
+  envelope        bytea NOT NULL,                -- SKDM chiffrée par ratchet 1:1
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (group_id, epoch, recipient_iid, recipient_dev, sender_iid, sender_dev)
+);
+CREATE INDEX idx_gsk_recipient ON group_sender_keys(recipient_iid, recipient_dev);
+
+CREATE TABLE group_events (
+  id          text PRIMARY KEY,
+  group_id    text NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  kind        text NOT NULL,                     -- 'create'|'join'|'leave'|'kick'|'rename'|'avatar'|'promote'|'demote'|'transfer'
+  actor_iid   text NOT NULL,
+  target_iid  text,
+  payload     jsonb,                             -- ex: {oldName, newName}
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+```
+
+Pruning : job existant (cf. prune messages 1:1) étendu à `group_messages.expires_at`.
+
+## 10. Contrat — API REST
+
+Toutes routes auth + CSRF. Erreurs `403` si non-membre, `409` si epoch périmé.
+
+```
+POST   /api/groups                       { name, members:[handle], avatarUrl? }     → { id, keyEpoch }
+GET    /api/groups                                                                  → [{ id, name, role, memberCount, unread }]
+GET    /api/groups/:id                                                              → { id, name, avatar, keyEpoch, members:[{iid,handle,role}], events:[…last 50] }
+PATCH  /api/groups/:id                   { name?, avatarUrl? }                      → { ok }                      (admin+)
+DELETE /api/groups/:id                                                              → { ok }                      (owner)
+
+POST   /api/groups/:id/members           { handle }                                 → { iid, role:'member' }     (admin+)
+DELETE /api/groups/:id/members/:iid                                                 → { ok, newEpoch }            (admin+ ou self pour quitter)
+PATCH  /api/groups/:id/members/:iid      { role:'admin'|'member' }                  → { ok }                      (owner)
+POST   /api/groups/:id/transfer          { iid }                                    → { ok }                      (owner)
+
+POST   /api/groups/:id/messages          { epoch, iter, iv, ciphertext, sig, sigKeyId } → { id, createdAt }
+GET    /api/groups/:id/messages?since=…                                             → [{ id, senderIid, senderDev, epoch, iter, iv, ct, sig, sigKeyId, createdAt }]
+
+POST   /api/groups/:id/skdm              { epoch, envelopes:[{ recipientIid, recipientDev, senderDev, blob }] } → { stored }
+GET    /api/groups/:id/skdm/me?epoch=…                                              → [{ groupId, epoch, senderIid, senderDev, blob }]
+```
+
+Notifications SSE par membre : `group.message:<id>`, `group.skdm:<id>`, `group.member:<id>`.
+
+## 11. Contrat — enveloppes binaires
+
+**SKDM (Sender Key Distribution Message)** — payload chiffré par le ratchet 1:1 vers
+(recipient_iid, recipient_dev). Type sentinelle `gsk` (cf. `att`/`tmr` existants) :
+
+```json
+{
+  "t": "gsk",
+  "g": "<group_id>",
+  "ep": 7,                              // epoch
+  "ck": "<base64 chainKey 32o>",        // état initial de la chaîne
+  "it": 0,                              // iter de départ
+  "sp": "<base64 P-256 pub raw>",       // clé pub de signature du sender pour ce groupe/epoch
+  "skid": "<id court (8o random)>"      // identifiant de la clé de signature (lookup côté receveur)
+}
+```
+
+**Group message ciphertext** — `AES-GCM(mk_iter, plaintext, iv, aad)` avec
+`aad = group_id || epoch || iter || sender_iid || sender_dev`. Signature ECDSA
+P-256 sur SHA-256 du `aad || iv || ciphertext`, attachée séparément en `sig`.
+
+**Plaintext** — JSON :
+```json
+{ "kind": "text", "body": "…" }
+{ "kind": "media", "url": "…", "mime": "…", "key": "…", "iv": "…", "size": 1234, "name": "…" }
+{ "kind": "system", "evt": "rename", "payload": { … } }
+```
+
+## 12. Rotation d'epoch — séquence exacte
+
+À chaque `leave`/`kick` (jamais à `join`) :
+
+1. Serveur : `UPDATE groups SET key_epoch = key_epoch + 1` + `DELETE FROM group_members`
+   + `INSERT group_events (kind='leave'|'kick')`.
+2. SSE push `group.member` à tous les membres restants avec `{ newEpoch }`.
+3. **Chaque membre restant** détecte `newEpoch > localEpoch` et, en parallèle :
+   - génère sa nouvelle `SK_m` (chainKey aléatoire + nouvelle paire de signature P-256) ;
+   - construit un SKDM par (recipient_iid × recipient_dev) restant, chiffré par ratchet 1:1 ;
+   - POST `/api/groups/:id/skdm` avec le batch.
+4. Côté réception : `GET /api/groups/:id/skdm/me?epoch=newEpoch` au reconnect, ratchet-decrypt,
+   stocke localement la `SK` de chaque expéditeur pour ce groupe/epoch.
+5. Messages reçus avec `epoch < newEpoch` restent lisibles tant que la `SK` correspondante
+   est en cache local (les messages eux-mêmes étant TTL 24 h, l'historique disparaît
+   naturellement).
+
+Cas dégradés couverts :
+- **SKDM manquante** (réception avant SKDM ou perte) → afficher "indéchiffrable" + bouton
+  "demander une rekey" qui pousse un message de contrôle 1:1 au sender concerné.
+- **Course join + rotation** : si A invite B pendant que C quitte, l'ordre serveur tranche
+  (timestamp d'insertion `group_events`). B reçoit la SK pour le nouvel epoch directement.
+- **Owner offline lors d'un kick par admin** : l'admin déclenche le bump d'epoch, son
+  propre SKDM part. Owner enverra le sien au reconnect (membres non-owner verront
+  "indéchiffrable de @owner" jusque-là).
+
+## 13. Sécurité — résumé des invariants
+
+- Serveur n'accepte un POST message que si `(member_iid, group_id)` existe ET
+  `epoch == groups.key_epoch`. Pas de réutilisation d'epoch.
+- Serveur n'accepte un POST SKDM que de la part d'un membre actuel vers un membre actuel.
+- Signature ECDSA vérifiée **avant** déchiffrement côté client (anti-DoS rejet rapide).
+- Aucune lecture cross-tenant : toutes les requêtes scopent par `member_iid = currentIdentity`.
+- Audit `group_events` pour la traçabilité ; jamais le contenu de message.
+
+## 14. Plan d'implémentation (commits indépendants)
+
+1. **Schéma + store** (`src/store/groups.ts`, migration Drizzle) — CRUD sans crypto, tests unitaires.
+2. **API REST + SSE** (`src/routes/groups.ts`) — routes ci-dessus + tests `test/api.test.ts`.
+3. **Crypto web** (`public/crypto/groups.js`) — chain ratchet + ECDSA + SKDM encode/decode + vecteurs partagés `test/vectors/group-ratchet.json`.
+4. **UI web** — sidebar Groupes, création (modal 2 étapes), conversation, modal membres, rotation auto en SSE.
+5. **MCP tools** (`src/mcp-cloud.ts`) — `create_group`, `list_groups`, `add_group_member`, `remove_group_member`, `send_group_message`, `list_group_messages` pour parité Milo.
+6. **Android** — `feature:groups` (Compose), `core:crypto` étendu Sender Keys, vérif interop sur vecteurs partagés.
+
+Chaque commit est OSS (pas de `.oss-exclude`).

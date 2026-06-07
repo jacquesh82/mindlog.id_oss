@@ -6,7 +6,6 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
@@ -30,9 +29,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
 import today.mindlog.id.core.data.AuthState
 import today.mindlog.id.core.data.NavigationBus
+import androidx.compose.foundation.isSystemInDarkTheme
 import today.mindlog.id.core.designsystem.theme.DefaultAccent
 import today.mindlog.id.core.designsystem.theme.MindlogAccents
 import today.mindlog.id.core.designsystem.theme.MindlogTheme
+import today.mindlog.id.core.designsystem.theme.ThemeMode
 import today.mindlog.id.core.designsystem.theme.accentFromHex
 import today.mindlog.id.core.designsystem.theme.toHex
 import today.mindlog.id.feature.call.CallHost
@@ -48,12 +49,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
-        // L'app est toujours en thème sombre → barres système transparentes avec
-        // icônes claires, quel que soit le mode clair/sombre de l'appareil.
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
-        )
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         // Première ouverture : on choisit une couleur d'accent au hasard.
         // (après super.onCreate : l'injection Hilt des champs est faite à ce moment).
@@ -64,7 +60,15 @@ class MainActivity : FragmentActivity() {
         setContent {
             val accentHex by accentRepository.accent.collectAsState()
             val accent = accentFromHex(accentHex) ?: DefaultAccent
-            MindlogTheme(accent = accent) {
+            val modeRaw by accentRepository.themeMode.collectAsState()
+            val mode = ThemeMode.fromString(modeRaw)
+            val systemDark = isSystemInDarkTheme()
+            val isDark = when (mode) {
+                ThemeMode.LIGHT -> false
+                ThemeMode.DARK -> true
+                ThemeMode.SYSTEM -> systemDark
+            }
+            MindlogTheme(accent = accent, isDark = isDark) {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     MindlogApp(
                         biometricAvailable = canUseBiometric(),
@@ -178,6 +182,13 @@ private fun MindlogApp(
                 onPin = { pin, done -> viewModel.backupWithPin(pin, done) },
                 mandatory = true,
             )
+        }
+
+        // Visite guidée Milo (one-shot, après backup obligatoire pour ne pas
+        // empiler deux overlays). Le drapeau est persistant.
+        val tourSeen by viewModel.miloTourSeen.collectAsStateWithLifecycle()
+        if (authState is AuthState.LoggedIn && !needsBackup && !tourSeen) {
+            MiloTour(onDismiss = { viewModel.setMiloTourSeen(true) })
         }
     }
 }

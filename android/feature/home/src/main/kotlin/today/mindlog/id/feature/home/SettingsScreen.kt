@@ -117,6 +117,7 @@ fun SettingsRoute(
         onToggleAllowRequests = viewModel::toggleAllowRequests,
         onSetRecoveryEmail = viewModel::setRecoveryEmail,
         onSetAccent = viewModel::setAccent,
+        onSetThemeMode = viewModel::setThemeMode,
         onBackupVault = viewModel::backupVault,
         onRestoreVault = viewModel::restoreVault,
         onLoadSessions = viewModel::loadSessions,
@@ -144,6 +145,7 @@ internal fun SettingsScreen(
     onToggleAllowRequests: () -> Unit,
     onSetRecoveryEmail: (String) -> Unit,
     onSetAccent: (String) -> Unit,
+    onSetThemeMode: (today.mindlog.id.core.designsystem.theme.ThemeMode) -> Unit,
     onBackupVault: (String, Boolean, (Boolean) -> Unit) -> Unit,
     onRestoreVault: (String, Boolean, (Boolean) -> Unit) -> Unit,
     onLoadSessions: () -> Unit,
@@ -213,7 +215,8 @@ internal fun SettingsScreen(
             )
 
             /* ===== Apparence ===== */
-            if (show("apparence", "couleur", "accent", "thème", "theme", "milo")) AppearanceSection(state = state, onSetAccent = onSetAccent)
+            if (show("apparence", "couleur", "accent", "thème", "theme", "milo", "clair", "sombre", "light", "dark"))
+                AppearanceSection(state = state, onSetAccent = onSetAccent, onSetThemeMode = onSetThemeMode)
 
             /* ===== Confidentialité — 3 blocs (comme le web) ===== */
             if (show("visibilité", "confidentialité", "agenda public", "profil", "disponibilités")) VisibilitySection(state = state, onToggleAgendaPublic = onToggleAgendaPublic)

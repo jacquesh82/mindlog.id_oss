@@ -47,12 +47,14 @@ import java.util.Locale
 @Composable
 fun AvailabilityRoute(
     onBack: () -> Unit,
+    showBack: Boolean = true,
     viewModel: AvailabilityViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     AvailabilityScreen(
         uiState = uiState,
         onBack = onBack,
+        showBack = showBack,
         onPrev = viewModel::prevMonth,
         onNext = viewModel::nextMonth,
         onToggleDay = viewModel::toggleDay,
@@ -69,6 +71,7 @@ internal fun AvailabilityScreen(
     onNext: () -> Unit,
     onToggleDay: (LocalDate) -> Unit,
     onErrorShown: () -> Unit,
+    showBack: Boolean = true,
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -84,8 +87,10 @@ internal fun AvailabilityScreen(
             TopAppBar(
                 title = { Text("Disponibilités") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Retour")
+                    if (showBack) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Retour")
+                        }
                     }
                 },
             )

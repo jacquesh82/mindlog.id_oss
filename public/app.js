@@ -51,30 +51,25 @@ function landingModeSwitchHtml() {
 
 // Tarif Premium adapté au pays du visiteur. Le prix réel reste 1 € (Stripe en
 // EUR côté serveur) ; l'affichage est traduit dans la devise locale pour
-// réduire la friction perçue (le visiteur US voit « $1 », pas « 1 € »).
+// réduire la friction perçue. Deux devises seulement : € pour l'Europe
+// (géographique, UK et Suisse inclus), $ partout ailleurs.
 // Le « per » est traduit selon la LANG i18n active.
 function localPrice() {
   const full = (typeof navigator !== "undefined" && navigator.language) || "en-US";
   const region = (full.split("-")[1] || "").toUpperCase();
-  const EUR_REGIONS = new Set(["FR","DE","ES","IT","PT","NL","BE","AT","IE","FI","LU","GR","SK","SI","EE","LV","LT","CY","MT"]);
-  const GBP_REGIONS = new Set(["GB","UK"]);
-  const USD_REGIONS = new Set(["US","CA","AU","NZ"]);
+  const EUROPE = new Set([
+    // UE
+    "FR","DE","ES","IT","PT","NL","BE","AT","IE","FI","LU","GR","SK","SI","EE","LV","LT","CY","MT",
+    "DK","SE","PL","CZ","HU","RO","BG","HR",
+    // Reste de l'Europe géographique
+    "GB","UK","CH","NO","IS","LI","MC","SM","VA","AD","AL","BA","MK","ME","RS","XK","MD","UA","BY","TR"
+  ]);
   const per = LANG === "fr" ? "/mois" : "/month";
-  if (GBP_REGIONS.has(region)) {
-    return { primary: "£1", per, alt: LANG === "fr" ? "≈ 1,15 €" : "≈ €1.15", currency: "GBP" };
+  const inEurope = EUROPE.has(region) || ["fr","de","es","it","pt","nl"].includes(LANG);
+  if (inEurope) {
+    return { primary: LANG === "fr" ? "1 €" : "€1", per, currency: "EUR" };
   }
-  if (USD_REGIONS.has(region)) {
-    return { primary: "$1", per, alt: LANG === "fr" ? "≈ 0,90 €" : "≈ €0.90", currency: "USD" };
-  }
-  if (EUR_REGIONS.has(region) || ["fr","de","es","it","pt","nl"].includes(LANG)) {
-    return {
-      primary: LANG === "fr" ? "1 €" : "€1",
-      per,
-      alt: LANG === "fr" ? "≈ 1,20 $" : "≈ $1.20",
-      currency: "EUR",
-    };
-  }
-  return { primary: LANG === "fr" ? "1 €" : "€1", per, alt: LANG === "fr" ? "≈ 1,20 $" : "≈ $1.20", currency: "EUR" };
+  return { primary: "$1", per, currency: "USD" };
 }
 
 // Bascule de thème intégrée à la barre (landing) — remplace le bouton flottant.
@@ -131,7 +126,7 @@ applyTheme(storedTheme() || "dark");
 /* ----------------------- Temps réel (SSE) côté client -------------------- */
 let _es = null;
 let _esKey = null;
-const _sse = { notif: new Set(), message: new Set(), ack: new Set(), signal: new Set(), device: new Set() };
+const _sse = { notif: new Set(), message: new Set(), ack: new Set(), signal: new Set(), device: new Set(), group: new Set() };
 function connectSSE(key) {
   // key fourni → mode lien (?key=) ; null/undefined → mode session cookie.
   const tag = key || "cookie";
@@ -140,7 +135,7 @@ function connectSSE(key) {
   _esKey = tag;
   const url = key ? `/api/events?key=${encodeURIComponent(key)}` : "/api/events";
   _es = new EventSource(url, { withCredentials: true });
-  ["notif", "message", "ack", "signal", "device"].forEach((ev) =>
+  ["notif", "message", "ack", "signal", "device", "group"].forEach((ev) =>
     _es.addEventListener(ev, (e) => {
       let d = {};
       try {
@@ -175,46 +170,83 @@ const onSSE = (type, fn) => {
 /* ----------- Milo dans le logo : palette de couleurs au survol ----------- */
 let _brandPalette = null;
 let _brandHideT = null;
+let _brandFlashT = null;
+function _ensureBrandPalette() {
+  if (_brandPalette) return _brandPalette;
+  _brandPalette = document.createElement("div");
+  _brandPalette.className = "milo-palette brand-palette";
+  _brandPalette.innerHTML = swatchesHtml() + themeToggleHtml();
+  document.body.appendChild(_brandPalette);
+  _brandPalette.querySelectorAll(".swatch").forEach((s) =>
+    s.addEventListener("click", () => {
+      applyAccent(s.dataset.accent);
+      try {
+        localStorage.setItem(ACCENT_STORE, s.dataset.accent);
+      } catch {}
+      // Interaction = intention claire : on garde la palette ouverte un peu.
+      clearTimeout(_brandFlashT);
+      clearTimeout(_brandHideT);
+    })
+  );
+  _brandPalette.querySelector(".theme-toggle").addEventListener("click", () => {
+    toggleTheme();
+    clearTimeout(_brandFlashT);
+    clearTimeout(_brandHideT);
+  });
+  applyTheme(storedTheme() || "dark"); // synchronise l'icône du bouton
+  _brandPalette.addEventListener("mouseenter", () => {
+    clearTimeout(_brandHideT);
+    clearTimeout(_brandFlashT);
+  });
+  _brandPalette.addEventListener("mouseleave", _brandHideSoon);
+  return _brandPalette;
+}
+function _brandHideSoon() {
+  clearTimeout(_brandHideT);
+  _brandHideT = setTimeout(() => _brandPalette && _brandPalette.classList.remove("show"), 350);
+}
+function _positionBrandPaletteAt(bm) {
+  const p = _ensureBrandPalette();
+  applyAccent(storedAccent() || ACCENTS[0].v); // (re)marque le swatch actif
+  const r = bm.getBoundingClientRect();
+  p.style.top = r.bottom + window.scrollY + 8 + "px";
+  p.style.left = r.left + window.scrollX + "px";
+  return p;
+}
+/** Une seule fois par chargement de page : si tu reviens sur la landing en
+ *  navigant (popstate), on ne re-flash pas — c'était un teaser, pas un pop-up. */
+let _brandFlashedOnce = false;
+function maybeFlashBrandPaletteOnLanding() {
+  if (_brandFlashedOnce) return;
+  _brandFlashedOnce = true;
+  // Attend que .brand-milo soit rendu dans le DOM par le siteHeader.
+  requestAnimationFrame(() => flashBrandPalette({ delay: 600, hold: 2000 }));
+}
+/** Auto-flash de la palette (option « waouh caméléon » sur la landing). */
+function flashBrandPalette({ delay = 600, hold = 2000 } = {}) {
+  clearTimeout(_brandFlashT);
+  _brandFlashT = setTimeout(() => {
+    const bm = document.querySelector(".brand-milo");
+    if (!bm) return;
+    const p = _positionBrandPaletteAt(bm);
+    p.classList.add("show");
+    clearTimeout(_brandHideT);
+    _brandFlashT = setTimeout(() => p.classList.remove("show"), hold);
+  }, delay);
+}
 function setupBrandMilo() {
   if (setupBrandMilo._on) return;
   setupBrandMilo._on = true;
-  const ensure = () => {
-    if (_brandPalette) return _brandPalette;
-    _brandPalette = document.createElement("div");
-    _brandPalette.className = "milo-palette brand-palette";
-    _brandPalette.innerHTML = swatchesHtml() + themeToggleHtml();
-    document.body.appendChild(_brandPalette);
-    _brandPalette.querySelectorAll(".swatch").forEach((s) =>
-      s.addEventListener("click", () => {
-        applyAccent(s.dataset.accent);
-        try {
-          localStorage.setItem(ACCENT_STORE, s.dataset.accent);
-        } catch {}
-      })
-    );
-    _brandPalette.querySelector(".theme-toggle").addEventListener("click", toggleTheme);
-    applyTheme(storedTheme() || "dark"); // synchronise l'icône du bouton
-    _brandPalette.addEventListener("mouseenter", () => clearTimeout(_brandHideT));
-    _brandPalette.addEventListener("mouseleave", hideSoon);
-    return _brandPalette;
-  };
-  const hideSoon = () => {
-    clearTimeout(_brandHideT);
-    _brandHideT = setTimeout(() => _brandPalette && _brandPalette.classList.remove("show"), 350);
-  };
   document.addEventListener("mouseover", (e) => {
     const bm = e.target.closest && e.target.closest(".brand-milo");
     if (!bm) return;
-    const p = ensure();
-    applyAccent(storedAccent() || ACCENTS[0].v); // (re)marque le swatch actif
-    const r = bm.getBoundingClientRect();
-    p.style.top = r.bottom + window.scrollY + 8 + "px";
-    p.style.left = r.left + window.scrollX + "px";
+    const p = _positionBrandPaletteAt(bm);
     p.classList.add("show");
     clearTimeout(_brandHideT);
+    clearTimeout(_brandFlashT);
   });
   document.addEventListener("mouseout", (e) => {
-    if (e.target.closest && e.target.closest(".brand-milo")) hideSoon();
+    if (e.target.closest && e.target.closest(".brand-milo")) _brandHideSoon();
   });
   // Cliquer sur Milo (et non sur le texte de la marque) ouvre la page publique
   // de l'utilisateur s'il est connecté, sinon celle de Milo (présentation).
@@ -760,7 +792,7 @@ function consumerPricingHtml() {
   const planPrem = `<div class="pr-plan feat">
     <span class="pr-tag">${t("cpr_prem_tag")}</span>
     <h3>${t("cpr_prem_t")}</h3>
-    <div class="pr-price">${lp.primary}<span class="pr-per">${lp.per} · ${lp.alt}</span></div>
+    <div class="pr-price">${lp.primary}<span class="pr-per">${lp.per}</span></div>
     <ul>${t("cpr_prem_li")}</ul>
     <button type="button" class="pr-cta" id="cpr-prem-cta">${t("cpr_prem_cta")}</button>
   </div>`;
@@ -907,6 +939,7 @@ function renderLanding() {
   if (landingMode() === "public") {
     return renderSimpleLanding(_landingHandle);
   }
+  if (!_landingHandle) maybeFlashBrandPaletteOnLanding();
   app.innerHTML = `
     ${siteHeader({
       right: `${landingModeSwitchHtml()}
@@ -1298,6 +1331,7 @@ function wireLanding() {
 // - tarifs grand public (devise auto-adaptée au pays)
 // - CTA de clôture
 function renderSimpleLanding(landingHandle) {
+  if (!landingHandle) maybeFlashBrandPaletteOnLanding();
   const lp = localPrice();
   const priceTease = t("gp_price_tease")
     .replace("{price}", esc(lp.primary))

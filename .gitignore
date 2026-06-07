@@ -11,6 +11,9 @@ CLAUDE.md
 CONTEXT.md
 ruvector.db
 
+# Postgres data dir créé par erreur quand ":memory:" est traité comme un chemin.
+:memory:/
+
 # Tauri desktop — artefacts de build
 desktop/src-tauri/target/
 desktop/src-tauri/gen/

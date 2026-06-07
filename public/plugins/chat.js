@@ -314,6 +314,10 @@ export default function register(host) {
           .map((m, i) => {
             const txt = texts[i];
             const mine = m.sender_id === d.me;
+            // Messages de contrôle (Sender Key Distribution pour les groupes) :
+            // jamais affichés dans la conversation 1:1, ce sont des paquets de
+            // protocole consommés silencieusement par crypto/groups.js::gSyncKeys.
+            if (typeof txt === "string" && txt.startsWith("skd")) return "";
             // Message de contrôle de minuterie → note système centrée (pas une bulle).
             const tm = typeof txt === "string" && txt.match(tmrRe);
             if (tm) {
@@ -832,9 +836,10 @@ export default function register(host) {
         if (!overlay.isConnected) { clearInterval(timer); return; }
         try {
           group = await groups.api.get(gid);
+          const canManage = group.role === "owner" || group.role === "admin";
           overlay.querySelector("#gc-title").innerHTML =
             `👥 ${esc(group.name || "Groupe")} <span class="deg">· ${group.members.length} membres · chiffré 🔒</span>` +
-            (group.role === "admin" ? ` <button type="button" class="btn sm" id="gc-manage">Gérer</button>` : "");
+            (canManage ? ` <button type="button" class="btn sm" id="gc-manage">Gérer</button>` : "");
           overlay.querySelector("#gc-manage")?.addEventListener("click", () => manage());
           // S'assurer d'avoir/diffuser les sender keys, puis charger.
           await groups.syncKeys(myHandle, myKey, gid, group.members.map((m) => m.handle));

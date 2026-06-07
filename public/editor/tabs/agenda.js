@@ -30,15 +30,23 @@ export function renderAgendaColumn(data, { reqFilterChips, requestsHtml, dayLoad
       </div>`
     : `<div class="agenda-upcoming"><p class="empty" style="text-align:center;padding:.6rem 0;font-size:.82rem">Aucun événement à venir</p></div>`;
 
-  return `<div class="card">
-      <div class="agenda-tabs" role="tablist" id="agenda-tabs">
-        <button class="agenda-tab active" data-tab="dispo" role="tab" aria-selected="true">${icon("calendar", 14)} Agenda</button>
-        <button class="agenda-tab" data-tab="events" role="tab" aria-selected="false">${icon("clock", 14)} Événements</button>
-        <button class="agenda-tab" data-tab="rdv" role="tab" aria-selected="false">RDV${
-          data.pending ? ` <span class="badge">${data.pending}</span>` : ""
-        }</button>
-      </div>
-      <div class="col-scroll">
+  // Layout rail : rail vertical (sous-modes) + scroll de panel à droite, même
+  // pattern que les Échanges. Les class .agenda-tab restent inchangées pour que
+  // le wiring (app.querySelectorAll('.agenda-tab')…) marche tel quel.
+  return `<div class="card subrail-card">
+      <nav class="subrail" role="tablist" aria-label="Sous-sections Agenda" id="agenda-tabs">
+        <button class="subrail-btn agenda-tab is-active active" data-tab="dispo" role="tab" aria-selected="true" title="Disponibilités" aria-label="Disponibilités">
+          ${icon("calendar", 22)}<span class="subrail-label">Agenda</span>
+        </button>
+        <button class="subrail-btn agenda-tab" data-tab="events" role="tab" aria-selected="false" title="Événements" aria-label="Événements">
+          ${icon("clock", 22)}<span class="subrail-label">Événements</span>
+        </button>
+        <button class="subrail-btn agenda-tab" data-tab="rdv" role="tab" aria-selected="false" title="Rendez-vous" aria-label="Rendez-vous">
+          ${icon("users", 22)}<span class="subrail-label">RDV</span>
+          ${data.pending ? `<span class="subrail-badge">${data.pending}</span>` : ""}
+        </button>
+      </nav>
+      <div class="col-scroll subrail-body">
         <div class="agenda-panel" id="agenda-dispo" role="tabpanel">
           <div class="calendar-fill">
             ${host.calendar.html(data.overrides, true, dayLoad, true, data.events || [])}

@@ -39,5 +39,9 @@ include(":feature:requests")
 include(":feature:notifications")
 include(":feature:chat")
 include(":feature:call")
+include(":feature:gallery")
+include(":core:billing")
+include(":feature:premium")
+include(":feature:live")
 // Étapes suivantes (découpage features) :
 // include(":core:ui")         // composants Compose réutilisables

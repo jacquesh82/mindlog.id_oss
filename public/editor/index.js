@@ -810,20 +810,54 @@ export function renderEditor(data) {
 
   appState.commEmptyHtml = `<div class="comm-empty-state"><h3>Sélectionnez un contact</h3><p>Choisissez un contact pour démarrer une conversation ou passer un appel.</p></div>`;
 
+  // Layout 3 colonnes : rail vertical (sous-modes) | sidebar (liste) | pane droit.
+  // Le rail style WhatsApp Desktop expose les sous-modes du Chat (Discussions,
+  // Groupes…) — la sidebar n'affiche QU'UN seul mode à la fois, plein-cadre,
+  // pour ne plus rogner la liste des contacts.
   const commColHtml = `<div class="comm-wrapper">
     <div class="comm-layout">
+      <nav class="comm-rail" id="comm-rail" role="tablist" aria-label="Sous-sections Échanges">
+        <button type="button" class="comm-rail-btn is-active" id="comm-rail-chats" role="tab" aria-selected="true" aria-controls="comm-view-chats" title="Discussions" aria-label="Discussions">
+          ${icon("chat", 22)}<span class="comm-rail-label">Discussions</span>
+        </button>
+        <button type="button" class="comm-rail-btn" id="comm-rail-groups" role="tab" aria-selected="false" aria-controls="comm-view-groups" title="Groupes" aria-label="Groupes">
+          ${icon("users", 22)}<span class="comm-rail-label">Groupes</span>
+          <span class="comm-rail-badge" id="comm-rail-groups-badge" hidden></span>
+        </button>
+        <button type="button" class="comm-rail-btn" id="comm-rail-live" role="tab" aria-selected="false" aria-controls="comm-view-live" title="Live" aria-label="Live">
+          ${icon("radio", 22)}<span class="comm-rail-label">Live</span>
+        </button>
+      </nav>
       <div class="comm-sidebar">
-        <div class="comm-topbar">${icon("chat",16)} Communications</div>
-        <div class="comm-search-wrap">
-          <input id="comm-search" placeholder="Rechercher un contact…" autocomplete="off" />
+        <div class="comm-topbar" id="comm-topbar">
+          <span id="comm-topbar-title">${icon("chat",16)} Discussions</span>
+          <button type="button" class="comm-topbar-btn" id="comm-new-btn" title="Nouvelle discussion" aria-label="Nouvelle discussion">＋</button>
         </div>
-        <div class="comm-contacts-list" id="comm-contacts">
-          ${commContacts.length
-            ? (commContacts.some(c => c.isConv) ? `<div class="comm-sep">Conversations récentes</div>` : "")
-              + commContacts.filter(c => c.isConv).map(commContactHtml).join("")
-              + (commContacts.some(c => !c.isConv) ? `<div class="comm-sep">Connexions directes</div>` : "")
-              + commContacts.filter(c => !c.isConv).map(commContactHtml).join("")
-            : `<div class="comm-empty-state"><p>Aucun contact. Ajoutez des connexions pour pouvoir discuter.</p></div>`}
+        <div class="comm-search-wrap">
+          <input id="comm-search" placeholder="Rechercher…" autocomplete="off" />
+        </div>
+        <!-- Vue Discussions (contacts 1:1) -->
+        <div class="comm-view" id="comm-view-chats" role="tabpanel" aria-labelledby="comm-rail-chats">
+          <div class="comm-contacts-list" id="comm-contacts">
+            ${commContacts.length
+              ? (commContacts.some(c => c.isConv) ? `<div class="comm-sep">Conversations récentes</div>` : "")
+                + commContacts.filter(c => c.isConv).map(commContactHtml).join("")
+                + (commContacts.some(c => !c.isConv) ? `<div class="comm-sep">Connexions directes</div>` : "")
+                + commContacts.filter(c => !c.isConv).map(commContactHtml).join("")
+              : `<div class="comm-empty-state"><p>Aucun contact. Ajoutez des connexions pour pouvoir discuter.</p></div>`}
+          </div>
+        </div>
+        <!-- Vue Groupes (liste pleine hauteur, chargée à la demande) -->
+        <div class="comm-view" id="comm-view-groups" role="tabpanel" aria-labelledby="comm-rail-groups" hidden>
+          <div class="comm-groups-list" id="comm-groups-list">
+            <div class="comm-empty-state"><p>Chargement…</p></div>
+          </div>
+        </div>
+        <!-- Vue Live : injection lazy du contenu du plugin live.js. -->
+        <div class="comm-view" id="comm-view-live" role="tabpanel" aria-labelledby="comm-rail-live" hidden>
+          <div class="comm-live-host" id="comm-live-host">
+            <div class="comm-empty-state"><p>Chargement…</p></div>
+          </div>
         </div>
       </div>
       <div class="comm-right" id="comm-right">${appState.commEmptyHtml}</div>
@@ -857,7 +891,11 @@ export function renderEditor(data) {
     Compte: { label: "Compte", ic: "user" },
     Galerie: { label: "Galerie", ic: "image" },
     Options: { label: "Options", ic: "settings" },
-    Chat: { label: "Chat", ic: "chat" },
+    // « Chat » regroupe maintenant Discussions 1:1, Groupes et Live (rail interne).
+    // Le label d'affichage devient « Échanges » : assez large pour couvrir les
+    // 3 sous-modes (conversations + diffusion), sans casser les lookups internes
+    // qui restent indexés sur la clé "Chat".
+    Chat: { label: "Échanges", ic: "chat" },
     Live: { label: "Live", ic: "radio" },
   };
   app.setAttribute("data-view", "private");
@@ -880,7 +918,9 @@ export function renderEditor(data) {
        // Réseau · Agenda · Galerie · Options. « Mon ID » (Identité) est accessible
        // depuis l'Accueil (« Modifier ma carte ») ; les Notifications via la cloche
        // du header. L'ordre est fixe et chaque label n'apparaît qu'une fois.
-       const NAV = ["Chat", "Live", "Relations", "Agenda", "Compte"];
+       // « Live » est désormais un sous-mode du rail Échanges (cf. comm-rail),
+       // plus une entrée principale du menu du bas.
+       const NAV = ["Chat", "Relations", "Agenda", "Compte"];
        const navBtn = ({ i, label }) => {
          const cfg = BNAV[label] || { label, ic: "circle" };
          const isChat = label === "Chat";
@@ -1631,13 +1671,7 @@ export function wireEditor(data) {
   const commContactList = app.querySelector("#comm-contacts");
   const commRight = app.querySelector("#comm-right");
   if (commContactList && commRight) {
-    // Search
-    app.querySelector("#comm-search")?.addEventListener("input", (e) => {
-      const q = e.target.value.trim().toLowerCase();
-      commContactList.querySelectorAll(".comm-contact-item").forEach(el => {
-        el.hidden = !!q && !(el.dataset.search || "").includes(q);
-      });
-    });
+    // Search (filterSidebar plus bas couvre Discussions ET Groupes selon le mode actif).
 
     // Contact click → ouvre le chat INLINE dans le panneau droit
     commContactList.addEventListener("click", async (e) => {
@@ -1686,6 +1720,496 @@ export function wireEditor(data) {
       host.chat.open(h, appState.key, data.handle);
       host.openDeckColumn = origOpen; // restaurer immédiatement
     });
+
+    /* ─────── Sous-modes Chat (rail vertical, style WhatsApp Desktop) ───────
+     * Le rail à gauche de la sidebar bascule entre 2 vues : Discussions (1:1)
+     * et Groupes. Chaque vue prend toute la sidebar — plus de section qui
+     * rogne l'espace. La recherche filtre la vue active.
+     */
+    const commGroupsList = app.querySelector("#comm-groups-list");
+    const commNewBtn = app.querySelector("#comm-new-btn");
+    const railBtns = {
+      chats: app.querySelector("#comm-rail-chats"),
+      groups: app.querySelector("#comm-rail-groups"),
+      live: app.querySelector("#comm-rail-live"),
+    };
+    const views = {
+      chats: app.querySelector("#comm-view-chats"),
+      groups: app.querySelector("#comm-view-groups"),
+      live: app.querySelector("#comm-view-live"),
+    };
+    const topbarTitle = app.querySelector("#comm-topbar-title");
+    let activeMode = "chats";
+    let groupsLoaded = false;
+    let liveLoaded = false;
+    const placeholders = {
+      chats: "Rechercher un contact…",
+      groups: "Rechercher un groupe…",
+      live: "Rechercher un live…",
+    };
+    const titles = {
+      chats: `${icon("chat", 16)} Discussions`,
+      groups: `${icon("users", 16)} Groupes`,
+      live: `${icon("radio", 16)} Live`,
+    };
+    // Live n'a pas de recherche utile (peu d'items en simultané) — on masque le champ.
+    const searchHiddenIn = new Set(["live"]);
+    // Action du bouton ＋ par mode — libellé + action effective.
+    const newAction = {
+      chats: { label: "Nouvelle discussion", run: () => openContactPicker("chat") },
+      groups: { label: "Nouveau groupe", run: () => openNewGroupFormInline() },
+      live: { label: "Démarrer un live", run: () => openLiveInRightPane("/live/broadcast", "Démarrer un live") },
+    };
+    /* Formulaire "Nouveau groupe" rendu DIRECTEMENT dans commRight, sans la
+     * coquille .card + liste qu'ajoutait openGroups (la liste est déjà dans la
+     * sidebar). Pas de popup : on injecte le HTML inline.
+     *
+     * UX: picker de contacts à puces (chips). État local en closure : `selected`
+     * (Set de handles), `available` = contacts réciproques non sélectionnés. Le
+     * champ de saisie sert à filtrer la liste ET à ajouter un handle libre
+     * (recherche d'identité externe). */
+    function openNewGroupFormInline() {
+      const myKey = appState.key;
+      const myHandle = data.handle;
+      const mutualContacts = (data.relations?.[1] || [])
+        .filter((r) => r.mutual)
+        .map((r) => ({ handle: r.handle, displayName: r.display_name || null, hasPhoto: !!r.has_photo }));
+      const selected = new Set();
+      commRight.innerHTML = `
+        <div class="comm-form-pane" role="region" aria-label="Nouveau groupe">
+          <div class="comm-form-head">
+            <h2>${icon("users", 18)} Nouveau groupe</h2>
+            <button type="button" class="btn sm" id="ng-cancel" aria-label="Annuler">← Retour</button>
+          </div>
+          <form id="ng-form" class="comm-form-body">
+            <label class="comm-form-field">
+              <span class="comm-form-label" for="ng-name">Nom du groupe</span>
+              <input id="ng-name" placeholder="Ex. Apéro vendredi" maxlength="80" autocomplete="off" required />
+            </label>
+            <div class="comm-form-field">
+              <span class="comm-form-label">Membres</span>
+              <div class="ng-picker">
+                <div class="ng-chips" id="ng-chips" aria-live="polite"></div>
+                <input id="ng-search" type="text" placeholder="Rechercher un contact ou taper @handle…" autocomplete="off" />
+              </div>
+              <small class="comm-form-hint">Clique pour ajouter, ou tape un @handle et appuie sur Entrée.</small>
+            </div>
+            <div class="ng-list-wrap">
+              <div class="ng-list-head" id="ng-list-head">${mutualContacts.length ? "Contacts disponibles" : "Aucun contact réciproque"}</div>
+              <ul class="ng-list" id="ng-list" role="listbox"></ul>
+            </div>
+            <div class="comm-form-actions">
+              <button type="button" class="btn" id="ng-cancel2">Annuler</button>
+              <button class="btn primary" type="submit" id="ng-submit">Créer le groupe</button>
+            </div>
+          </form>
+        </div>`;
+      const close = () => { commRight.innerHTML = appState.commEmptyHtml; };
+      commRight.querySelector("#ng-cancel")?.addEventListener("click", close);
+      commRight.querySelector("#ng-cancel2")?.addEventListener("click", close);
+      const chipsEl = commRight.querySelector("#ng-chips");
+      const listEl = commRight.querySelector("#ng-list");
+      const listHead = commRight.querySelector("#ng-list-head");
+      const search = commRight.querySelector("#ng-search");
+      const initial = (h) => (h?.[0] || "?").toUpperCase();
+      const hue = (h) => [...h].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 360, 0);
+      const avatarChip = (c) => c.hasPhoto
+        ? `<img class="ng-av-img" src="/api/identities/${encodeURIComponent(c.handle)}/photo" alt="" loading="lazy" onerror="this.remove()" />`
+        : `<span class="ng-av-init" style="background:hsl(${hue(c.handle)} 40% 46%)">${esc(initial(c.handle))}</span>`;
+      function chipHtml(handle) {
+        const c = mutualContacts.find((x) => x.handle === handle) || { handle, displayName: null, hasPhoto: false };
+        return `<span class="ng-chip" data-h="${esc(handle)}">${avatarChip(c)}<span class="ng-chip-name">@${esc(handle)}</span><button type="button" class="ng-chip-x" aria-label="Retirer ${esc(handle)}">✕</button></span>`;
+      }
+      function rowHtml(c) {
+        const name = c.displayName ? esc(c.displayName) : `@${esc(c.handle)}`;
+        const sub = c.displayName ? `@${esc(c.handle)}` : "";
+        return `<li class="ng-row" data-h="${esc(c.handle)}" role="option" tabindex="0">
+          ${avatarChip(c)}
+          <div class="ng-row-body"><span class="ng-row-name">${name}</span>${sub ? `<span class="ng-row-sub">${sub}</span>` : ""}</div>
+          <span class="ng-row-add" aria-hidden="true">+</span>
+        </li>`;
+      }
+      function render() {
+        chipsEl.innerHTML = selected.size
+          ? [...selected].map(chipHtml).join("")
+          : `<span class="ng-chips-empty">Aucun membre sélectionné</span>`;
+        chipsEl.querySelectorAll(".ng-chip-x").forEach((b) =>
+          b.addEventListener("click", () => { selected.delete(b.parentElement.dataset.h); render(); }));
+        const q = (search.value || "").trim().toLowerCase().replace(/^@/, "");
+        const filtered = mutualContacts
+          .filter((c) => !selected.has(c.handle))
+          .filter((c) => !q || c.handle.toLowerCase().includes(q) || (c.displayName || "").toLowerCase().includes(q));
+        if (filtered.length) {
+          listEl.innerHTML = filtered.map(rowHtml).join("");
+          listEl.querySelectorAll(".ng-row").forEach((row) => {
+            const add = () => { selected.add(row.dataset.h); search.value = ""; render(); search.focus({ preventScroll: true }); };
+            row.addEventListener("click", add);
+            row.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); add(); } });
+          });
+          listHead.textContent = q ? `${filtered.length} résultat${filtered.length > 1 ? "s" : ""}` : "Contacts disponibles";
+        } else if (q && /^[a-z0-9_-]{1,40}$/i.test(q)) {
+          // Aucun match dans les relations — proposer d'ajouter le handle libre.
+          listEl.innerHTML = `<li class="ng-row ng-row-free" data-h="${esc(q)}" role="option" tabindex="0">
+            <span class="ng-av-init" style="background:hsl(${hue(q)} 40% 46%)">?</span>
+            <div class="ng-row-body"><span class="ng-row-name">@${esc(q)}</span><span class="ng-row-sub">Hors de tes contacts — le serveur vérifiera la réciprocité.</span></div>
+            <span class="ng-row-add" aria-hidden="true">+</span>
+          </li>`;
+          const free = listEl.querySelector(".ng-row-free");
+          const add = () => { selected.add(q); search.value = ""; render(); search.focus({ preventScroll: true }); };
+          free.addEventListener("click", add);
+          free.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); add(); } });
+          listHead.textContent = "Ajouter ce handle";
+        } else {
+          listEl.innerHTML = `<li class="ng-list-empty">${mutualContacts.length ? "Aucun résultat" : "Aucun contact réciproque pour le moment"}</li>`;
+          listHead.textContent = mutualContacts.length ? "Contacts disponibles" : "";
+        }
+      }
+      search.addEventListener("input", render);
+      search.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          const q = search.value.trim().replace(/^@/, "");
+          if (!q) return;
+          if (/^[a-z0-9_-]{1,40}$/i.test(q)) { selected.add(q); search.value = ""; render(); }
+        } else if (e.key === "Backspace" && !search.value && selected.size) {
+          const last = [...selected].pop(); selected.delete(last); render();
+        }
+      });
+      render();
+      commRight.querySelector("#ng-name")?.focus({ preventScroll: true });
+      commRight.querySelector("#ng-form")?.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const name = commRight.querySelector("#ng-name").value.trim();
+        const members = [...selected];
+        if (!members.length) { toast("Sélectionne au moins un contact."); return; }
+        const submitBtn = commRight.querySelector("#ng-submit");
+        if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Création…"; }
+        try {
+          const g = await host.groups.api.create(name, members);
+          await host.groups.syncKeys(myHandle, myKey, g.id, g.members.map((m) => m.handle));
+          toast("Groupe créé 👥");
+          await refreshGroupsSidebar();
+          openGroupInline(g.id);
+        } catch (err) {
+          toast(err.message || "Échec de la création");
+          if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "Créer le groupe"; }
+        }
+      });
+    }
+    const setMode = (mode) => {
+      if (!railBtns[mode] || !views[mode]) return;
+      activeMode = mode;
+      for (const k of Object.keys(railBtns)) {
+        railBtns[k]?.classList.toggle("is-active", k === mode);
+        railBtns[k]?.setAttribute("aria-selected", k === mode ? "true" : "false");
+        if (views[k]) views[k].hidden = k !== mode;
+      }
+      if (topbarTitle) topbarTitle.innerHTML = titles[mode];
+      const searchWrap = app.querySelector(".comm-search-wrap");
+      const search = app.querySelector("#comm-search");
+      if (searchWrap) searchWrap.hidden = searchHiddenIn.has(mode);
+      if (search) search.placeholder = placeholders[mode];
+      if (commNewBtn) {
+        const a = newAction[mode];
+        commNewBtn.title = a?.label || "";
+        commNewBtn.setAttribute("aria-label", a?.label || "");
+      }
+      if (mode === "groups" && !groupsLoaded) refreshGroupsSidebar();
+      if (mode === "live" && !liveLoaded) loadLiveView();
+      filterSidebar();
+    };
+    railBtns.chats?.addEventListener("click", () => setMode("chats"));
+    railBtns.groups?.addEventListener("click", () => setMode("groups"));
+    railBtns.live?.addEventListener("click", () => setMode("live"));
+    // ＋ contextuel : dispatch selon le mode actif (newAction).
+    commNewBtn?.addEventListener("click", () => newAction[activeMode]?.run?.());
+    /* Live : récupère le descripteur de colonne contribué par le plugin live.js
+     * (editorColumns hook) et injecte son HTML + wire dans la vue sidebar.
+     * Une seule fois (lazy + mémorisé). */
+    function loadLiveView() {
+      const liveHost = app.querySelector("#comm-live-host");
+      if (!liveHost) return;
+      try {
+        const liveCol = host.getPlugins?.()
+          .find((p) => p.id === "live")
+          ?.editorColumns?.(host, data)?.[0];
+        if (!liveCol) {
+          liveHost.innerHTML = `<div class="comm-empty-state"><p>Module Live indisponible.</p></div>`;
+          return;
+        }
+        liveHost.innerHTML = liveCol.html;
+        liveCol.wire?.(liveHost);
+        // Intercepte les clics sur cartes Live (démarrage, en direct, à venir)
+        // pour rendre la cible dans commRight au lieu de naviguer en plein écran.
+        liveHost.addEventListener("click", (e) => {
+          const a = e.target.closest("a.live-card");
+          if (!a) return;
+          const href = a.getAttribute("href");
+          if (!href || href.startsWith("#") || href.startsWith("javascript:")) return;
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return; // ctrl/cmd-click ouvre normalement
+          e.preventDefault();
+          const title = a.querySelector("strong")?.textContent?.trim() || "Live";
+          openLiveInRightPane(href, title);
+        });
+        liveLoaded = true;
+      } catch {
+        liveHost.innerHTML = `<div class="comm-empty-state"><p>Erreur de chargement Live.</p></div>`;
+      }
+    }
+    /* Ouvre une URL Live dans commRight via un iframe plein-cadre (caméra +
+     * micro + screen-share autorisés en same-origin). Une topbar avec « Retour »
+     * et « Ouvrir dans un onglet » permet de revenir à l'état vide ou d'ouvrir
+     * la version standalone si besoin. */
+    function openLiveInRightPane(url, title) {
+      commRight.innerHTML = `
+        <div class="comm-iframe-wrap">
+          <div class="comm-iframe-bar">
+            <button type="button" class="btn sm" id="comm-iframe-close" aria-label="Retour">← Retour</button>
+            <span class="comm-iframe-title">${esc(title)}</span>
+            <a class="btn sm" href="${esc(url)}" target="_blank" rel="noopener" title="Ouvrir dans un onglet" aria-label="Ouvrir dans un onglet">↗</a>
+          </div>
+          <iframe class="comm-iframe" src="${esc(url)}" allow="camera; microphone; display-capture; fullscreen" allowfullscreen></iframe>
+        </div>`;
+      commRight.querySelector("#comm-iframe-close")?.addEventListener("click", () => {
+        commRight.innerHTML = appState.commEmptyHtml;
+      });
+    }
+    // Filtrage : appliqué uniquement à la vue active.
+    const filterSidebar = () => {
+      const q = (app.querySelector("#comm-search")?.value || "").trim().toLowerCase();
+      const selector = activeMode === "groups" ? ".comm-group-item" : ".comm-contact-item";
+      app.querySelectorAll(selector).forEach((el) => {
+        el.hidden = !!q && !(el.dataset.search || "").includes(q);
+      });
+    };
+    // Intercepte openDeckColumn pour monter le HTML du plugin dans commRight, et
+    // closeDeckColumn pour restaurer l'état initial (mêmes effets que le wiring
+    // existant des contacts 1:1). On restaure openDeckColumn juste après l'appel
+    // SYNCHRONE — closeDeckColumn reste interceptée car déclenchée plus tard par
+    // l'utilisateur (clic sur ✕ dans le plugin).
+    const wrapInline = (fn) => {
+      const origOpen = host.openDeckColumn;
+      const origClose = host.closeDeckColumn;
+      host.openDeckColumn = ({ html, wire }) => {
+        commRight.innerHTML = html;
+        wire?.(commRight);
+        return commRight;
+      };
+      host.closeDeckColumn = (col) => {
+        if (col === commRight) {
+          commRight.innerHTML = appState.commEmptyHtml;
+          commContactList.querySelectorAll(".comm-contact-item").forEach((el) => el.classList.remove("selected"));
+          commGroupsList?.querySelectorAll(".comm-group-item").forEach((el) => el.classList.remove("selected"));
+          host.closeDeckColumn = origClose;
+        } else { origClose?.(col); }
+      };
+      try { fn(); } finally { host.openDeckColumn = origOpen; }
+    };
+    const openGroupInline = (gid) => wrapInline(() => {
+      commContactList.querySelectorAll(".comm-contact-item").forEach((el) => el.classList.remove("selected"));
+      commGroupsList?.querySelectorAll(".comm-group-item").forEach((el) => el.classList.toggle("selected", el.dataset.gid === gid));
+      host.chat.openGroup(gid, appState.key, data.handle);
+      // Intercepte le bouton « Gérer » du chat plugin (cascade de prompts par
+      // défaut) pour ouvrir un panneau inline avec picker chips. Délégation +
+      // capture pour court-circuiter le handler chat.js bound sur le bouton.
+      commRight.addEventListener("click", (e) => {
+        if (e.target.closest("#gc-manage")) {
+          e.preventDefault(); e.stopImmediatePropagation();
+          openManageGroupInline(gid);
+        }
+      }, true);
+    });
+    /* Panneau « Gérer le groupe » : membres actuels (✕ pour retirer) + picker
+     * (chips) pour ajouter, calqué sur Nouveau groupe. Le rail+sidebar restent
+     * visibles, seul commRight est remplacé temporairement. */
+    async function openManageGroupInline(gid) {
+      const myKey = appState.key;
+      const myHandle = data.handle;
+      const mutualContacts = (data.relations?.[1] || [])
+        .filter((r) => r.mutual)
+        .map((r) => ({ handle: r.handle, displayName: r.display_name || null, hasPhoto: !!r.has_photo }));
+      const initial = (h) => (h?.[0] || "?").toUpperCase();
+      const hue = (h) => [...h].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 360, 0);
+      const avatarChip = (c) => c.hasPhoto
+        ? `<img class="ng-av-img" src="/api/identities/${encodeURIComponent(c.handle)}/photo" alt="" loading="lazy" onerror="this.remove()" />`
+        : `<span class="ng-av-init" style="background:hsl(${hue(c.handle)} 40% 46%)">${esc(initial(c.handle))}</span>`;
+      const roleLabel = (r) => r === "owner" ? "propriétaire" : r === "admin" ? "admin" : "membre";
+      let group = null;
+      const skeleton = `
+        <div class="comm-form-pane" role="region" aria-label="Gérer le groupe">
+          <div class="comm-form-head">
+            <h2 id="mg-title">${icon("users", 18)} Gérer le groupe</h2>
+            <button type="button" class="btn sm" id="mg-back" aria-label="Retour à la conversation">← Retour</button>
+          </div>
+          <div class="comm-form-body">
+            <div class="comm-form-field">
+              <span class="comm-form-label">Membres actuels (<span id="mg-count">…</span>)</span>
+              <ul class="ng-list" id="mg-members"><li class="ng-list-empty">Chargement…</li></ul>
+            </div>
+            <div class="comm-form-field">
+              <span class="comm-form-label">Ajouter un membre</span>
+              <div class="ng-picker">
+                <input id="mg-search" type="text" placeholder="Rechercher dans tes contacts ou taper @handle…" autocomplete="off" />
+              </div>
+              <small class="comm-form-hint">Tape un handle et appuie sur Entrée, ou clique dans la liste.</small>
+            </div>
+            <div class="ng-list-wrap">
+              <div class="ng-list-head" id="mg-list-head">Contacts disponibles</div>
+              <ul class="ng-list" id="mg-list" role="listbox"></ul>
+            </div>
+          </div>
+        </div>`;
+      commRight.innerHTML = skeleton;
+      commRight.querySelector("#mg-back")?.addEventListener("click", () => openGroupInline(gid));
+      const membersEl = commRight.querySelector("#mg-members");
+      const countEl = commRight.querySelector("#mg-count");
+      const titleEl = commRight.querySelector("#mg-title");
+      const listEl = commRight.querySelector("#mg-list");
+      const listHead = commRight.querySelector("#mg-list-head");
+      const search = commRight.querySelector("#mg-search");
+      function renderMembers() {
+        if (!group) return;
+        const me = group.members.find((m) => m.handle === myHandle);
+        const canManage = me?.role === "owner" || me?.role === "admin";
+        countEl.textContent = String(group.members.length);
+        titleEl.innerHTML = `${icon("users", 18)} ${esc(group.name || "Groupe")} <span class="deg" style="font-size:.72rem;font-weight:500">· chiffré 🔒</span>`;
+        membersEl.innerHTML = group.members.map((m) => {
+          const c = { handle: m.handle, displayName: null, hasPhoto: false };
+          const cReal = mutualContacts.find((x) => x.handle === m.handle);
+          if (cReal) { c.displayName = cReal.displayName; c.hasPhoto = cReal.hasPhoto; }
+          const isOwner = m.role === "owner";
+          const removable = canManage && !isOwner && m.handle !== myHandle;
+          return `<li class="ng-row" data-h="${esc(m.handle)}">
+            ${avatarChip(c)}
+            <div class="ng-row-body">
+              <span class="ng-row-name">@${esc(m.handle)}${m.handle === myHandle ? " <small style='color:var(--muted)'>(toi)</small>" : ""}</span>
+              <span class="ng-row-sub">${esc(roleLabel(m.role))}</span>
+            </div>
+            ${removable ? `<button type="button" class="ng-chip-x mg-remove" title="Retirer @${esc(m.handle)}" aria-label="Retirer @${esc(m.handle)}">✕</button>` : ""}
+          </li>`;
+        }).join("");
+        membersEl.querySelectorAll(".mg-remove").forEach((b) => {
+          b.addEventListener("click", async () => {
+            const h = b.closest(".ng-row")?.dataset.h;
+            if (!h) return;
+            if (!(await confirmDialog(`Retirer @${h} du groupe ?`, { ok: "Retirer", danger: true }))) return;
+            try {
+              await host.groups.api.removeMember(gid, h);
+              const g2 = await host.groups.api.get(gid);
+              await host.groups.rotate(myHandle, myKey, gid, g2.members.map((mm) => mm.handle));
+              toast(`@${h} retiré — clés tournées`);
+              await reload();
+            } catch (e) { toast(e.message || "Échec"); }
+          });
+        });
+      }
+      function renderList() {
+        if (!group) return;
+        const memberSet = new Set(group.members.map((m) => m.handle));
+        const q = (search.value || "").trim().toLowerCase().replace(/^@/, "");
+        const filtered = mutualContacts
+          .filter((c) => !memberSet.has(c.handle))
+          .filter((c) => !q || c.handle.toLowerCase().includes(q) || (c.displayName || "").toLowerCase().includes(q));
+        if (filtered.length) {
+          listEl.innerHTML = filtered.map((c) => {
+            const name = c.displayName ? esc(c.displayName) : `@${esc(c.handle)}`;
+            const sub = c.displayName ? `@${esc(c.handle)}` : "";
+            return `<li class="ng-row" data-h="${esc(c.handle)}" role="option" tabindex="0">
+              ${avatarChip(c)}
+              <div class="ng-row-body"><span class="ng-row-name">${name}</span>${sub ? `<span class="ng-row-sub">${sub}</span>` : ""}</div>
+              <span class="ng-row-add" aria-hidden="true">+</span>
+            </li>`;
+          }).join("");
+          listHead.textContent = q ? `${filtered.length} résultat${filtered.length > 1 ? "s" : ""}` : "Contacts disponibles";
+          listEl.querySelectorAll(".ng-row").forEach((row) => row.addEventListener("click", () => addMember(row.dataset.h)));
+        } else if (q && /^[a-z0-9_-]{1,40}$/i.test(q) && !memberSet.has(q)) {
+          listEl.innerHTML = `<li class="ng-row ng-row-free" data-h="${esc(q)}" role="option" tabindex="0">
+            <span class="ng-av-init" style="background:hsl(${hue(q)} 40% 46%)">?</span>
+            <div class="ng-row-body"><span class="ng-row-name">@${esc(q)}</span><span class="ng-row-sub">Hors de tes contacts — le serveur vérifiera la réciprocité.</span></div>
+            <span class="ng-row-add" aria-hidden="true">+</span>
+          </li>`;
+          listHead.textContent = "Ajouter ce handle";
+          listEl.querySelector(".ng-row-free")?.addEventListener("click", () => addMember(q));
+        } else {
+          listEl.innerHTML = `<li class="ng-list-empty">${mutualContacts.length ? "Aucun contact disponible" : "Aucun contact réciproque"}</li>`;
+          listHead.textContent = "";
+        }
+      }
+      async function addMember(h) {
+        if (!h) return;
+        try {
+          await host.groups.api.addMember(gid, h);
+          toast(`@${h} ajouté`);
+          search.value = "";
+          await reload();
+        } catch (e) { toast(e.message || "Impossible d'ajouter ce contact"); }
+      }
+      search.addEventListener("input", renderList);
+      search.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          const q = search.value.trim().replace(/^@/, "");
+          if (q && /^[a-z0-9_-]{1,40}$/i.test(q)) addMember(q);
+        }
+      });
+      async function reload() {
+        try {
+          group = await host.groups.api.get(gid);
+          renderMembers();
+          renderList();
+          await refreshGroupsSidebar();
+        } catch (e) { membersEl.innerHTML = `<li class="ng-list-empty">${esc(e.message || "Erreur")}</li>`; }
+      }
+      await reload();
+      search.focus({ preventScroll: true });
+    }
+    // (handler du bouton ＋ unifié dans setMode/newAction plus haut)
+    async function refreshGroupsSidebar() {
+      if (!commGroupsList || !host.groups?.api) return;
+      try {
+        const { groups: gs } = await host.groups.api.list();
+        groupsLoaded = true;
+        // Badge sur le rail : nombre total de groupes (visuel léger, pas critique).
+        const badge = app.querySelector("#comm-rail-groups-badge");
+        if (badge) {
+          badge.hidden = gs.length === 0;
+          badge.textContent = gs.length > 99 ? "99+" : String(gs.length);
+        }
+        if (!gs.length) {
+          commGroupsList.innerHTML =
+            `<div class="comm-empty-state"><h3>Aucun groupe</h3><p>Créez votre premier groupe avec le bouton ＋ en haut.</p></div>`;
+        } else {
+          commGroupsList.innerHTML = gs.map((g) => {
+            const init = "👥";
+            const name = g.name || "Groupe sans nom";
+            const memberCount = g.members?.length ?? 0;
+            const search = (name + " " + (g.members || []).map((m) => m.handle).join(" ")).toLowerCase();
+            const roleLabel = g.role === "owner" ? "propriétaire" : g.role === "admin" ? "admin" : "membre";
+            return `<div class="comm-contact-item comm-group-item" data-gid="${esc(g.id)}" data-search="${esc(search)}">
+              <div class="comm-av"><span class="comm-av-init" style="background:hsl(${[...g.id].reduce((h,x)=>(h*31+x.charCodeAt(0))%360,0)} 40% 46%);color:#fff">${init}</span></div>
+              <div class="comm-contact-body">
+                <div class="comm-contact-name">${esc(name)}</div>
+                <div class="comm-contact-sub">${memberCount} membre${memberCount > 1 ? "s" : ""} · ${esc(roleLabel)}</div>
+              </div>
+              <div class="comm-contact-meta"></div>
+            </div>`;
+          }).join("");
+          commGroupsList.querySelectorAll(".comm-group-item").forEach((el) =>
+            el.addEventListener("click", () => openGroupInline(el.dataset.gid)));
+        }
+        filterSidebar();
+      } catch {
+        commGroupsList.innerHTML =
+          `<div class="comm-empty-state"><p>Impossible de charger les groupes.</p></div>`;
+      }
+    }
+    app.querySelector("#comm-search")?.addEventListener("input", filterSidebar);
+    // Rafraîchit la liste à chaque event SSE « group » (création, ajout, retrait…).
+    if (host.connectSSE && host.onSSE) {
+      host.connectSSE(appState.key);
+      host.onSSE("group", () => refreshGroupsSidebar());
+    }
+    refreshGroupsSidebar();
   }
   // Boutons dupliqués dans Options (Accès & Sessions + Appareils)
   const wireAlias = (id2, id1) => {

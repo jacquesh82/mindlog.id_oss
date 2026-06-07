@@ -8,13 +8,21 @@
 import { E2E, _b64, _b64url, _unb64, _unb64url } from "./state.js";
 import { api, authHeaders, jsonAuth } from "../net.js";
 import { isRatchetCiphertext, rAesDec, rAesEnc, rConcat, rEq, rIdbGet, rIdbPut, rKdfCk, rKdfMk, ratchetDecrypt, ratchetSend } from "./ratchet.js";
-import { mdDeviceId, mdFanoutEncrypt } from "./multidevice.js";
+import { mdDecryptEnvelope, mdDeviceId, mdFanoutEncrypt, mdSelfDecrypt } from "./multidevice.js";
 import { e2eDecrypt, e2eEncrypt } from "./e2e.js";
+import { ATT_PREFIX, parseAttachment } from "./attach.js";
 
 // Miroir de src/ratchet.ts (sender keys). Chaîne symétrique (rKdfCk/rKdfMk) +
 // signature ECDSA P-256 (anti-forge). État par groupe en IndexedDB. La clé
 // d'expéditeur (SKDM) est distribuée via le canal 1-à-1 (sentinelle « skd »).
-const md = { fanoutEncrypt: mdFanoutEncrypt, deviceId: mdDeviceId }; // ex-host.md (import direct)
+// Façade locale (ex-host.md) — toutes les fonctions multi-appareils sont importées
+// directement, plus besoin de passer par globalThis.__mindlog_host.
+const md = {
+  fanoutEncrypt: mdFanoutEncrypt,
+  deviceId: mdDeviceId,
+  decryptEnvelope: mdDecryptEnvelope,
+  selfDecrypt: mdSelfDecrypt,
+};
 export const GECDSA = { name: "ECDSA", namedCurve: "P-256" };
 export const SKD_PREFIX = "skd"; // message de contrôle 1-à-1 portant une sender key
 export const G_MAX_SKIP = 1000;
@@ -88,7 +96,10 @@ export async function gDecrypt(p, m) {
 /* ----------- État de groupe (IndexedDB) + orchestration host.groups ------- */
 export const gStateKey = (me, gid) => `grp:${me}:${gid}`;
 export async function gLoadState(me, gid) {
-  return (await rIdbGet(gStateKey(me, gid))) || { mySender: null, peers: {}, sent: {} };
+  // `distributedTo` : ensemble (en objet) des handles à qui on a déjà envoyé
+  // notre SKDM courante. Évite de re-broadcaster à chaque ouverture du groupe
+  // (sinon le chat 1:1 se remplit de paquets de contrôle).
+  return (await rIdbGet(gStateKey(me, gid))) || { mySender: null, peers: {}, sent: {}, distributedTo: {} };
 }
 export const gSaveState = (me, gid, st) => rIdbPut(gStateKey(me, gid), st);
 
@@ -100,7 +111,41 @@ export const gApi = {
   removeMember: (gid, handle) => api(`/api/groups/${encodeURIComponent(gid)}/members/${encodeURIComponent(handle)}`, { method: "DELETE", headers: authHeaders() }),
   leave: (gid) => api(`/api/groups/${encodeURIComponent(gid)}/leave`, { method: "POST", headers: jsonAuth(), body: "{}" }),
   messages: (gid) => api(`/api/groups/${encodeURIComponent(gid)}/messages`, { headers: authHeaders() }),
+  deleteMessage: (gid, mid) => api(`/api/groups/${encodeURIComponent(gid)}/messages/${mid}`, { method: "DELETE", headers: authHeaders() }),
+  burnMessage: (gid, mid) => api(`/api/groups/${encodeURIComponent(gid)}/messages/${mid}/burn`, { method: "POST", headers: jsonAuth(), body: "{}" }),
+  react: (gid, mid, emoji) => api(`/api/groups/${encodeURIComponent(gid)}/messages/${mid}/react`, { method: "POST", headers: jsonAuth(), body: JSON.stringify({ emoji }) }),
 };
+
+/* ---- Pièces jointes de groupe (même pattern que crypto/attach.js 1:1) ----
+ * Le blob est chiffré client-side (AES-GCM, clé aléatoire) puis uploadé. La
+ * clé + métadonnée voyagent dans le message sender-key (sentinelle ATT_PREFIX),
+ * donc le serveur ne voit jamais le contenu. */
+const _gAttCache = new Map(); // id → objectURL (déchiffré, durée de la session)
+export async function gAttachUpload(gid, file) {
+  const keyBytes = crypto.getRandomValues(new Uint8Array(32));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const aes = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt"]);
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, aes, await file.arrayBuffer());
+  const fd = new FormData();
+  fd.append("blob", new Blob([ct], { type: "application/octet-stream" }), "a.bin");
+  const r = await fetch(`/api/groups/${encodeURIComponent(gid)}/attachments`, {
+    method: "POST", headers: authHeaders(), body: fd,
+  });
+  if (!r.ok) throw new Error("Échec de l'envoi de la pièce jointe.");
+  const { id } = await r.json();
+  return { id, name: file.name || "fichier", mime: file.type || "application/octet-stream", size: file.size, key: _b64(keyBytes), iv: _b64(iv) };
+}
+export async function gAttachDownload(gid, meta) {
+  if (_gAttCache.has(meta.id)) return _gAttCache.get(meta.id);
+  const r = await fetch(`/api/groups/${encodeURIComponent(gid)}/attachments/${meta.id}`, { headers: authHeaders() });
+  if (!r.ok) throw new Error("Pièce jointe indisponible (expirée ?).");
+  const ctBuf = await r.arrayBuffer();
+  const aes = await crypto.subtle.importKey("raw", _unb64(meta.key), "AES-GCM", false, ["decrypt"]);
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: _unb64(meta.iv) }, aes, ctBuf);
+  const url = URL.createObjectURL(new Blob([plain], { type: meta.mime || "application/octet-stream" }));
+  _gAttCache.set(meta.id, url);
+  return url;
+}
 
 /**
  * Synchronise les sender keys : (1) garantit ma sender key et l'envoie aux autres
@@ -109,35 +154,59 @@ export const gApi = {
  */
 export async function gSyncKeys(me, myKey, gid, members) {
   const st = await gLoadState(me, gid);
-  if (!st.mySender) st.mySender = await gSenderInit();
-  const others = members.filter((h) => h !== me);
-  // (1) envoyer ma SKDM à chaque membre (best-effort) via le ratchet 1-à-1
-  const payload = SKD_PREFIX + JSON.stringify({ gid, dist: gSenderDist(st.mySender) });
-  for (const h of others) {
-    try {
-      if (md) {
-        const fo = await md.fanoutEncrypt(me, myKey, h, payload).catch(() => null);
-        if (fo) {
-          await api(`/api/messages/${encodeURIComponent(h)}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "x-access-key": myKey, "x-device-id": md.deviceId() },
-            body: JSON.stringify({ clientMsgId: fo.clientMsgId, envelopes: fo.envelopes }),
-          });
-          continue;
-        }
-      }
-      const r = await ratchetSend(me, myKey, h, null, payload); if (!r) await e2eEncryptSend(me, myKey, h, payload);
-    } catch {}
+  const isNewSender = !st.mySender;
+  if (isNewSender) {
+    st.mySender = await gSenderInit();
+    st.distributedTo = {}; // nouvelle clé → re-distribuer à tous
   }
-  // (2) lire les SKDM reçus de chaque membre dans la conv 1-à-1
+  if (!st.distributedTo) st.distributedTo = {};
+  const others = members.filter((h) => h !== me);
+  // (1) envoyer ma SKDM aux membres QUI NE L'ONT PAS ENCORE REÇUE. Sans ce
+  // filtre, chaque ouverture du groupe re-broadcaste un paquet de contrôle SKDM
+  // qui pollue le chat 1:1 (cf. régression observée 11:23).
+  const targets = others.filter((h) => !st.distributedTo[h]);
+  if (targets.length) {
+    const payload = SKD_PREFIX + JSON.stringify({ gid, dist: gSenderDist(st.mySender) });
+    for (const h of targets) {
+      try {
+        if (md) {
+          const fo = await md.fanoutEncrypt(me, myKey, h, payload).catch(() => null);
+          if (fo) {
+            await api(`/api/messages/${encodeURIComponent(h)}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "x-access-key": myKey, "x-device-id": md.deviceId() },
+              body: JSON.stringify({ clientMsgId: fo.clientMsgId, envelopes: fo.envelopes }),
+            });
+            st.distributedTo[h] = Date.now();
+            continue;
+          }
+        }
+        const r = await ratchetSend(me, myKey, h, null, payload);
+        if (!r) await e2eEncryptSend(me, myKey, h, payload);
+        st.distributedTo[h] = Date.now();
+      } catch {}
+    }
+  }
+  // (2) lire les SKDM reçus de chaque membre dans la conv 1-à-1.
+  // IMPORTANT : passer x-device-id pour récupérer NOS enveloppes per-appareil
+  // (sinon le serveur sert le legacy mono-session et les enveloppes fan-out
+  // arrivent avec ciphertext vide, donc indéchiffrables côté SKDM).
+  const deviceHeaders = { "x-access-key": myKey, ...(md && md.deviceId ? { "x-device-id": md.deviceId() } : {}) };
   for (const h of others) {
     try {
-      const d = await api(`/api/messages/${encodeURIComponent(h)}`, { headers: { "x-access-key": myKey } });
+      const d = await api(`/api/messages/${encodeURIComponent(h)}`, { headers: deviceHeaders });
       for (const m of d.messages) {
         if (m.sender_id === d.me) continue;
         let txt = null;
-        if (isRatchetCiphertext(m.ciphertext)) txt = await ratchetDecrypt(me, myKey, h, m.iv, m.ciphertext).catch(() => null);
-        else txt = await e2eDecrypt(m.sender_pub || d.peerPubkey, m.iv, m.ciphertext).catch(() => null);
+        // Multi-appareils (fan-out) : message logique avec client_msg_id ; le
+        // serveur a renvoyé NOTRE enveloppe (chiffrée pour ce device).
+        if (m.client_msg_id) {
+          txt = await md.decryptEnvelope(me, myKey, m.sender_device_id, m.iv, m.ciphertext).catch(() => null);
+        } else if (isRatchetCiphertext(m.ciphertext)) {
+          txt = await ratchetDecrypt(me, myKey, h, m.iv, m.ciphertext).catch(() => null);
+        } else {
+          txt = await e2eDecrypt(m.sender_pub || d.peerPubkey, m.iv, m.ciphertext).catch(() => null);
+        }
         if (typeof txt === "string" && txt.startsWith(SKD_PREFIX)) {
           try {
             const o = JSON.parse(txt.slice(SKD_PREFIX.length));
@@ -205,6 +274,7 @@ export async function gRotate(me, myKey, gid, members) {
   const st = await gLoadState(me, gid);
   st.mySender = await gSenderInit();
   st.sent = {};
+  st.distributedTo = {}; // nouvelle clé → invalider la liste de distribution
   await gSaveState(me, gid, st);
   await gSyncKeys(me, myKey, gid, members);
 }

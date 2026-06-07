@@ -9,11 +9,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.EventAvailable
+import androidx.compose.material.icons.filled.MoveToInbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -39,31 +40,54 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
+import today.mindlog.id.core.designsystem.component.SubrailScaffold
+import today.mindlog.id.core.designsystem.component.SubrailTab
 import today.mindlog.id.core.model.AgendaEvent
+import today.mindlog.id.feature.requests.RequestsRoute
 
+/**
+ * Onglet Agenda du deck : subrail à 3 entrées (Dispo / Événements / RDV),
+ * mirroir de `.subrail` Web. Le subrail expose les bodies sans back arrow ;
+ * un back externe (depuis le pager) n'a pas de sens à la racine d'onglet.
+ */
 @Composable
 fun AgendaRoute(
     onBack: () -> Unit,
     openAddOnStart: Boolean = false,
+) {
+    SubrailScaffold(
+        tabs = listOf(
+            SubrailTab(key = "dispo", label = "Dispo", icon = Icons.Default.EventAvailable),
+            SubrailTab(key = "events", label = "Évén.", icon = Icons.Default.Event),
+            SubrailTab(key = "rdv", label = "RDV", icon = Icons.Default.MoveToInbox),
+        ),
+        saveKey = "agenda-subrail",
+        initialIndex = if (openAddOnStart) 1 else 1, // démarre toujours sur Événements (parité web)
+    ) { key ->
+        when (key) {
+            "dispo" -> AvailabilityRoute(onBack = onBack, showBack = false)
+            "events" -> EventsTabRoute(openAddOnStart = openAddOnStart)
+            "rdv" -> RequestsRoute(onBack = onBack, showBack = false)
+            else -> EventsTabRoute(openAddOnStart = openAddOnStart)
+        }
+    }
+}
+
+@Composable
+internal fun EventsTabRoute(
+    openAddOnStart: Boolean = false,
     viewModel: AgendaViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    var showAvailability by remember { mutableStateOf(false) }
-
-    if (showAvailability) {
-        BackHandler { showAvailability = false }
-        AvailabilityRoute(onBack = { showAvailability = false })
-        return
-    }
-
     AgendaScreen(
         uiState = uiState,
         onAdd = viewModel::addEvent,
         onDelete = viewModel::deleteEvent,
         onErrorShown = viewModel::clearError,
-        onOpenAvailability = { showAvailability = true },
-        onBack = onBack,
+        onOpenAvailability = { /* géré par le subrail */ },
+        onBack = {},
         openAddOnStart = openAddOnStart,
+        showBack = false,
     )
 }
 
@@ -77,6 +101,7 @@ internal fun AgendaScreen(
     onOpenAvailability: () -> Unit,
     onBack: () -> Unit,
     openAddOnStart: Boolean = false,
+    showBack: Boolean = true,
 ) {
     var showDialog by remember { mutableStateOf(openAddOnStart) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -94,13 +119,10 @@ internal fun AgendaScreen(
             TopAppBar(
                 title = { Text("Agenda") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Retour")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = onOpenAvailability) {
-                        Icon(Icons.Default.EventAvailable, contentDescription = "Disponibilités")
+                    if (showBack) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Retour")
+                        }
                     }
                 },
             )

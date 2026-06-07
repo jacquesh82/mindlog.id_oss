@@ -23,6 +23,8 @@ mlkitBarcode = "17.3.0"
 splashscreen = "1.0.1"
 webrtc = "1.3.8"
 androidxCredentials = "1.3.0"
+playBilling = "7.1.1"
+browser = "1.8.0"
 junit = "4.13.2"
 
 [libraries]
@@ -74,6 +76,9 @@ stream-webrtc = { group = "io.getstream", name = "stream-webrtc-android", versio
 
 androidx-credentials = { group = "androidx.credentials", name = "credentials", version.ref = "androidxCredentials" }
 androidx-credentials-play-services = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "androidxCredentials" }
+
+play-billing = { group = "com.android.billingclient", name = "billing-ktx", version.ref = "playBilling" }
+androidx-browser = { group = "androidx.browser", name = "browser", version.ref = "browser" }
 
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 

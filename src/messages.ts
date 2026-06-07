@@ -21,14 +21,26 @@ export async function pruneExpiredMessages(): Promise<void> {
 // Le serveur ne voit que des blobs ; l'appartenance est gérée dans store.ts.
 export const groupPair = (gid: string) => `g:${gid}`;
 
-export async function storeGroupMessage(gid: string, senderId: number, iv: string, ciphertext: string): Promise<void> {
+export async function storeGroupMessage(
+  gid: string,
+  senderId: number,
+  iv: string,
+  ciphertext: string,
+  ttlSeconds?: number,
+  readOnce = false
+): Promise<void> {
   if (!iv || !ciphertext || ciphertext.length > MAX_CIPHERTEXT) throw new Error("message trop long ou invalide");
+  // Mêmes bornes que storeMessage (1:1) — TTL [60 s, 24 h], défaut 24 h.
+  const ttl = typeof ttlSeconds === "number" && Number.isFinite(ttlSeconds)
+    ? Math.min(MESSAGE_TTL_MAX_SECONDS, Math.max(MESSAGE_TTL_MIN_SECONDS, Math.floor(ttlSeconds)))
+    : MESSAGE_TTL_MAX_SECONDS;
   await db.insert(messages).values({
     pair: groupPair(gid),
     sender_id: senderId,
     iv,
     ciphertext,
-    expires_at: new Date(Date.now() + MESSAGE_TTL_HOURS * 60 * 60 * 1000).toISOString(),
+    read_once: readOnce ? 1 : 0,
+    expires_at: new Date(Date.now() + ttl * 1000).toISOString(),
   });
 }
 

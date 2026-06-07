@@ -218,6 +218,13 @@
       "when": 1780781000000,
       "tag": "0030_events_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1780811000000,
+      "tag": "0031_groups_owner_events",
+      "breakpoints": true
     }
   ]
 }

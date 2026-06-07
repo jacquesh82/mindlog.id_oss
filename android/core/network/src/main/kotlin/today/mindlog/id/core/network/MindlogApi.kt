@@ -380,4 +380,91 @@ interface MindlogApi {
     /** Supprime une demande reçue. */
     @DELETE("api/requests/{id}")
     suspend fun deleteRequest(@Path("id") id: Long): OkDto
+
+    // ── Gallery ────────────────────────────────────────────────────────────
+
+    /** Photos publiques de [handle] (avec compteurs de likes et marqueur "liked"). */
+    @GET("api/gallery/{handle}")
+    suspend fun gallery(@Path("handle") handle: String): today.mindlog.id.core.network.dto.GalleryResponseDto
+
+    /** Téléverse une (ou plusieurs) photo(s) dans ma galerie publique. */
+    @Multipart
+    @POST("api/gallery")
+    suspend fun uploadGallery(@Part photos: List<MultipartBody.Part>): today.mindlog.id.core.network.dto.GalleryUploadDto
+
+    /** Supprime une de mes photos de galerie. */
+    @DELETE("api/gallery/{id}")
+    suspend fun deleteGalleryPhoto(@Path("id") id: Long): OkDto
+
+    /** (Premium) Définit/efface le lien cliquable d'une de mes photos. */
+    @PATCH("api/gallery/{id}/link")
+    suspend fun setGalleryLink(@Path("id") id: Long, @Body body: today.mindlog.id.core.network.dto.GalleryLinkBody): today.mindlog.id.core.network.dto.GalleryLinkResponseDto
+
+    /** Bascule le like sur une photo (fingerprint = identifiant anonyme stable). */
+    @POST("api/gallery/{id}/like")
+    suspend fun toggleGalleryLike(@Path("id") id: Long, @Body body: today.mindlog.id.core.network.dto.GalleryLikeBody): today.mindlog.id.core.network.dto.GalleryLikeResponseDto
+
+    // ── Premium / Space / Paid pages ───────────────────────────────────────
+
+    /** Vue d'achat d'un espace creator. */
+    @GET("api/space/{handle}")
+    suspend fun space(@Path("handle") handle: String): today.mindlog.id.core.network.dto.SpaceDto
+
+    /** Crée un Checkout Stripe pour s'abonner à l'espace de [handle]. */
+    @POST("api/space/{handle}/subscribe")
+    suspend fun subscribeToSpace(@Path("handle") handle: String): today.mindlog.id.core.network.dto.SpaceSubscribeResponseDto
+
+    /** Liste de mes pages payantes. */
+    @GET("api/pages")
+    suspend fun myPaidPages(): today.mindlog.id.core.network.dto.PaidPagesResponseDto
+
+    /** Vue d'une page payante (gating fait par le serveur). */
+    @GET("api/pages/{handle}/{slug}")
+    suspend fun paidPage(@Path("handle") handle: String, @Path("slug") slug: String): today.mindlog.id.core.network.dto.PaidPageContentDto
+
+    /** Active Premium côté serveur via un achat Play Billing. */
+    @POST("api/billing/google/verify")
+    suspend fun verifyPlayPurchase(@Body body: today.mindlog.id.core.network.dto.GoogleVerifyBody): today.mindlog.id.core.network.dto.GoogleVerifyResponseDto
+
+    // ── Live ───────────────────────────────────────────────────────────────
+
+    /** Lives en cours + à venir (feed public). */
+    @GET("api/live/feed")
+    suspend fun liveFeed(): today.mindlog.id.core.network.dto.LiveFeedDto
+
+    /** Mes lives passés et programmés. */
+    @GET("api/live/mine")
+    suspend fun myLives(): today.mindlog.id.core.network.dto.LiveFeedDto
+
+    /** Détail d'un live (métadonnées, statut). */
+    @GET("api/live/{id}")
+    suspend fun liveDetail(@Path("id") id: Long): today.mindlog.id.core.network.dto.LiveDto
+
+    /** Démarre un live (Premium requis). */
+    @POST("api/live/start")
+    suspend fun startLive(@Body body: today.mindlog.id.core.network.dto.LiveStartBody): today.mindlog.id.core.network.dto.LiveDto
+
+    /** Termine un live que j'ai lancé. */
+    @POST("api/live/{id}/end")
+    suspend fun endLive(@Path("id") id: Long): OkDto
+
+    /** Rejoint un live en tant que viewer. */
+    @POST("api/live/{id}/join")
+    suspend fun joinLive(@Path("id") id: Long): today.mindlog.id.core.network.dto.LiveJoinDto
+
+    /** Quitte un live. */
+    @POST("api/live/{id}/leave")
+    suspend fun leaveLive(@Path("id") id: Long): OkDto
+
+    /** Heartbeat (toutes les 15s) pour rester compté dans le viewer count. */
+    @POST("api/live/{id}/heartbeat")
+    suspend fun liveHeartbeat(@Path("id") id: Long): OkDto
+
+    /** Roster (compteur de viewers + leur id). */
+    @GET("api/live/{id}/roster")
+    suspend fun liveRoster(@Path("id") id: Long): today.mindlog.id.core.network.dto.LiveRosterDto
+
+    /** Envoie un paquet de signalisation WebRTC (offre, réponse, ICE). */
+    @POST("api/live/{id}/signal")
+    suspend fun sendLiveSignal(@Path("id") id: Long, @Body body: today.mindlog.id.core.network.dto.LiveSignalBody): OkDto
 }
