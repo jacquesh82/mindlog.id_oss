@@ -21,7 +21,7 @@ import {
   getGroupMessages,
   deleteMessage,
   burnMessage,
-  toggleReaction,
+  toggleGroupReaction,
   createAttachment,
   setAttachmentFile,
   getAttachment,
@@ -240,7 +240,7 @@ route.post("/api/groups/:id/messages/:mid/react", async (c) => {
   const gid = c.req.param("id");
   if (!(await isGroupMember(gid, id.id))) return c.json({ error: "réservé aux membres" }, 403);
   const { emoji } = await readBody<{ emoji: string }>(c);
-  const ok = await toggleReaction(id.id, Number(c.req.param("mid")), emoji ?? "");
+  const ok = await toggleGroupReaction(id.id, gid, Number(c.req.param("mid")), emoji ?? "");
   if (ok) for (const mid of await groupMemberIds(gid)) publish(mid, "group", { gid });
   return ok ? c.json({ ok: true }) : c.json({ error: "invalide" }, 400);
 });

@@ -32,6 +32,8 @@ import {
   getRequests,
   pendingRequestCount,
   setCoverFile,
+  setProfileIntro,
+  PROFILE_INTRO_MAX_CHARS,
   type Identity,
   type Settings,
 } from "../store.js";
@@ -212,8 +214,13 @@ route.get("/api/identities/:handle", async (c) => {
     // Règle de dispo générale (jours/week-end/périodes) ou null si masquée.
     availability: showAvail ? settings.availability : null,
     relations: { 1: await getDirectRelations(id.id) },
-    tags: await getTags(id.id),
+    // Tags = customisation Premium : les rendre invisibles publiquement quand
+    // le compte n'est plus Premium (fin de trial ou annulation). Les données
+    // restent en base, on les ré-affichera dès re-souscription.
+    tags: premium ? await getTags(id.id) : [],
     hasPhoto: !!id.photo_file,
+    // Intro Markdown du profil (OSS) : visible pour tous, qu'on soit Premium ou non.
+    profile_intro_md: id.profile_intro_md || "",
     avatarSize: settings.avatar_size,   // taille publique de l'avatar (cf. pub-av-wrap[data-size])
     avatarShape: settings.avatar_shape, // forme publique : "circle" | "square"
     pubkey: id.pubkey,
@@ -282,6 +289,10 @@ route.post("/api/cover", async (c) => {
 route.delete("/api/cover", async (c) => {
   const id = await currentIdentity(c);
   if (!id) return c.json({ error: "unauthorized" }, 401);
+  // Cover = feature Premium. La création est gated en POST ; on gate aussi la
+  // suppression pour cohérence (cas DB héritée avec cover_file présent alors
+  // que le compte n'est plus Premium → on laisse le serveur refuser explicitement).
+  if (!(await isPremium(id.id))) return c.json({ error: "premium required" }, 402);
   if (id.cover_file) {
     try { rmSync(resolve(DATA_DIR, id.cover_file)); } catch { /* ignoré */ }
   }
@@ -322,6 +333,7 @@ route.get("/api/me", async (c) => {
     pending: await pendingRequestCount(id.id),
     recoveryEmail: id.recovery_email,
     hasPhoto: !!id.photo_file,
+    profile_intro_md: id.profile_intro_md || "",
     // Couverture + boutons (vue propriétaire) : renvoyés tels quels pour l'édition ;
     // l'affichage public reste conditionné au statut Premium (cf. route publique).
     cover: id.cover_file
@@ -414,9 +426,13 @@ route.delete("/api/card/field/:key", async (c) => {
     : c.json({ error: "not found" }, 404);
 });
 
+// Tags du profil = feature Premium (mots-clés affichés sur /@handle + utilisés
+// par la recherche). Mutation gated en POST/DELETE ; la lecture reste ouverte
+// (cf. /api/me et /@handle/api).
 route.post("/api/tags", async (c) => {
   const id = await currentIdentity(c);
   if (!id) return c.json({ error: "unauthorized" }, 401);
+  if (!(await isPremium(id.id))) return c.json({ error: "premium required" }, 402);
   const { tag } = await readBody<{ tag: string }>(c);
   if (typeof tag !== "string") return c.json({ error: "tag required" }, 400);
   try {
@@ -430,9 +446,25 @@ route.post("/api/tags", async (c) => {
 route.delete("/api/tags/:tag", async (c) => {
   const id = await currentIdentity(c);
   if (!id) return c.json({ error: "unauthorized" }, 401);
+  if (!(await isPremium(id.id))) return c.json({ error: "premium required" }, 402);
   return (await removeTag(id.id, c.req.param("tag")))
     ? c.json({ ok: true })
     : c.json({ error: "not found" }, 404);
+});
+
+// Intro du profil (OSS, 0032) : texte Markdown affiché au-dessus de la bio sur
+// /@handle. Ouverte à tous les comptes (free ET Premium). Précédemment hébergée
+// par `PUT /api/space/profile-intro` côté Premium, conservé pour back-compat.
+route.put("/api/me/profile-intro", async (c) => {
+  const id = await currentIdentity(c);
+  if (!id) return c.json({ error: "unauthorized" }, 401);
+  const b = await readBody<{ intro_md?: string }>(c);
+  const raw = typeof b.intro_md === "string" ? b.intro_md : "";
+  if (raw.length > PROFILE_INTRO_MAX_CHARS) {
+    return c.json({ error: `intro trop longue (max ${PROFILE_INTRO_MAX_CHARS} caractères)` }, 400);
+  }
+  const stored = await setProfileIntro(id.id, raw);
+  return c.json({ profile_intro_md: stored });
 });
 
 route.post("/api/photo", async (c) => {

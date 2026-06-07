@@ -187,6 +187,18 @@ body:has(#app[data-view="profile"] .pub-hero-page) .topbar.site-header input::pl
 body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top-left,
 body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top { display: none !important; }
 
+/* Boutons « Retour » et « Créer ma page » dans la topbar du profil public :
+   icône + label, version pill arrondie en desktop, cercle icône en mobile (cf.
+   media query plus bas). */
+.pub-back-btn,
+.pub-create-cta {
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .35rem .7rem .35rem .55rem !important;
+  border-radius: 999px !important;
+}
+.pub-back-btn svg,
+.pub-create-cta svg { flex: none; }
+
 /* ============================== Mascotte Milo ============================== */
 .milo { display: block; overflow: visible; }
 .milo-body { fill: #43b58f; stroke: #2c7d63; stroke-width: 2.5; }
@@ -798,6 +810,101 @@ body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top { display: non
   padding: .2rem .5rem; border-radius: 999px;
   background: color-mix(in srgb, var(--success, #2ecc71) 18%, transparent);
   color: var(--success, #2ecc71);
+}
+
+/* ── Tabs Premium : menu de navigation entre les 3 panes ──
+   Pattern segmented-control sticky sous la topbar. JS bascule
+   `[data-prem-pane]` via la classe `.is-active` sur la pane et le bouton. */
+.prem-tabs {
+  display: flex; gap: .35rem; flex-wrap: nowrap;
+  margin: 0 0 1.1rem;
+  padding: .25rem;
+  background: var(--bg-soft, color-mix(in srgb, var(--card) 70%, var(--bg)));
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm, 10px);
+  position: sticky; top: 0; z-index: 2;
+}
+.prem-tab-btn {
+  flex: 1 1 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: .4rem; min-width: 0;
+  padding: .55rem .55rem;
+  background: transparent; color: var(--muted);
+  border: none; border-radius: calc(var(--r-sm, 10px) - 2px);
+  font: inherit; font-weight: 600; font-size: .85rem;
+  cursor: pointer;
+  transition: background .12s, color .12s;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.prem-tab-btn:hover { background: color-mix(in srgb, var(--accent-soft, var(--card)) 50%, transparent); color: var(--fg); }
+.prem-tab-btn:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
+.prem-tab-btn.is-active {
+  background: var(--card);
+  color: var(--fg);
+  box-shadow: 0 1px 2px rgba(0,0,0,.18);
+}
+.prem-tab-btn svg { flex: none; color: var(--accent-ink); }
+.prem-tab-btn > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* Mobile : padding et fonte plus compacts pour tenir sur 1 ligne. */
+@media (max-width: 540px) {
+  .prem-tabs { gap: .2rem; padding: .2rem; }
+  .prem-tab-btn { padding: .5rem .35rem; gap: .3rem; }
+  .prem-tab-btn > span { font-size: .74rem; }
+}
+/* Très petit : on cache le label, icône seule (chip carré). */
+@media (max-width: 380px) {
+  .prem-tab-btn > span { display: none; }
+}
+
+/* Une pane = une section logique du Premium. JS toggle [hidden]. */
+.prem-pane[hidden] { display: none; }
+
+/* ── Upsell Premium (pane Personnalisation, compte non-Premium) ──
+   Carte unique mise en avant : titre + bénéfices + CTA essai gratuit. */
+.prem-upsell {
+  margin: 0 0 1rem;
+  padding: 1.5rem 1.4rem 1.3rem;
+  border-radius: var(--r-md, 14px);
+  border: 1px solid color-mix(in srgb, var(--accent-ink) 30%, transparent);
+  background:
+    radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--accent-ink) 18%, transparent), transparent 55%),
+    color-mix(in srgb, var(--card) 92%, transparent);
+}
+.prem-upsell-head { display: flex; align-items: flex-start; gap: .8rem; margin-bottom: .8rem; }
+.prem-upsell-ic {
+  flex: none;
+  width: 42px; height: 42px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--accent-ink) 22%, transparent);
+  border-radius: 50%;
+  color: var(--accent-ink);
+}
+.prem-upsell-title { margin: 0 0 .15rem; font-size: 1.05rem; line-height: 1.35; font-weight: 700; }
+.prem-upsell-sub { margin: 0; font-size: .88rem; line-height: 1.45; color: var(--muted); }
+.prem-upsell-list {
+  list-style: none; margin: 0 0 1rem; padding: 0;
+  display: grid; gap: .4rem;
+}
+.prem-upsell-list li {
+  display: flex; align-items: center; gap: .55rem;
+  font-size: .9rem; color: var(--fg);
+}
+.prem-upsell-list li svg { flex: none; color: var(--accent-ink); }
+.prem-upsell-actions {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .6rem;
+}
+#prem-upsell-trial {
+  display: inline-flex; align-items: center; flex-wrap: wrap;
+  gap: .35rem .55rem;
+  padding: .7rem 1.1rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.prem-upsell-trial-sub {
+  display: block; width: 100%;
+  font-size: .7rem; font-weight: 500; opacity: .82;
+  margin-top: -.05rem;
 }
 
 /* ── Titres de sections (Mon abonnement / Mon espace privé / Mon profil) ── */
@@ -1645,8 +1752,23 @@ body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top { display: non
 .cv-sb-result .hd { font-size: .8rem; color: var(--muted); }
 .cv-sb-empty { padding: 1.25rem 1.1rem; color: var(--muted); font-size: .9rem; text-align: center; }
 
-/* Caché par défaut sur grand écran (le bio est dans #pub-about à droite) */
-.pub-cover-about { display: none; }
+/* Bloc « intro + tags + socials » sous la cover, modèle Milo : visible pour
+   TOUS les comptes (free ET premium), sur desktop comme sur mobile. Sur grand
+   écran on lui donne la même largeur que le hero et un padding confortable,
+   sur mobile une variante est appliquée par la media query plus bas. */
+.pub-cover-about {
+  position: relative; z-index: 3;
+  padding: 1.4rem 1.5rem 1.6rem;
+  background: var(--bg);
+  display: flex; flex-direction: column; gap: .85rem;
+}
+.pub-cover-about .pub-about-tags { display: flex; flex-wrap: wrap; gap: .35rem; }
+/* L'onglet « À propos » desktop fait doublon avec ce bloc — masquage en grand
+   écran ; sur mobile c'est l'inverse (cf. media query). */
+@media (min-width: 768px) {
+  #pub-about { display: none !important; }
+  .pub-tabs [data-tab="about"] { display: none !important; }
+}
 
 /* --- Mobile ≤ 767px : carrousel horizontal cover → panneaux --- */
 @media (max-width: 767px) {
@@ -3857,7 +3979,18 @@ button.profile-chip:hover, button.profile-chip[aria-expanded="true"] { border-co
   .brand-text { display: none; }
   .profile-chip-name { display: none; }
   .site-header-center .profile-chip { padding-right: .5rem; }
-  .editor-head-right .btn.sm:not(#notif-bell):not(#qr-btn) { display: none; }
+  .editor-head-right .btn.sm:not(#notif-bell):not(#qr-btn):not(#pub-cover-back):not(#pub-create-cta) { display: none; }
+  /* Sur mobile les boutons header « Retour » et « Créer ma page » se réduisent
+     à leur icône (gain de place) : label masqué, cercle compact 36×36. */
+  #pub-cover-back > span,
+  #pub-create-cta > span { display: none; }
+  #pub-cover-back,
+  #pub-create-cta {
+    width: 36px; height: 36px;
+    padding: 0 !important;
+    border-radius: 50% !important;
+    justify-content: center;
+  }
   /* /status & invite gardent le bouton thème flottant (pas de toggle intégré)
      → on réserve la place du coin haut-droit. La landing l'a dans la barre. */
   #app[data-view="status"] .topbar.site-header,
@@ -5738,6 +5871,21 @@ body:has(.overlay.open) .bottom-nav { transform: translateY(100%); }
   .comm-right .chat-form { gap: .2rem !important; }
   .comm-right .chat-form > button { padding: .3rem .4rem !important; font-size: .82rem !important; }
 }
+/* Pas de conversation montée → on masque le pane droit (placeholder inutile)
+   et la sidebar prend toute la largeur restante. Le placeholder ne s'affiche
+   plus du tout : on ne le voit que le temps que rien ne soit sélectionné, ce
+   qui produit un « bloc noir » disgracieux à côté d'une liste vide. */
+.comm-layout:not(:has(#comm-right .chat-card)):not(:has(#comm-right .comm-iframe-wrap)) {
+  grid-template-columns: 56px 1fr;
+}
+.comm-layout:not(:has(#comm-right .chat-card)):not(:has(#comm-right .comm-iframe-wrap)) .comm-right {
+  display: none;
+}
+@container comms (max-width: 600px) {
+  .comm-layout:not(:has(#comm-right .chat-card)):not(:has(#comm-right .comm-iframe-wrap)) {
+    grid-template-columns: 63px 1fr;
+  }
+}
 /* Barre gauche */
 .comm-sidebar {
   display: flex; flex-direction: column;
@@ -6117,6 +6265,22 @@ body:has(.overlay.open) .bottom-nav { transform: translateY(100%); }
   flex: 1; min-height: 0; width: 100%;
   border: 0; background: var(--bg);
 }
+
+/* CTA Premium injecté dans commRight quand l'utilisateur clique « Démarrer un
+   live » sans abonnement actif. Remplace l'iframe broadcast. */
+.live-cta-premium {
+  flex: 1; min-height: 0; overflow: auto;
+  padding: 2rem 1.4rem; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: .6rem;
+}
+.live-cta-premium .live-cta-icon { font-size: 2.6rem; }
+.live-cta-premium .live-cta-h { margin: 0; font-size: 1.15rem; }
+.live-cta-premium .live-cta-lead { opacity: .85; font-size: .95rem; margin: 0; max-width: 460px; }
+.live-cta-premium .live-cta-list {
+  list-style: none; padding: 0; margin: .4rem 0 1rem;
+  text-align: left; display: inline-block; font-size: .92rem;
+}
+.live-cta-premium .live-cta-list li { padding: .15rem 0; }
 
 /* Topbar avec bouton d'action à droite (« + Nouveau groupe » en mode Groupes). */
 .comm-topbar { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
@@ -6954,6 +7118,26 @@ h1, h2, h3,
   font-size: .82rem;
 }
 .pub-intro-edit-hint a:hover { color: var(--accent-ink); text-decoration: underline; }
+/* CTA « Définir mon intro » affiché dans .pub-cover-about quand l'intro est
+   vide et qu'on est sur son propre profil. Aspect bouton discret, accent. */
+.pub-intro-cta {
+  align-self: flex-start;
+  display: inline-flex; align-items: center; gap: .45rem;
+  padding: .55rem .9rem;
+  border-radius: var(--r-sm, 10px);
+  background: color-mix(in srgb, var(--accent, var(--accent-ink)) 18%, transparent);
+  color: var(--fg);
+  text-decoration: none;
+  font-weight: 600; font-size: .9rem;
+  border: 1px dashed color-mix(in srgb, var(--accent-ink) 55%, transparent);
+  transition: background .12s, border-color .12s, transform .08s;
+}
+.pub-intro-cta:hover {
+  background: color-mix(in srgb, var(--accent-ink) 22%, transparent);
+  border-color: var(--accent-ink);
+}
+.pub-intro-cta:active { transform: scale(.98); }
+.pub-intro-cta svg { color: var(--accent-ink); flex: none; }
 .pub-intro > :first-child { margin-top: 0; }
 .pub-intro > :last-child  { margin-bottom: 0; }
 .pub-intro h1 { font-size: 1.4rem; font-weight: 700; margin: .9rem 0 .35rem; letter-spacing: -.01em; }
@@ -7435,4 +7619,145 @@ h1, h2, h3,
   border: 1px dashed var(--line, rgba(255,255,255,.1));
   border-radius: 10px;
   text-align: center;
+}
+
+/* ── Recherche + barre de tags (style Netflix-lite) ──────────────────────── */
+.live-search-bar {
+  position: relative;
+  margin-top: .9rem;
+  display: flex;
+  align-items: center;
+}
+.live-search-bar #live-search {
+  width: 100%;
+  padding: .55rem .85rem .55rem 2rem;
+  background: var(--inset, rgba(255,255,255,.04));
+  border: 1px solid var(--line, rgba(255,255,255,.08));
+  border-radius: 999px;
+  color: inherit;
+  font-size: .88rem;
+  outline: none;
+  transition: border-color 150ms ease;
+}
+.live-search-bar #live-search:focus { border-color: rgba(239, 68, 68, .5); }
+.live-search-bar::before {
+  content: "🔍";
+  position: absolute;
+  left: .65rem; top: 50%;
+  transform: translateY(-50%);
+  font-size: .85rem; opacity: .55;
+  pointer-events: none;
+}
+.live-search-clear {
+  position: absolute; right: .35rem; top: 50%;
+  transform: translateY(-50%);
+  width: 22px; height: 22px;
+  border: 0; background: rgba(255,255,255,.1);
+  color: inherit; border-radius: 50%;
+  cursor: pointer; font-size: .7rem;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.live-search-clear:hover { background: rgba(255,255,255,.18); }
+
+.live-tagbar {
+  display: flex; gap: .35rem; flex-wrap: wrap;
+  margin-top: .6rem;
+}
+.lv-tag {
+  border: 1px solid var(--line, rgba(255,255,255,.1));
+  background: var(--inset, rgba(255,255,255,.03));
+  color: inherit;
+  padding: .2rem .65rem;
+  border-radius: 999px;
+  font-size: .76rem;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.lv-tag:hover { background: rgba(239, 68, 68, .12); border-color: rgba(239, 68, 68, .35); }
+.lv-tag.on { background: #ef4444; border-color: #ef4444; color: white; font-weight: 600; }
+.lv-tag-clear { font-weight: 600; opacity: .85; }
+
+/* ── Grille de cartes EN DIRECT (Netflix-style) ──────────────────────────── */
+.live-section-h .lv-count {
+  display: inline-block;
+  margin-left: .4rem;
+  padding: .05rem .45rem;
+  background: rgba(255,255,255,.08);
+  border-radius: 999px;
+  color: inherit; opacity: .7;
+  font-size: .68rem; font-weight: 600;
+  text-transform: none; letter-spacing: 0;
+}
+
+.lv-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: .85rem;
+}
+
+.lv-tile {
+  display: flex; flex-direction: column;
+  background: var(--inset, rgba(255,255,255,.03));
+  border: 1px solid var(--line, rgba(255,255,255,.06));
+  border-radius: 12px; overflow: hidden;
+  color: inherit; text-decoration: none;
+  transition: transform 150ms var(--ease-out, ease-out),
+              border-color 150ms ease,
+              box-shadow 150ms ease;
+}
+.lv-tile:hover {
+  transform: translateY(-3px) scale(1.01);
+  border-color: rgba(239, 68, 68, .35);
+  box-shadow: 0 8px 24px -10px rgba(239, 68, 68, .35);
+}
+
+.lv-poster {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  background: #0c0e14;
+  overflow: hidden;
+}
+.lv-poster-img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.lv-poster-fallback {
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #1f2937, #ef4444);
+  color: white; font-size: 2.2rem; font-weight: 700;
+}
+.lv-badge-live {
+  position: absolute; top: .45rem; left: .45rem;
+  display: inline-flex; align-items: center; gap: .3rem;
+  padding: .15rem .45rem;
+  background: #ef4444; color: white;
+  border-radius: 4px;
+  font-size: .68rem; font-weight: 700; letter-spacing: .04em;
+}
+.lv-badge-live .live-dot { width: .45rem; height: .45rem; background: white; box-shadow: none; }
+.lv-badge-since {
+  position: absolute; bottom: .45rem; right: .45rem;
+  padding: .1rem .45rem;
+  background: rgba(0,0,0,.7); color: white;
+  border-radius: 4px;
+  font-size: .65rem;
+}
+
+.lv-tile-body { padding: .55rem .7rem .65rem; display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.lv-tile-title { font-size: .9rem; line-height: 1.25; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.lv-tile-owner { font-size: .72rem; opacity: .7; }
+.lv-tile-tags { display: flex; gap: .25rem; flex-wrap: wrap; margin-top: .25rem; }
+.lv-tile-tag {
+  font-size: .62rem;
+  padding: .05rem .35rem;
+  background: rgba(255,255,255,.06);
+  border-radius: 999px;
+  opacity: .85;
+}
+
+@media (max-width: 480px) {
+  .lv-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: .55rem; }
+  .lv-tile-title { font-size: .82rem; }
 }

@@ -158,26 +158,6 @@ export const avatarHtml = (handle, hasPhoto, cls) =>
     ? `<img class="${cls}" src="/api/identities/${encodeURIComponent(handle)}/photo" alt="" />`
     : `<span class="${cls}">${esc((handle[0] || "·").toUpperCase())}</span>`;
 
-// Chip profil réutilisable dans tous les headers.
-// opts.photoSrc  → URL de la photo (optionnel, fallback avatar SVG)
-// opts.name      → nom d'affichage (optionnel)
-// opts.linkTo    → rend le chip cliquable (href)
-export function profileChipHtml(handle, { photoSrc = null, name = null, linkTo = null } = {}) {
-  if (!handle) return "";
-  const initial = (handle[0] || "·").toUpperCase();
-  const av = photoSrc
-    ? `<img class="profile-chip-av" src="${esc(photoSrc)}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" /><div class="profile-chip-av profile-chip-svg" style="display:none">${genericAvatarSvg(handle, initial)}</div>`
-    : `<div class="profile-chip-av profile-chip-svg">${genericAvatarSvg(handle, initial)}</div>`;
-  const text = `<div class="profile-chip-info">
-    <span class="profile-chip-handle">@${esc(handle)}</span>
-    ${name ? `<span class="profile-chip-name">${esc(name)}</span>` : ""}
-  </div>`;
-  const inner = av + text;
-  return linkTo
-    ? `<a class="profile-chip" href="${esc(linkTo)}" title="Mon espace">${inner}</a>`
-    : `<div class="profile-chip">${inner}</div>`;
-}
-
 // Header commun : brand gauche · centre · actions droite.
 export function siteHeader({ center = "", right = "" } = {}) {
   return `<header class="topbar site-header">

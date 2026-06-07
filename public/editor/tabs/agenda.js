@@ -61,6 +61,9 @@ export function renderAgendaColumn(data, { reqFilterChips, requestsHtml, dayLoad
           <div class="agenda-events">${eventsHtml(data.events, true)}</div>
         </div>
         <div class="agenda-panel" id="agenda-rdv" role="tabpanel" hidden style="padding:10px">
+          <div class="ev-toolbar">
+            <span class="ev-toolbar-title">${icon("users", 15)} Mes rendez-vous</span>
+          </div>
           <div class="req-filters" role="tablist" aria-label="Filtrer les demandes">
             ${reqFilterChips(data.requests || [])}
           </div>

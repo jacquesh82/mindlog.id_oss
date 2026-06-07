@@ -44,7 +44,7 @@ test("en-têtes de sécurité présents sur toutes les réponses", async () => {
   const res = await app.request("/");
   assert.match(res.headers.get("content-security-policy") ?? "", /default-src 'self'/);
   assert.equal(res.headers.get("x-content-type-options"), "nosniff");
-  assert.equal(res.headers.get("x-frame-options"), "DENY");
+  assert.equal(res.headers.get("x-frame-options"), "SAMEORIGIN");
   assert.equal(res.headers.get("referrer-policy"), "strict-origin-when-cross-origin");
 });
 
@@ -893,4 +893,118 @@ test("groupe : renommage (admin+) journalisé dans events", async () => {
   const rn = detail.events.find((e) => e.kind === "rename");
   assert.ok(rn);
   assert.equal(rn?.payload?.newName, "New");
+});
+
+/* -------------- Parité fonctionnelle chat 1:1 ↔ groupe ------------------- */
+
+test("groupe : message avec ttl custom → expires_at ≈ now+ttl", async () => {
+  const { a } = await makeTrio();
+  const g = (await (await app.request("/api/groups", {
+    method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ name: "G", members: ["bob"] }),
+  })).json()) as { id: string };
+  const before = Date.now();
+  await app.request(`/api/groups/${g.id}/messages`, {
+    method: "POST", headers: keyHeaders(a.access_key),
+    body: JSON.stringify({ iv: "iv1", ciphertext: "ct1", ttl: 3600 }),
+  });
+  const after = Date.now();
+  const msgs = (await (await app.request(`/api/groups/${g.id}/messages`, { headers: { "x-access-key": a.access_key } })).json()) as { messages: { expires_at: string }[] };
+  const exp = new Date(msgs.messages.at(-1)!.expires_at).getTime();
+  // borne raisonnable : exp doit être entre before+~1h et after+~1h.
+  assert.ok(exp >= before + 3600 * 1000 - 1000 && exp <= after + 3600 * 1000 + 1000, `expires_at hors borne: ${exp - before}`);
+});
+
+test("groupe : delete message (sender seulement)", async () => {
+  const { a, b } = await makeTrio();
+  const g = (await (await app.request("/api/groups", {
+    method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ name: "G", members: ["bob"] }),
+  })).json()) as { id: string };
+  await app.request(`/api/groups/${g.id}/messages`, {
+    method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ iv: "iv1", ciphertext: "ct1" }),
+  });
+  const msgs = (await (await app.request(`/api/groups/${g.id}/messages`, { headers: { "x-access-key": a.access_key } })).json()) as { messages: { id: number }[] };
+  const mid = msgs.messages.at(-1)!.id;
+  // bob ne peut pas delete (pas l'auteur)
+  assert.equal((await app.request(`/api/groups/${g.id}/messages/${mid}`, { method: "DELETE", headers: { "x-access-key": b.access_key } })).status, 404);
+  // alice peut
+  assert.equal((await app.request(`/api/groups/${g.id}/messages/${mid}`, { method: "DELETE", headers: { "x-access-key": a.access_key } })).status, 200);
+});
+
+test("groupe : burn message lecture-unique (réservé membres)", async () => {
+  const { a, b, c } = await makeTrio();
+  const g = (await (await app.request("/api/groups", {
+    method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ name: "G", members: ["bob"] }),
+  })).json()) as { id: string };
+  await app.request(`/api/groups/${g.id}/messages`, {
+    method: "POST", headers: keyHeaders(a.access_key),
+    body: JSON.stringify({ iv: "iv2", ciphertext: "ct2", readOnce: true }),
+  });
+  const msgs = (await (await app.request(`/api/groups/${g.id}/messages`, { headers: { "x-access-key": b.access_key } })).json()) as { messages: { id: number; read_once: number }[] };
+  const mid = msgs.messages.at(-1)!.id;
+  assert.equal(msgs.messages.at(-1)!.read_once, 1);
+  // carol (non-membre) → 403
+  assert.equal((await app.request(`/api/groups/${g.id}/messages/${mid}/burn`, { method: "POST", headers: keyHeaders(c.access_key), body: "{}" })).status, 403);
+  // bob (membre) peut brûler
+  assert.equal((await app.request(`/api/groups/${g.id}/messages/${mid}/burn`, { method: "POST", headers: keyHeaders(b.access_key), body: "{}" })).status, 200);
+  // message disparu
+  const after = (await (await app.request(`/api/groups/${g.id}/messages`, { headers: { "x-access-key": a.access_key } })).json()) as { messages: { id: number }[] };
+  assert.ok(!after.messages.some((m) => m.id === mid));
+});
+
+test("groupe : burn NE supprime PAS un message non-lecture-unique", async () => {
+  const { a, b } = await makeTrio();
+  const g = (await (await app.request("/api/groups", {
+    method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ name: "G", members: ["bob"] }),
+  })).json()) as { id: string };
+  await app.request(`/api/groups/${g.id}/messages`, {
+    method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ iv: "ivx", ciphertext: "ctx" }),
+  });
+  const msgs = (await (await app.request(`/api/groups/${g.id}/messages`, { headers: { "x-access-key": b.access_key } })).json()) as { messages: { id: number }[] };
+  const mid = msgs.messages.at(-1)!.id;
+  // burn d'un msg régulier (read_once=0) → 404 (rien à brûler)
+  assert.equal((await app.request(`/api/groups/${g.id}/messages/${mid}/burn`, { method: "POST", headers: keyHeaders(b.access_key), body: "{}" })).status, 404);
+});
+
+test("groupe : réaction toggle (membres)", async () => {
+  const { a, b, c } = await makeTrio();
+  const g = (await (await app.request("/api/groups", {
+    method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ name: "G", members: ["bob"] }),
+  })).json()) as { id: string };
+  await app.request(`/api/groups/${g.id}/messages`, {
+    method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ iv: "ivr", ciphertext: "ctr" }),
+  });
+  const msgs = (await (await app.request(`/api/groups/${g.id}/messages`, { headers: { "x-access-key": b.access_key } })).json()) as { messages: { id: number }[] };
+  const mid = msgs.messages.at(-1)!.id;
+  // carol (non-membre) → 403
+  assert.equal((await app.request(`/api/groups/${g.id}/messages/${mid}/react`, { method: "POST", headers: keyHeaders(c.access_key), body: JSON.stringify({ emoji: "👍" }) })).status, 403);
+  // bob réagit → 200
+  assert.equal((await app.request(`/api/groups/${g.id}/messages/${mid}/react`, { method: "POST", headers: keyHeaders(b.access_key), body: JSON.stringify({ emoji: "👍" }) })).status, 200);
+  const after = (await (await app.request(`/api/groups/${g.id}/messages`, { headers: { "x-access-key": a.access_key } })).json()) as { messages: { id: number; reactions: { emoji: string; count: number }[] }[] };
+  const m = after.messages.find((x) => x.id === mid)!;
+  assert.equal(m.reactions.find((r) => r.emoji === "👍")?.count, 1);
+});
+
+test("groupe : pièce jointe upload + download (membres) + non-membre 403", async () => {
+  const { a, b, c } = await makeTrio();
+  const g = (await (await app.request("/api/groups", {
+    method: "POST", headers: keyHeaders(a.access_key), body: JSON.stringify({ name: "G", members: ["bob"] }),
+  })).json()) as { id: string };
+  // Upload : carol (non-membre) → 403
+  const fd403 = new FormData();
+  fd403.append("blob", new Blob([new Uint8Array([1, 2, 3])], { type: "application/octet-stream" }), "a.bin");
+  assert.equal((await app.request(`/api/groups/${g.id}/attachments`, { method: "POST", headers: { "x-access-key": c.access_key }, body: fd403 })).status, 403);
+  // Alice (membre+owner) upload
+  const fd = new FormData();
+  const payload = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
+  fd.append("blob", new Blob([payload], { type: "application/octet-stream" }), "a.bin");
+  const upRes = await app.request(`/api/groups/${g.id}/attachments`, { method: "POST", headers: { "x-access-key": a.access_key }, body: fd });
+  assert.equal(upRes.status, 201);
+  const { id: attId } = (await upRes.json()) as { id: number };
+  // bob (membre) télécharge → 200 + bytes intacts
+  const dl = await app.request(`/api/groups/${g.id}/attachments/${attId}`, { headers: { "x-access-key": b.access_key } });
+  assert.equal(dl.status, 200);
+  const buf = new Uint8Array(await dl.arrayBuffer());
+  assert.deepEqual([...buf], [...payload]);
+  // carol (non-membre) télécharge → 403
+  assert.equal((await app.request(`/api/groups/${g.id}/attachments/${attId}`, { headers: { "x-access-key": c.access_key } })).status, 403);
 });

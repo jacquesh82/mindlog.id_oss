@@ -64,9 +64,10 @@ export const setLastHandle = (h) => {
 };
 
 
-export function setMeProfile({ name, hasPhoto } = {}) {
+export function setMeProfile({ name, hasPhoto, plan } = {}) {
   if (name !== undefined) appState.me.name = name;
   if (hasPhoto !== undefined) appState.me.hasPhoto = !!hasPhoto;
+  if (plan !== undefined) appState.me.plan = plan === "premium" ? "premium" : "free";
   appState.me.photoTs = Date.now();
 }
 

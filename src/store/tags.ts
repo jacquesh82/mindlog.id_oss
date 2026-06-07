@@ -8,7 +8,7 @@ import { StoreError } from "./identities.js";
 
 /* ---------------------------------- Tags --------------------------------- */
 
-export const MAX_TAGS = 20;
+const MAX_TAGS = 20;
 export const TAG_MAX_LEN = 30;
 
 /** Normalise un tag : retire le # initial, compacte les espaces, borne la longueur. */

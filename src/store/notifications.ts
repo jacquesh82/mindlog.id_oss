@@ -125,3 +125,15 @@ export async function setCoverFile(
     .where(eq(identities.id, identityId));
 }
 
+/** Intro Markdown du profil (OSS, 0032) : max 4000 chars, affichée en haut de
+ *  /@handle. Borne silencieusement (slice) — préserver un append-only safe. */
+export const PROFILE_INTRO_MAX_CHARS = 4000;
+export async function setProfileIntro(identityId: number, raw: string | null | undefined): Promise<string> {
+  const clean = String(raw ?? "").slice(0, PROFILE_INTRO_MAX_CHARS);
+  await db
+    .update(identities)
+    .set({ profile_intro_md: clean })
+    .where(eq(identities.id, identityId));
+  return clean;
+}
+

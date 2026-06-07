@@ -16,6 +16,9 @@ public/editor/tabs/premium.js
 public/live/
 public/plugins/live.js
 
+# Plugin d'invitation Premium au lancement (web)
+public/plugins/premium-upsell.js
+
 # Migrations premium
 drizzle/0020_premium_subscriptions.sql
 drizzle/0021_premium_page_features.sql
@@ -27,6 +30,7 @@ drizzle/0026_premium_space_intro.sql
 drizzle/0027_premium_space_profile_intro.sql
 drizzle/0028_premium_space_benefits.sql
 drizzle/0029_premium_lives.sql
+drizzle/0033_premium_profile_intro_backfill.sql
 
 # Docs internes
 docs/premium-offer-plan.md

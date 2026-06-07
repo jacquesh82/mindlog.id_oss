@@ -13,7 +13,7 @@ import { BookingRequest } from "./requests.js";
 /* ----------------------------- Rappels de RDV ---------------------------- */
 
 /** Jalons de rappel (jours avant le RDV), du plus lointain au plus proche. */
-export const REMINDER_MILESTONES: { code: string; days: number }[] = [
+const REMINDER_MILESTONES: { code: string; days: number }[] = [
   { code: "1m", days: 30 },
   { code: "1w", days: 7 },
   { code: "3d", days: 3 },

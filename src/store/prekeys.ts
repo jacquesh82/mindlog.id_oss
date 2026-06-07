@@ -10,7 +10,7 @@ import { getIdentityById } from "./identities.js";
 
 /* ---- Prekeys X3DH (matériel public, opaque au serveur) ---- */
 
-export const MAX_OPK_POOL = 200; // borne par identité (anti-flood d'écriture)
+const MAX_OPK_POOL = 200; // borne par identité (anti-flood d'écriture)
 
 export interface PrekeyBundleInput {
   spkPub: string;

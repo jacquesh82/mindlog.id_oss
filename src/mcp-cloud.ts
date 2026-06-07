@@ -1310,6 +1310,7 @@ const PROBE_IDENTITY: Identity = {
   recovery_email: "",
   pubkey: "",
   settings: "{}",
+  profile_intro_md: "",
   created_at: "",
 };
 

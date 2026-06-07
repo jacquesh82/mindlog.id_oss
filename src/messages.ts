@@ -373,6 +373,19 @@ export async function toggleReaction(meId: number, messageId: number, emoji: str
   if (!rows.length) return false;
   const [a, b] = rows[0].pair.split(":").map(Number);
   if (a !== meId && b !== meId) return false;
+  return _applyReaction(meId, messageId, emoji);
+}
+
+/** Toggle d'une réaction sur un message de groupe. L'appartenance au groupe est
+ *  vérifiée côté route — ici on s'assure juste que le message est bien rattaché
+ *  au groupe (pair = "g:<gid>"). */
+export async function toggleGroupReaction(meId: number, gid: string, messageId: number, emoji: string): Promise<boolean> {
+  const rows = await db.select({ pair: messages.pair }).from(messages).where(eq(messages.id, messageId)).limit(1);
+  if (!rows.length || rows[0].pair !== groupPair(gid)) return false;
+  return _applyReaction(meId, messageId, emoji);
+}
+
+async function _applyReaction(meId: number, messageId: number, emoji: string): Promise<boolean> {
   const e = emoji.slice(0, 8);
   if (!e) return false;
   const existing = await db

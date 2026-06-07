@@ -225,6 +225,20 @@
       "when": 1780811000000,
       "tag": "0031_groups_owner_events",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1780900000000,
+      "tag": "0032_identity_profile_intro",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1780900100000,
+      "tag": "0033_premium_profile_intro_backfill",
+      "breakpoints": true
     }
   ]
 }

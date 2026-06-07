@@ -8,11 +8,11 @@ import { ensureE2E, e2eEncrypt, e2eDecrypt } from "./crypto/e2e.js";
 import { e2eVaultGet, e2eVaultPut, e2eSaveVault, e2eRestoreVault } from "./crypto/vault.js";
 import { isRatchetCiphertext, rAesDec, rAesEnc, rConcat, rEq, rIdbGet, rIdbPut, rKdfCk, rKdfMk, rPublicOf, rRawPub, ratchetDecrypt, ratchetEnsurePrekeys, ratchetRecallSent, ratchetSend } from "./crypto/ratchet.js";
 import { mdDecryptEnvelope, mdDeviceId, mdFanoutEncrypt, mdRecallSent, mdRegisterDevice, mdSelfDecrypt } from "./crypto/multidevice.js";
-import { gApi, gLoadMessages, gRotate, gSendMessage, gSyncKeys } from "./crypto/groups.js";
+import { gApi, gAttachDownload, gAttachUpload, gLoadMessages, gRotate, gSendMessage, gSyncKeys } from "./crypto/groups.js";
 import { groupDigits, safetyNumber, sha256hex, verifyClear, verifyGet, verifyPut } from "./crypto/verify.js";
 import { CREDIT, LANG, RTL, langSelectHtml, setLangCode, t } from "./i18n.js";
 import { confirmDialog, copyText, esc, promptDialog, promptPassphrase, promptPin, toast } from "./ui/dom.js";
-import { SOCIALS, SOCIAL_BY_KEY, avatarHtml, branchNavSvg, genericAvatarSvg, icon, isSocialKey, miloSvg, profileChipHtml, socialFieldKey, socialIcon, socialUrl } from "./ui/icons.js";
+import { SOCIALS, SOCIAL_BY_KEY, avatarHtml, branchNavSvg, genericAvatarSvg, icon, isSocialKey, miloSvg, socialFieldKey, socialIcon, socialUrl } from "./ui/icons.js";
 import { ACCENTS, ACCENT_STORE, applyAccent, applyTheme, storedAccent, storedTheme, swatchesHtml, themeToggleHtml, toggleTheme } from "./theme.js";
 import { openE2eBackup, openE2eRestore, openKeyRecovery, openSafetyNumber } from "./ui/modals.js";
 import { addDeckColumn, deckState, removeDeckColumn } from "./editor/deck.js";
@@ -171,6 +171,40 @@ const onSSE = (type, fn) => {
 let _brandPalette = null;
 let _brandHideT = null;
 let _brandFlashT = null;
+// Buffer autour de la palette (et du logo) : tant que le curseur est dans cette
+// zone étendue, on ne ferme pas. Évite les fermetures intempestives quand on
+// traverse le gap entre le logo et la palette, ou si la souris frôle un coin.
+const BRAND_PALETTE_BUFFER = 48; // px
+let _brandMoveBound = false;
+function _isCursorNearPalette(clientX, clientY) {
+  if (!_brandPalette) return false;
+  const inflate = (r) => ({
+    left: r.left - BRAND_PALETTE_BUFFER,
+    right: r.right + BRAND_PALETTE_BUFFER,
+    top: r.top - BRAND_PALETTE_BUFFER,
+    bottom: r.bottom + BRAND_PALETTE_BUFFER,
+  });
+  const inRect = (r) => clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom;
+  if (inRect(inflate(_brandPalette.getBoundingClientRect()))) return true;
+  // Le logo Milo aussi : permet de revenir sur le logo sans fermer.
+  const bm = document.querySelector(".brand-milo");
+  if (bm && inRect(inflate(bm.getBoundingClientRect()))) return true;
+  return false;
+}
+function _onBrandMouseMove(e) {
+  if (!_brandPalette || !_brandPalette.classList.contains("show")) return;
+  if (_isCursorNearPalette(e.clientX, e.clientY)) {
+    clearTimeout(_brandHideT);
+    clearTimeout(_brandFlashT);
+  } else if (!_brandHideT) {
+    _brandHideSoon();
+  }
+}
+function _bindBrandMove() {
+  if (_brandMoveBound) return;
+  _brandMoveBound = true;
+  document.addEventListener("mousemove", _onBrandMouseMove, { passive: true });
+}
 function _ensureBrandPalette() {
   if (_brandPalette) return _brandPalette;
   _brandPalette = document.createElement("div");
@@ -198,12 +232,16 @@ function _ensureBrandPalette() {
     clearTimeout(_brandHideT);
     clearTimeout(_brandFlashT);
   });
-  _brandPalette.addEventListener("mouseleave", _brandHideSoon);
+  // mouseleave : on délègue désormais à mousemove + buffer (plus tolérant).
+  _bindBrandMove();
   return _brandPalette;
 }
 function _brandHideSoon() {
   clearTimeout(_brandHideT);
-  _brandHideT = setTimeout(() => _brandPalette && _brandPalette.classList.remove("show"), 350);
+  _brandHideT = setTimeout(() => {
+    if (_brandPalette) _brandPalette.classList.remove("show");
+    _brandHideT = null;
+  }, 600);
 }
 function _positionBrandPaletteAt(bm) {
   const p = _ensureBrandPalette();
@@ -337,8 +375,8 @@ function headerAccount(unread = 0) {
     </button>
     <div class="profile-menu" id="profile-menu" role="menu">
       <button class="pmenu-item" id="pmenu-profil" role="menuitem" type="button">${icon("user", 15)} Mon profil</button>
-      <button class="pmenu-item" id="pmenu-edit" role="menuitem" type="button">${icon("home", 15)} Revenir à l'application</button>
-      <button class="pmenu-item" id="pmenu-premium" role="menuitem" type="button">${icon("sparkles", 15)} Mon espace premium</button>
+      ${location.pathname.startsWith("/@") ? `<button class="pmenu-item" id="pmenu-edit" role="menuitem" type="button">${icon("home", 15)} Revenir à l'application</button>` : ""}
+      <button class="pmenu-item" id="pmenu-premium" role="menuitem" type="button">${icon("sparkles", 15)} Mes Espaces</button>
       <button class="pmenu-item" id="pmenu-theme" role="menuitem" type="button">${storedTheme() === "light" ? icon("moon", 15) + " Mode sombre" : icon("sun", 15) + " Mode clair"}</button>
       <button class="pmenu-item" id="pmenu-notifs" role="menuitem" type="button">${icon("bell", 15)} Notifications</button>
       <button class="pmenu-item" id="pmenu-options" role="menuitem" type="button">${icon("settings", 15)} Options</button>
@@ -398,14 +436,12 @@ function wireProfileMenu() {
       }
     };
     if (e.target.closest("#pmenu-profil")) {
-      // « Mon profil » = page publique (vue par les autres), pas l'onglet
-      // Compte. Si on est déjà sur /@handle, no-op (évite un refresh inutile).
-      const h = myHandle();
-      if (h) {
-        const target = `/@${encodeURIComponent(h)}`;
-        if (location.pathname !== target) location.assign(target);
-      } else goTab("Compte"); // fallback : pas connecté → éditeur
-      _pmenu.close(); return;
+      // « Mon profil » = colonne « Identité » de l'éditeur (édition de la carte :
+      // intro Markdown, attributs, réseaux). C'est la vue côté propriétaire.
+      // La page publique est accessible via le bouton « Voir ↗ » dans la colonne.
+      _pmenu.close();
+      goTab("Identité");
+      return;
     }
     if (e.target.closest("#pmenu-edit")) {
       // Retour à l'éditeur /me : si déjà sur /me, no-op ; sinon navigation.
@@ -2550,7 +2586,26 @@ async function renderSpaceIndex(handle) {
       if (r?.subscribed) { location.reload(); return; }
       throw new Error("Abonnement indisponible pour le moment.");
     } catch (err) {
-      toast(err?.message || "Abonnement indisponible pour le moment.");
+      // Fallback dev (pas de Stripe configuré) : POST /api/dev/space-subscription
+      // donne l'accès immédiat (chat, lives, notifs). MINDLOG_DEV_PREMIUM côté serveur.
+      const msg = String(err?.message || "");
+      const isBillingMissing = /paiement indispo|n'est pas encore vendable|stripe/i.test(msg);
+      if (isBillingMissing) {
+        try {
+          await api("/api/dev/space-subscription", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...viewerHeaders() },
+            body: JSON.stringify({ handle }),
+          });
+          toast(`Abonné(e) à @${handle} (dev) ✓`);
+          location.reload();
+          return;
+        } catch (devErr) {
+          toast(devErr?.message || "Abonnement dev indisponible.");
+        }
+      } else {
+        toast(msg || "Abonnement indisponible pour le moment.");
+      }
       btn.disabled = false;
       btn.removeAttribute("aria-busy");
       btn.innerHTML = original;
@@ -2818,23 +2873,58 @@ async function renderPublicProfile(handle) {
     const cls = sp.subscribed ? "btn sm primary" : "btn sm";
     return `<a class="${cls}" href="/@${esc(data.handle)}/space">${icon("lock", 15)} Espace privé</a>`;
   })();
+  // Bouton « Retour » dans la topbar : visible pour les visiteurs (non-isSelf)
+  // — connectés ou anonymes. history.back() si historique same-origin distinct,
+  // sinon /me (connecté) ou / (anonyme). Évite la boucle back-to-self.
+  const _backBtnHtml = !isSelf
+    ? `<button type="button" class="btn sm pub-back-btn" id="pub-cover-back" aria-label="Retour">
+         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+         <span>Retour</span>
+       </button>`
+    : "";
   const _profileActions = {
     isSelf,
-    topLeft: "",  // La barre standard (logo + recherche + chip) remplace les glass buttons
+    topLeft: "",
     left: "",
     right: relBtnHtml(), // Bouton relation dans la zone cover-actions (bas du hero)
     contact: _contactActions + _spaceBtnHtml,
   };
+  // CTA « Créer ma page » : visible pour les visiteurs anonymes. Icône + label
+  // sur desktop, icône seule (cercle compact) sur mobile — même esprit que
+  // le bouton Retour. Pointe vers la landing.
+  const _createCtaHtml = !loggedIn
+    ? `<a class="btn sm primary pub-create-cta" id="pub-create-cta" href="/" aria-label="Créer ma page">
+         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+         <span>Créer ma page</span>
+       </a>`
+    : "";
   app.innerHTML = `
     ${siteHeader({
       center: headerSearchHtml(),
-      right: `${loggedIn ? "" : `<a class="btn sm" href="/">Créer ma page</a>`}${headerAccount()}`,
+      right: `${_backBtnHtml}${_createCtaHtml}${headerAccount()}`,
     })}
     ${cardViewHtml(data, false, _profileActions)}`;
   footer.innerHTML = `<a class="brand" href="/" style="justify-content:center"><span class="brand-milo">${miloSvg(40)}</span> mindlog · id</a><p style="margin:.5rem 0 0">${CREDIT()}</p>`;
 
   wirePubTabs();
   wirePubSwipe();
+
+  // Retour : history.back() si on a un historique same-origin, sinon /me pour
+  // les connectés, / pour les visiteurs anonymes. Évite de bloquer dans une
+  // boucle "back-to-self" si l'utilisateur a navigué entre deux profils.
+  app.querySelector("#pub-cover-back")?.addEventListener("click", () => {
+    let sameOrigin = false;
+    try {
+      sameOrigin = !!document.referrer
+        && new URL(document.referrer, location.href).origin === location.origin
+        && new URL(document.referrer, location.href).pathname !== location.pathname;
+    } catch { /* ignore */ }
+    if (window.history.length > 1 && sameOrigin) {
+      window.history.back();
+    } else {
+      location.assign(loggedIn ? "/me" : "/");
+    }
+  });
 
   // Galerie : montée dans l'onglet Galerie ET en inline bas du panel À propos.
   const galleryP = host.gallery?.mountPublic(app.querySelector("#pub-gallery-slot"), data.handle);
@@ -2906,7 +2996,27 @@ async function renderPublicProfile(handle) {
       if (r?.url) location.assign(r.url);
       else if (r?.subscribed) location.reload();
     } catch (err) {
-      toast(err?.message || "Abonnement indisponible pour le moment.");
+      // Pas de Stripe configuré (dev) → on tente l'endpoint dev en fallback,
+      // qui écrit une ligne space_subscriptions provider="dev" et donne accès
+      // immédiat (chat, lives, notifs). Gardé côté serveur par MINDLOG_DEV_PREMIUM.
+      const msg = String(err?.message || "");
+      const isBillingMissing = /paiement indispo|n'est pas encore vendable|stripe/i.test(msg);
+      if (isBillingMissing) {
+        try {
+          await api("/api/dev/space-subscription", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...viewerHeaders() },
+            body: JSON.stringify({ handle: h }),
+          });
+          toast(`Abonné(e) à @${h} (dev) ✓`);
+          location.reload();
+          return;
+        } catch (devErr) {
+          toast(devErr?.message || "Abonnement dev indisponible.");
+          return;
+        }
+      }
+      toast(msg || "Abonnement indisponible pour le moment.");
     }
   });
   app.querySelector("#chat-btn")?.addEventListener("click", async () => {
@@ -3412,14 +3522,6 @@ function profileCardHtml(data, profileActions = {}) {
         </div>`;
 }
 
-// Section « Espace privé » de la page publique /@handle.
-// Désormais désactivée : le bouton « Mon espace » de l'en-tête sert de point
-// d'accès aux propriétaires et abonnés, et l'abonnement passe par /@handle/space
-// (CTA dédié). On garde la fonction pour ne pas casser les appels existants.
-function spaceSectionHtml(_space, _handle, _isSelf) {
-  return "";
-}
-
 function cardViewHtml(data, editable, profileActions = "") {
   host.calendar.setAvailability(data.availability);
   const isSelf = !!(data.viewer && data.viewer.handle === data.handle);
@@ -3581,20 +3683,25 @@ function cardViewHtml(data, editable, profileActions = "") {
           <button type="button" class="pub-hero-dot" data-tab="agenda" aria-label="Calendrier"></button>
           <button type="button" class="pub-hero-dot" data-tab="gallery" aria-label="Galerie"></button>
         </div>
-        <!-- About : bloc espace privé + intro markdown + bio/tags/socials en bas
-             du slide home (mobile uniquement — .pub-cover-about est display:none
-             en desktop). -->
+        <!-- About : intro markdown + tags + socials, modèle Milo (visible sur
+             toutes les tailles d'écran). Pour le propriétaire (isSelf) le bloc
+             apparaît même vide, avec un CTA pour définir l'intro — ça aide à
+             le découvrir. Pour un visiteur, on n'affiche rien si tout est vide. -->
         ${(() => {
-          const spaceHtml = spaceSectionHtml(data.space, data.handle, isSelf);
-          const profileIntroMd = data.space?.profile_intro_md || "";
-          // L'intro Markdown remplace la bio plain-text quand elle est définie :
-          // un seul bloc « présentation » au lieu de deux empilés.
+          const profileIntroMd = data.profile_intro_md || data.space?.profile_intro_md || "";
           const presentationHtml = profileIntroMd
             ? `<section class="pub-intro" aria-label="Présentation">${mdLite(profileIntroMd)}</section>`
             : (bio ? `<p class="pub-bio">${esc(bio)}</p>` : "");
-          if (!presentationHtml && !tags && !socials && !spaceHtml) return "";
+          const hasAnyContent = !!(presentationHtml || tags || socials);
+          if (!hasAnyContent && !isSelf) return "";
+          // Propriétaire sans intro → CTA. (S'il a déjà tags/socials mais pas
+          // d'intro, on ajoute le CTA en tête pour rester un point d'entrée
+          // évident vers l'édition.)
+          const ctaHtml = (isSelf && !profileIntroMd)
+            ? `<a href="/me#intro" class="pub-intro-cta">${icon("user", 14)} <span>Définir mon intro</span></a>`
+            : "";
           return `<div class="pub-cover-about">
-            ${spaceHtml}
+            ${ctaHtml}
             ${presentationHtml}
             ${tags}
             ${socials ? `<div class="pub-socials">${socials}</div>` : ""}
@@ -3623,14 +3730,13 @@ function cardViewHtml(data, editable, profileActions = "") {
 
         <div class="pub-tab-body" id="pub-tab-body">
           <section id="pub-about" class="pub-tab-panel is-on" role="tabpanel" tabindex="0">
-            ${spaceSectionHtml(data.space, data.handle, isSelf)}
             ${(() => {
-              const profileIntroMd = data.space?.profile_intro_md || "";
+              const profileIntroMd = data.profile_intro_md || data.space?.profile_intro_md || "";
               // Présentation unifiée : si intro_md, on l'affiche en HTML et on
               // masque le textarea bio (le proprio édite l'intro via /me/premium).
               if (profileIntroMd) {
                 return `<section class="pub-intro" aria-label="Présentation">${mdLite(profileIntroMd)}</section>${
-                  isSelf ? `<p class="pub-intro-edit-hint lbl-sm"><a href="/me/premium">${icon("user", 12)} Modifier ma présentation →</a></p>` : ""
+                  isSelf ? `<p class="pub-intro-edit-hint lbl-sm"><a href="/me">${icon("user", 12)} Modifier ma présentation →</a></p>` : ""
                 }`;
               }
               return isSelf
@@ -4320,6 +4426,8 @@ Object.assign(host, {
     send: gSendMessage,
     load: gLoadMessages,
     rotate: gRotate,
+    attachUpload: gAttachUpload,
+    attachDownload: gAttachDownload,
   },
   // Pièces jointes chiffrées éphémères.
   attach: {
@@ -4391,7 +4499,7 @@ function initGdprBanner() {
 (async () => {
   const v = window.__APP_V__ ? `?v=${encodeURIComponent(window.__APP_V__)}` : "";
   initGdprBanner();
-  for (const name of ["calendar", "chat", "gallery", "call", "live"]) {
+  for (const name of ["calendar", "chat", "gallery", "call", "live", "premium-upsell"]) {
     try {
       const mod = await import(`./plugins/${name}.js${v}`);
       mod.default(host);
@@ -4416,4 +4524,4 @@ function initGdprBanner() {
 
 
 // Builders de vue + utilitaires partagés, consommés par editor/index.js (cycle assumé).
-export { PENDING_INVITE, connectSSE, eventsHtml, footer, headerAccount, headerSearchHtml, notifItemHtml, openMiloTourPicker, openQR, periodsListHtml, profileCardHtml, relItemHtml, relationsListHtml, tagChipsHtml, wireHeaderSearch, wireProfileMenuBtn };
+export { PENDING_INVITE, connectSSE, eventsHtml, footer, headerAccount, headerSearchHtml, localPrice, notifItemHtml, openMiloTourPicker, openQR, periodsListHtml, profileCardHtml, relItemHtml, relationsListHtml, tagChipsHtml, wireHeaderSearch, wireProfileMenuBtn };

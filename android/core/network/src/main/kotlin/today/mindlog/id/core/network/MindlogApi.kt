@@ -426,6 +426,14 @@ interface MindlogApi {
     @POST("api/billing/google/verify")
     suspend fun verifyPlayPurchase(@Body body: today.mindlog.id.core.network.dto.GoogleVerifyBody): today.mindlog.id.core.network.dto.GoogleVerifyResponseDto
 
+    /** Eligibilité à l'invitation Premium au lancement (workflow d'upsell). */
+    @GET("api/premium/upsell")
+    suspend fun premiumUpsell(): today.mindlog.id.core.network.dto.PremiumUpsellDto
+
+    /** Démarre l'essai gratuit serveur-managé (un seul par compte). */
+    @POST("api/premium/trial/start")
+    suspend fun startPremiumTrial(): today.mindlog.id.core.network.dto.TrialStartResponseDto
+
     // ── Live ───────────────────────────────────────────────────────────────
 
     /** Lives en cours + à venir (feed public). */

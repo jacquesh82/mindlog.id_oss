@@ -17,6 +17,7 @@ export interface Identity {
   recovery_email: string;
   pubkey: string;
   settings: string; // JSON (préférences) — voir Settings / parseSettings
+  profile_intro_md: string; // intro Markdown (OSS, 0032) — affichée sur /@handle
   created_at: string;
 }
 
@@ -85,7 +86,7 @@ export interface Settings {
   avatar_shape: AvatarShape; // forme : carré (default) ou cercle
 }
 
-export const SETTINGS_BOOLS = [
+const SETTINGS_BOOLS = [
   "allow_chat",
   "allow_call",
   "allow_video",

@@ -45,6 +45,16 @@ class AccentStore @Inject constructor(
     }
 
     /**
+     * Dernier affichage de la modale d'invitation Premium (epoch ms). Sert au
+     * cooldown du workflow d'upsell (cible ~1-3 affichages/mois).
+     */
+    fun premiumUpsellShownAt(): Long = prefs.getLong(KEY_UPSELL_AT, 0L)
+
+    fun setPremiumUpsellShownAt(epochMs: Long) {
+        prefs.edit().putLong(KEY_UPSELL_AT, epochMs).apply()
+    }
+
+    /**
      * Identifiant anonyme stable pour les actions sans authentification (likes
      * de galerie, par exemple). Persisté à la 1re lecture.
      */
@@ -60,5 +70,6 @@ class AccentStore @Inject constructor(
         const val KEY_THEME_MODE = "theme_mode"
         const val KEY_TOUR_SEEN = "milo_tour_seen"
         const val KEY_FP = "device_fp"
+        const val KEY_UPSELL_AT = "premium_upsell_at"
     }
 }

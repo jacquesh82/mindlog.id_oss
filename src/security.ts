@@ -79,12 +79,14 @@ export function securityHeaders(): MiddlewareHandler {
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
-    "frame-ancestors 'none'",
+    // 'self' : pages internes (ex. /live/broadcast, /live/:id) embarquées dans
+    // le panneau droit de l'onglet Échanges. Reste bloqué pour les tiers.
+    "frame-ancestors 'self'",
   ].join("; ");
   return async (c, next) => {
     c.header("Content-Security-Policy", csp);
     c.header("X-Content-Type-Options", "nosniff");
-    c.header("X-Frame-Options", "DENY");
+    c.header("X-Frame-Options", "SAMEORIGIN");
     // Empêche la fuite de la clé d'accès présente dans l'URL (?key=, /k/...)
     // vers des tiers via l'en-tête Referer.
     c.header("Referrer-Policy", "strict-origin-when-cross-origin");

@@ -100,12 +100,22 @@ private enum class OverlayRoute { NOTIFICATIONS, IDENTITY, PREMIUM, GALLERY }
 fun MainScreen(
     onSignedOut: () -> Unit,
     badgesViewModel: BadgesViewModel = hiltViewModel(),
+    upsellViewModel: PremiumUpsellViewModel = hiltViewModel(),
 ) {
     val pagerState = rememberPagerState(pageCount = { ColumnTab.entries.size })
     val scope = rememberCoroutineScope()
     val badges by badgesViewModel.badges.collectAsStateWithLifecycle()
     val openProfile by badgesViewModel.openProfile.collectAsStateWithLifecycle()
     val openChat by badgesViewModel.openChat.collectAsStateWithLifecycle()
+    val upsell by upsellViewModel.ui.collectAsStateWithLifecycle()
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(Unit) { upsellViewModel.checkOnLaunch() }
+    LaunchedEffect(upsell.toast) {
+        upsell.toast?.let {
+            android.widget.Toast.makeText(ctx, it, android.widget.Toast.LENGTH_SHORT).show()
+            upsellViewModel.consumeToast()
+        }
+    }
 
     val echangesNav = rememberNavController()
     val reseauNav = rememberNavController()
@@ -162,6 +172,11 @@ fun MainScreen(
             overlay?.let { route ->
                 OverlayHost(route = route, onClose = { overlay = null })
             }
+            PremiumUpsellDialog(
+                state = upsell,
+                onStartTrial = { upsellViewModel.startTrial() },
+                onDismiss = { upsellViewModel.dismiss() },
+            )
         }
     }
 }

@@ -9,10 +9,10 @@ import { StoreError, getIdentityById } from "./identities.js";
 
 /* ---- Codes PIN d'appairage (connexion d'un nouvel appareil) ---- */
 
-export const PIN_TTL_MIN = 30; // fenêtre d'appairage d'un téléphone (generate web → saisie mobile)
-export const PIN_DIGITS = 6;
+const PIN_TTL_MIN = 30; // fenêtre d'appairage d'un téléphone (generate web → saisie mobile)
+const PIN_DIGITS = 6;
 
-export const sha256hex = (s: string) => createHash("sha256").update(s).digest("hex");
+const sha256hex = (s: string) => createHash("sha256").update(s).digest("hex");
 
 /**
  * Crée un code PIN à usage unique pour appairer un nouvel appareil. Un seul PIN

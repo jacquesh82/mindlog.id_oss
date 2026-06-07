@@ -229,16 +229,26 @@ export async function e2eEncryptSend(me, myKey, handle, text) {
   });
 }
 
-/** Chiffre + envoie un message de groupe. */
-export async function gSendMessage(me, myKey, gid, text) {
+/**
+ * Chiffre + envoie un message de groupe. Le payload peut être :
+ *  - du texte simple
+ *  - une sentinelle `att{json}` pour une pièce jointe (cf. gAttachUpload)
+ *  - une sentinelle `tmr<seconds>` pour partager une minuterie de disparition
+ * Options : `ttl` (secondes, borné par le serveur), `readOnce` (message à
+ * lecture unique, supprimé après révélation par un membre).
+ */
+export async function gSendMessage(me, myKey, gid, text, opts = {}) {
   const st = await gLoadState(me, gid);
   if (!st.mySender) st.mySender = await gSenderInit();
   const m = await gEncrypt(st.mySender, text);
   st.sent[`${m.iter}`] = text; // relire mes propres messages (chaîne avancée)
   await gSaveState(me, gid, st);
+  const body = { iv: m.iv, ciphertext: SKD_GROUP_PACK(m) };
+  if (typeof opts.ttl === "number" && Number.isFinite(opts.ttl)) body.ttl = Math.floor(opts.ttl);
+  if (opts.readOnce === true) body.readOnce = true;
   await api(`/api/groups/${encodeURIComponent(gid)}/messages`, {
     method: "POST", headers: { "Content-Type": "application/json", "x-access-key": myKey },
-    body: JSON.stringify({ iv: m.iv, ciphertext: SKD_GROUP_PACK(m) }),
+    body: JSON.stringify(body),
   });
 }
 // Empaquette un message de groupe dans le champ ciphertext : b64url(header{iter,sig})+"."+b64(ct).
@@ -248,7 +258,9 @@ export function SKD_GROUP_UNPACK(packed) {
   try { const h = JSON.parse(new TextDecoder().decode(_unb64url(packed.slice(0, dot)))); return { iter: h.iter, sig: h.sig, ct: packed.slice(dot + 1) }; } catch { return null; }
 }
 
-/** Charge + déchiffre les messages d'un groupe (mappe expéditeur → sa sender key). */
+/** Charge + déchiffre les messages d'un groupe (mappe expéditeur → sa sender key).
+ *  Expose les mêmes champs que le 1:1 : id, sender, mine, text, created_at,
+ *  expires_at, read_once, reactions, pending. */
 export async function gLoadMessages(me, myKey, gid) {
   const st = await gLoadState(me, gid);
   const d = await gApi.messages(gid);
@@ -263,7 +275,17 @@ export async function gLoadMessages(me, myKey, gid) {
       const peer = st.peers[m.sender_handle];
       if (peer) text = await gDecrypt(peer, { iter: env.iter, iv: m.iv, ct: env.ct, sig: env.sig }).catch(() => null);
     }
-    out.push({ id: m.id, sender: m.sender_handle, mine, text, created_at: m.created_at, expires_at: m.expires_at, pending: !mine && text === null });
+    out.push({
+      id: m.id,
+      sender: m.sender_handle,
+      mine,
+      text,
+      created_at: m.created_at,
+      expires_at: m.expires_at,
+      read_once: m.read_once === 1 || m.read_once === true,
+      reactions: m.reactions || [],
+      pending: !mine && text === null,
+    });
   }
   await gSaveState(me, gid, st); // peers avancés persistés
   return { me: d.me, ttlHours: d.ttlHours, messages: out };

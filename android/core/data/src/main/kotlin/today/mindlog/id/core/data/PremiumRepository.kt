@@ -4,7 +4,9 @@ import today.mindlog.id.core.network.MindlogApi
 import today.mindlog.id.core.network.dto.GoogleVerifyBody
 import today.mindlog.id.core.network.dto.PaidPageContentDto
 import today.mindlog.id.core.network.dto.PaidPageDto
+import today.mindlog.id.core.network.dto.PremiumUpsellDto
 import today.mindlog.id.core.network.dto.SpaceDto
+import today.mindlog.id.core.network.dto.TrialStartResponseDto
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -32,4 +34,10 @@ class PremiumRepository @Inject constructor(
      */
     suspend fun verifyPlayPurchase(purchaseToken: String, productId: String): String =
         api.verifyPlayPurchase(GoogleVerifyBody(purchaseToken, productId)).plan
+
+    /** Eligibilité à l'invitation Premium au lancement de l'app. */
+    suspend fun upsell(): PremiumUpsellDto = api.premiumUpsell()
+
+    /** Active l'essai gratuit serveur-managé (un seul par compte). */
+    suspend fun startTrial(): TrialStartResponseDto = api.startPremiumTrial()
 }

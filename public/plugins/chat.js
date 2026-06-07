@@ -807,7 +807,10 @@ export default function register(host) {
     if (col) col.querySelector("#g-name")?.focus({ preventScroll: true });
   }
 
-  // Conversation de groupe (texte ; chiffrée par sender keys).
+  // Conversation de groupe (parité fonctionnelle complète avec openChat 1:1) :
+  // sender keys + pièces jointes chiffrées + message vocal + lecture unique +
+  // réactions + suppression. Les paquets de contrôle (att*, skd*) sont relayés
+  // dans le ciphertext sender-key — le serveur ne voit que des blobs.
   function openGroup(gid, myKey, myHandle) {
     myKey = myKey || storedKey();
     myHandle = myHandle || storedHandle();
@@ -818,6 +821,10 @@ export default function register(host) {
         <p class="sub" id="gc-note"></p>
         <div class="chat-log" id="gc-log"><p class="empty">Chargement…</p></div>
         <form id="gc-form" class="chat-form">
+          <button type="button" class="btn" id="gc-attach" title="Joindre un fichier" aria-label="Joindre un fichier">📎</button>
+          <button type="button" class="btn" id="gc-mic" title="Enregistrer un message vocal" aria-label="Message vocal">🎤</button>
+          <button type="button" class="btn" id="gc-once" title="Message à lecture unique" aria-label="Lecture unique" aria-pressed="false">👁</button>
+          <input type="file" id="gc-file" hidden />
           <input id="gc-input" placeholder="Message au groupe…" autocomplete="off" maxlength="1000" />
           <button class="btn primary" type="submit" title="Envoyer" aria-label="Envoyer" style="padding:.3rem .55rem;flex:none">${svgIcon("send", 18)}</button>
         </form>
@@ -827,10 +834,24 @@ export default function register(host) {
       let group = null;
       const log = overlay.querySelector("#gc-log");
       const input = overlay.querySelector("#gc-input");
-      const close = () => { clearInterval(timer); unsub(); host.closeDeckColumn(overlay); };
+      const attachBtn = overlay.querySelector("#gc-attach");
+      const fileInp = overlay.querySelector("#gc-file");
+      const micBtn = overlay.querySelector("#gc-mic");
+      const onceBtn = overlay.querySelector("#gc-once");
+      const expandedTimes = new Set();
+      const attCache = {}; // mid → meta pièce jointe
+      const revealed = new Set(); // ids de messages lecture-unique révélés
+      let pendingOnce = false; // « lecture unique » armé pour le prochain envoi
+      const takeOnce = () => { const v = pendingOnce; pendingOnce = false; onceBtn.setAttribute("aria-pressed", "false"); return v; };
+      const close = () => { clearInterval(timer); clearInterval(cdTimer); unsub(); host.closeDeckColumn(overlay); };
       overlay.querySelector("#gc-close").addEventListener("click", close);
       connectSSE(myKey);
       const unsub = onSSE("group", (d) => { if (!d || d.gid === gid) refresh(); });
+
+      async function sendPlaintext(payload, opts = {}) {
+        try { await groups.send(myHandle, myKey, gid, payload, opts); refresh(); }
+        catch (err) { toast(err.message || "Échec"); }
+      }
 
       async function refresh() {
         if (!overlay.isConnected) { clearInterval(timer); return; }
@@ -840,7 +861,6 @@ export default function register(host) {
           overlay.querySelector("#gc-title").innerHTML =
             `👥 ${esc(group.name || "Groupe")} <span class="deg">· ${group.members.length} membres · chiffré 🔒</span>` +
             (canManage ? ` <button type="button" class="btn sm" id="gc-manage">Gérer</button>` : "");
-          overlay.querySelector("#gc-manage")?.addEventListener("click", () => manage());
           // S'assurer d'avoir/diffuser les sender keys, puis charger.
           await groups.syncKeys(myHandle, myKey, gid, group.members.map((m) => m.handle));
           const d = await groups.load(myHandle, myKey, gid);
@@ -850,60 +870,231 @@ export default function register(host) {
             ? d.messages.map((m) => {
                 const time = new Date(m.created_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
                 const who = m.mine ? "" : `<span class="deg" style="font-size:.78em">@${esc(m.sender)}</span><br>`;
-                const body = m.pending ? `🔑 <span class="deg">en attente de la clé de @${esc(m.sender)}…</span>`
-                  : (m.text === null ? "🔒 (indéchiffrable)" : esc(m.text));
-                return `<div class="bubble ${m.mine ? "mine" : "theirs"}">${who}<span class="b-text">${body}</span><span class="t">${esc(time)}</span></div>`;
+                const att = m.text && attach ? attach.parse(m.text) : null;
+                const isOnce = m.read_once;
+                let body;
+                if (m.pending) {
+                  body = `<span class="b-text">🔑 <span class="deg">en attente de la clé de @${esc(m.sender)}…</span></span>`;
+                } else if (isOnce && m.mine) {
+                  body = `<span class="b-text" style="opacity:.7">👁 Message à lecture unique</span>`;
+                } else if (isOnce && !revealed.has(m.id)) {
+                  body = `<span class="b-att b-once" data-reveal="${m.id}" style="cursor:pointer">👁 Message à lecture unique — toucher pour voir</span>`;
+                } else if (att) {
+                  attCache[m.id] = att;
+                  const sz = att.size > 0 ? ` · ${(att.size / 1024 < 1024 ? (att.size / 1024).toFixed(0) + " Ko" : (att.size / 1048576).toFixed(1) + " Mo")}` : "";
+                  const mime = att.mime || "";
+                  if (mime.startsWith("image/")) {
+                    body = `<span class="b-att b-att-img" data-mid="${m.id}" title="${esc(att.name)}">📎 ${esc(att.name)} — chargement…</span>`;
+                  } else if (mime.startsWith("audio/")) {
+                    const dur = att.dur ? ` · ${Math.round(att.dur / 1000)} s` : "";
+                    body = `<span class="b-att b-att-audio" data-mid="${m.id}">🎤 Message vocal${dur} — chargement…</span>`;
+                  } else {
+                    body = `<span class="b-att b-att-file" data-mid="${m.id}">📎 ${esc(att.name)}${sz} <button type="button" class="btn sm" data-attdl="${m.id}">Télécharger</button></span>`;
+                  }
+                } else {
+                  body = m.text === null
+                    ? `<span class="b-text">🔒 (indéchiffrable)</span>`
+                    : `<span class="b-text">${esc(m.text)}</span>`;
+                }
+                const reacts = (m.reactions || [])
+                  .map((r) => `<button type="button" class="react ${r.mine ? "mine" : ""}" data-react="${esc(r.emoji)}" data-mid="${m.id}">${r.emoji}${r.count > 1 ? " " + r.count : ""}</button>`)
+                  .join("");
+                const open = expandedTimes.has(m.id);
+                return `<div class="bubble ${m.mine ? "mine" : "theirs"}" data-mid="${m.id}">${who}${body}
+                  ${reacts ? `<div class="b-reacts">${reacts}</div>` : ""}
+                  <span class="t">
+                    <span class="t-time" data-exp="${esc(m.expires_at)}" data-mid="${m.id}" role="button" tabindex="0" title="Voir le délai avant suppression">${esc(time)}</span>
+                    <button type="button" class="b-react-btn" data-reactbtn="${m.id}" title="Réagir" aria-label="Réagir">🙂</button>
+                    ${m.mine ? `<button type="button" class="b-del" data-del="${m.id}" title="Supprimer" aria-label="Supprimer">✕</button>` : ""}
+                  </span>
+                  <span class="b-countdown" data-exp="${esc(m.expires_at)}" ${open ? "" : "hidden"}>${open ? esc(countdownText(m.expires_at)) : ""}</span>
+                </div>`;
               }).join("")
             : '<p class="empty">Aucun message. Dites bonjour 👋</p>';
+          // Téléchargement différé des images.
+          for (const el of log.querySelectorAll(".b-att-img")) {
+            const meta = attCache[el.dataset.mid];
+            if (!meta) continue;
+            groups.attachDownload(gid, meta)
+              .then((url) => { el.innerHTML = `<img src="${url}" alt="${esc(meta.name)}" style="max-width:min(78%,340px);width:auto;border-radius:12px;display:block" />`; if (atBottom) log.scrollTop = log.scrollHeight; })
+              .catch(() => { el.textContent = "📎 (pièce jointe indisponible)"; });
+          }
+          // Téléchargement différé des messages vocaux.
+          for (const el of log.querySelectorAll(".b-att-audio")) {
+            const meta = attCache[el.dataset.mid];
+            if (!meta) continue;
+            groups.attachDownload(gid, meta)
+              .then((url) => {
+                const aud = document.createElement("audio");
+                aud.controls = true; aud.preload = "metadata";
+                aud.style.cssText = "vertical-align:middle;width:280px;max-width:100%";
+                aud.src = url;
+                el.innerHTML = "🎤 ";
+                el.appendChild(aud);
+                if (atBottom) log.scrollTop = log.scrollHeight;
+              })
+              .catch(() => { el.textContent = "🎤 (message vocal indisponible)"; });
+          }
           if (atBottom) log.scrollTop = log.scrollHeight;
         } catch (e) { log.innerHTML = `<p class="empty">${esc(e.message)}</p>`; }
       }
 
-      async function manage() {
-        if (!group) return;
-        const handleValidate = (v) => {
-          const s = v.replace(/^@/, "").trim();
-          if (!s) return null; // vide accepté en 1er prompt (déclenche le retrait)
-          if (!/^[a-z0-9_-]+$/i.test(s)) return "Handle invalide (lettres, chiffres, _ ou -).";
-          return null;
-        };
-        const handle = await host.promptDialog("Ajouter un contact au groupe", {
-          placeholder: "@handle (vide pour retirer un membre)",
-          ok: "Ajouter",
-          validate: handleValidate,
-        });
-        if (handle === null) return;
-        const h = handle.replace(/^@/, "").trim();
-        try {
-          if (h) { await groups.api.addMember(gid, h); toast(`@${h} ajouté`); }
-          else {
-            const rem = await host.promptDialog("Retirer quel membre ?", {
-              placeholder: "@handle",
-              ok: "Retirer",
-              validate: (v) => {
-                const s = v.replace(/^@/, "").trim();
-                if (!s) return "Indiquez un @handle.";
-                if (!/^[a-z0-9_-]+$/i.test(s)) return "Handle invalide (lettres, chiffres, _ ou -).";
-                return null;
-              },
-            });
-            if (rem) {
-              await groups.api.removeMember(gid, rem.replace(/^@/, "").trim());
-              const g2 = await groups.api.get(gid);
-              await groups.rotate(myHandle, myKey, gid, g2.members.map((m) => m.handle)); // rotation après retrait
-              toast("Membre retiré — clés tournées");
-            }
-          }
-          refresh();
-        } catch (e) { toast(e.message || "Échec"); }
+      // Picker emoji partagé (un seul popover par groupe pour ne pas clignoter au refresh).
+      const picker = document.createElement("div");
+      picker.className = "react-pick"; picker.hidden = true;
+      picker.innerHTML = QUICK_EMOJIS.map((em) => `<button type="button" data-emoji="${em}">${em}</button>`).join("");
+      overlay.querySelector(".chat-card").appendChild(picker);
+      let pickMid = null;
+      const hidePicker = () => (picker.hidden = true);
+
+      async function react(mid, emoji) {
+        try { await groups.api.react(gid, Number(mid), emoji); } catch (e) { toast(e.message); }
+        refresh();
+      }
+      async function burn(mid) {
+        try { await groups.api.burnMessage(gid, mid); } catch {}
       }
 
+      // Délégation : couvre boutons des bulles + sélecteur, robuste aux rafraîchissements.
+      overlay.querySelector(".chat-card").addEventListener("click", async (e) => {
+        const t = e.target.closest && e.target.closest("[data-emoji],[data-react],[data-del],[data-reactbtn],[data-exp][data-mid],[data-attdl],[data-reveal]");
+        if (!t) return;
+        if (t.hasAttribute("data-reveal")) {
+          e.stopPropagation();
+          const id = Number(t.dataset.reveal);
+          revealed.add(id);
+          await refresh();
+          burn(id);
+          return;
+        }
+        if (t.hasAttribute("data-attdl")) {
+          e.stopPropagation();
+          const meta = attCache[t.dataset.attdl]; if (!meta) return;
+          try { const url = await groups.attachDownload(gid, meta); const a = document.createElement("a"); a.href = url; a.download = meta.name || "fichier"; a.click(); }
+          catch (x) { toast(x.message); }
+          return;
+        }
+        if (t.dataset.emoji !== undefined) { e.stopPropagation(); hidePicker(); return react(pickMid, t.dataset.emoji); }
+        if (t.hasAttribute("data-react")) { e.stopPropagation(); return react(t.dataset.mid, t.dataset.react); }
+        if (t.hasAttribute("data-del")) {
+          e.stopPropagation();
+          if (!(await confirmDialog("Supprimer ce message ?", { ok: "Supprimer", danger: true }))) return;
+          try { await groups.api.deleteMessage(gid, t.dataset.del); } catch (x) { toast(x.message); }
+          return refresh();
+        }
+        if (t.hasAttribute("data-reactbtn")) {
+          e.stopPropagation();
+          pickMid = t.dataset.reactbtn;
+          const pr = picker.parentElement.getBoundingClientRect();
+          const br = t.getBoundingClientRect();
+          picker.style.left = Math.max(8, br.left - pr.left - 60) + "px";
+          picker.style.top = br.bottom - pr.top + 6 + "px";
+          picker.hidden = false;
+          return;
+        }
+        // Clic sur l'heure → (dé)plie le compte à rebours avant suppression.
+        if (t.classList.contains("t-time")) {
+          e.stopPropagation();
+          const mid = Number(t.dataset.mid);
+          const cd = t.closest(".bubble")?.querySelector(".b-countdown");
+          if (!cd) return;
+          if (expandedTimes.has(mid)) { expandedTimes.delete(mid); cd.hidden = true; }
+          else { expandedTimes.add(mid); cd.textContent = countdownText(cd.dataset.exp); cd.hidden = false; }
+        }
+      });
+      overlay.addEventListener("click", (e) => {
+        if (!picker.hidden && !picker.contains(e.target) && !e.target.closest("[data-reactbtn]")) hidePicker();
+      });
+      const cdTimer = setInterval(() => {
+        overlay.querySelectorAll(".b-countdown:not([hidden])").forEach((cd) => { cd.textContent = countdownText(cd.dataset.exp); });
+      }, 1000);
+
+      // Le bouton « Gérer » est intercepté en capture par editor/index.js
+      // (openManageGroupInline) — on garde le handler local en repli si l'UI
+      // hors-Échanges l'utilise (deck column standalone).
+      overlay.addEventListener("click", (e) => {
+        if (e.target.closest("#gc-manage") && !e.defaultPrevented) {
+          e.stopPropagation();
+          legacyManage();
+        }
+      });
+      async function legacyManage() {
+        if (!group) return;
+        const handle = await host.promptDialog("Ajouter un contact au groupe", { placeholder: "@handle", ok: "Ajouter" });
+        if (!handle) return;
+        try { await groups.api.addMember(gid, handle.replace(/^@/, "").trim()); refresh(); }
+        catch (e) { toast(e.message || "Échec"); }
+      }
+
+      // ── Pièces jointes (fichier + image) ──────────────────────────────
+      attachBtn?.addEventListener("click", () => fileInp.click());
+      fileInp?.addEventListener("change", async () => {
+        const file = fileInp.files?.[0]; if (!file) return;
+        fileInp.value = "";
+        if (file.size > 10 * 1024 * 1024) { toast("Fichier trop volumineux (max 10 Mo)."); return; }
+        try {
+          const meta = await groups.attachUpload(gid, file);
+          await sendPlaintext(attach.payload(meta), { readOnce: takeOnce() });
+        } catch (err) { toast(err.message || "Échec de l'envoi."); }
+      });
+
+      // ── Lecture unique ─────────────────────────────────────────────────
+      onceBtn?.addEventListener("click", () => {
+        pendingOnce = !pendingOnce;
+        onceBtn.setAttribute("aria-pressed", String(pendingOnce));
+      });
+
+      // ── Message vocal (MediaRecorder, mêmes contraintes que 1:1) ──────
+      let rec = null, recChunks = [], recStream = null, recStart = 0, recTimer = null;
+      const MAX_REC_MS = 5 * 60 * 1000;
+      const pickAudioMime = () => ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
+      const resetMic = () => {
+        clearInterval(recTimer);
+        if (micBtn) { micBtn.textContent = "🎤"; micBtn.classList.remove("rec"); }
+        recStream?.getTracks().forEach((t) => t.stop());
+        rec = null; recStream = null; recChunks = [];
+      };
+      async function startRec() {
+        try { recStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+        catch { toast("Micro indisponible."); return; }
+        const mime = pickAudioMime();
+        rec = new MediaRecorder(recStream, mime ? { mimeType: mime } : undefined);
+        recChunks = [];
+        rec.ondataavailable = (e) => { if (e.data && e.data.size) recChunks.push(e.data); };
+        rec.onstop = onRecStop;
+        rec.start(); recStart = Date.now();
+        micBtn.classList.add("rec");
+        recTimer = setInterval(() => {
+          const s = Math.floor((Date.now() - recStart) / 1000);
+          micBtn.textContent = `⏹ ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+          if (Date.now() - recStart >= MAX_REC_MS) rec.stop();
+        }, 250);
+      }
+      async function onRecStop() {
+        const dur = Date.now() - recStart;
+        const type = (rec && rec.mimeType) || "audio/webm";
+        const chunks = recChunks;
+        resetMic();
+        if (!chunks.length) { toast("Enregistrement vide."); return; }
+        if (dur < 500) return;
+        const ext = type.includes("mp4") ? "m4a" : "webm";
+        const file = new File(chunks, `voix.${ext}`, { type });
+        if (file.size > 10 * 1024 * 1024) { toast("Message vocal trop long."); return; }
+        try {
+          const meta = await groups.attachUpload(gid, file);
+          await sendPlaintext(attach.payload({ ...meta, dur }), { readOnce: takeOnce() });
+        } catch (err) { toast(err.message || "Échec de l'envoi."); }
+      }
+      micBtn?.addEventListener("click", () => { if (rec && rec.state === "recording") rec.stop(); else startRec(); });
+
+      // ── Envoi texte ────────────────────────────────────────────────────
       overlay.querySelector("#gc-form").addEventListener("submit", async (e) => {
         e.preventDefault();
         const text = input.value.trim().slice(0, 1000);
         if (!text) return;
         input.value = "";
-        try { await groups.send(myHandle, myKey, gid, text); refresh(); }
+        const opts = { readOnce: takeOnce() };
+        try { await groups.send(myHandle, myKey, gid, text, opts); refresh(); }
         catch (err) { toast(err.message); input.value = text; }
       });
       input.focus({ preventScroll: true });

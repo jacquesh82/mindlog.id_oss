@@ -1,5 +1,5 @@
 // Domaine « identities » — extrait de src/store.ts (barrel). Voir docs si besoin.
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { BASE_FIELDS, RESERVED_HANDLES, db, newAccessKey } from "../db.js";
 import {
   cardFields,
@@ -126,11 +126,28 @@ export async function searchIdentities(
   // s'appuie sur l'opérateur jsonb/`::jsonb` pour le filtrage.
   // - Match sur handle, display_name, et optionnellement tags (capability Premium).
   // - ILIKE : insensible à la casse. Les % et _ saisis sont neutralisés ci-dessus.
+  //
+  // Gating Premium côté owner : un match par TAG ne doit ressortir que si
+  // l'identité titulaire est elle-même Premium effective (sinon les tags d'un
+  // ex-trial expiré continueraient de remonter dans la recherche). Le test
+  // duplique inline la logique de `subscriptionIsPremium` (cf.
+  // src/premium/store/subscriptions.ts) — 3 j de grâce, statut actif/trial/past_due,
+  // current_period_end null toléré sauf en past_due. Comparaison ISO 8601 (texte
+  // en UTC, ordre lexicographique = ordre temporel).
+  const GRACE_MS = 3 * 24 * 60 * 60 * 1000;
+  const graceCutoff = new Date(Date.now() - GRACE_MS).toISOString();
   const tagJoin = opts.includeTags && !email
-    ? sql`LEFT JOIN tags tg ON tg.identity_id = i.id`
+    ? sql`LEFT JOIN tags tg ON tg.identity_id = i.id
+          LEFT JOIN subscriptions sub ON sub.identity_id = i.id`
     : sql``;
   const tagWhere = opts.includeTags && !email
-    ? sql`OR tg.tag ILIKE ${term}`
+    ? sql`OR (tg.tag ILIKE ${term}
+            AND sub.identity_id IS NOT NULL
+            AND sub.status IN ('active','trialing','past_due')
+            AND (
+              (sub.current_period_end IS NULL AND sub.status <> 'past_due')
+              OR sub.current_period_end >= ${graceCutoff}
+            ))`
     : sql``;
   const emailJoin = email
     ? sql`LEFT JOIN card_fields em ON em.identity_id = i.id AND em.key = 'email'`
@@ -158,13 +175,6 @@ export async function searchIdentities(
   return (res.rows as { handle: string; photo_file: string | null; display_name: string; title: string }[]).map(
     (r) => ({ handle: r.handle, display_name: r.display_name, title: r.title, has_photo: !!r.photo_file })
   );
-}
-
-export async function listIdentities(): Promise<{ handle: string; created_at: string }[]> {
-  return db
-    .select({ handle: identities.handle, created_at: identities.created_at })
-    .from(identities)
-    .orderBy(desc(identities.created_at));
 }
 
 // Profil mascotte public @milo (easter egg), créé une seule fois.

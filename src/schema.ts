@@ -29,6 +29,9 @@ export const identities = pgTable("identities", {
   // Préférences du compte (onglet « Options ») au format JSON. Voir DEFAULT_SETTINGS
   // dans store.ts : autorisations chat/appel/vidéo/RDV, visibilité des dispos…
   settings: text("settings").notNull().default("{}"),
+  // Intro Markdown du profil (max 4000), affichée en haut de /@handle. OSS, 0032.
+  // Migrée depuis premium_space.profile_intro_md (qui reste pour back-compat read).
+  profile_intro_md: text("profile_intro_md").notNull().default(""),
   created_at: text("created_at").notNull().$defaultFn(nowIso),
 });
 

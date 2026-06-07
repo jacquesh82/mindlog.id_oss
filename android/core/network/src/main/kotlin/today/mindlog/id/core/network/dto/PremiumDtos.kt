@@ -57,3 +57,19 @@ data class GoogleVerifyResponseDto(
 /** Lancement d'un Checkout Stripe pour l'abonnement à un espace. */
 @Serializable
 data class SpaceSubscribeResponseDto(val url: String = "")
+
+/** Eligibilité à l'invitation Premium au lancement — `/api/premium/upsell`. */
+@Serializable
+data class PremiumUpsellDto(
+    val eligible: Boolean = false,
+    val trialAvailable: Boolean = false,
+    val trialDays: Int = 30,
+)
+
+/** Réponse d'activation d'essai — `/api/premium/trial/start`. */
+@Serializable
+data class TrialStartResponseDto(
+    val ok: Boolean = false,
+    val until: String = "",
+    val days: Int = 0,
+)

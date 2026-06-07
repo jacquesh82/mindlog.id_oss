@@ -1,7 +1,6 @@
 // editor/tabs/identity.js — colonne « Identité » (profil / réseaux / compte).
 // Builder de rendu pur (câblage dans wireEditor). Extrait verbatim.
 // cf. docs/web-app-split-proposal.md
-import { tagChipsHtml } from "../../app.js";
 import { icon, isSocialKey } from "../../ui/icons.js";
 import { esc } from "../../ui/dom.js";
 import { appState } from "../../state.js";
@@ -36,11 +35,16 @@ export function renderIdentityColumn(data, { photo, fieldEditHtml, socialEditHtm
       </div>
       <div class="col-scroll">
         <div class="id-panel" id="id-profil" role="tabpanel">
-          <div class="section-title" style="border-top:none;padding-top:0;margin-top:0">Tags</div>
-          <div class="tags-edit" id="tags-edit">${tagChipsHtml(data.tags || [], true)}</div>
-          <div class="add-row tag-add-row" style="margin-top:.5rem">
-            <input id="nt-tag" placeholder="Ajouter un tag" maxlength="30" autocomplete="off" />
-            <button class="btn" id="add-tag">+ Tag</button>
+          <div class="section-title" style="border-top:none;padding-top:0;margin-top:0">Intro du profil</div>
+          <p class="lbl-sm" style="margin:0 0 .5rem;line-height:1.5">
+            Texte affiché en haut de <b>/@${esc(data.handle)}</b>, au-dessus de ta bio.
+            <b>Markdown</b> accepté.
+          </p>
+          <textarea id="sp-profile-intro" class="sp-intro-ta"
+            maxlength="4000" rows="4"
+            placeholder="# Bienvenue sur mon profil !&#10;Quelques mots pour te présenter aux visiteurs.">${esc(data.profile_intro_md || "")}</textarea>
+          <div class="lt-prem-actions" style="margin:.35rem 0 .8rem;align-items:center;justify-content:flex-end">
+            <span id="sp-profile-intro-status" class="lbl-sm" style="opacity:.7" aria-live="polite"></span>
           </div>
           <div class="section-title">Attributs</div>
           <div id="fields-edit">${data.fields.filter((f) => !isSocialKey(f.key)).map(fieldEditHtml).join("")}</div>

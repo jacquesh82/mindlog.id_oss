@@ -370,18 +370,17 @@ async function loadSpacePricing(root) {
   const status = root.querySelector("#sp-status");
   const introTa = root.querySelector("#sp-intro");
   const introStatus = root.querySelector("#sp-intro-status");
-  const profIntroTa = root.querySelector("#sp-profile-intro");
-  const profIntroStatus = root.querySelector("#sp-profile-intro-status");
+  // Note : l'intro du profil (#sp-profile-intro) a été déplacée dans l'onglet
+  // Identité (non-Premium). Câblage propre dans wireEditor.
   const benefitCbs = root.querySelectorAll(".prem-benefit-cb");
   const benefitStatus = root.querySelector("#prem-benefits-status");
-  if (!priceInput && !introTa && !profIntroTa && !benefitCbs.length) return;
+  if (!priceInput && !introTa && !benefitCbs.length) return;
   let currentBenefits = { chat: true, call: true, pages: true, rdv: true, lives: true };
   try {
     const sp = await api("/api/space", { headers: authHeaders() });
     if (priceInput && sp.price_cents) priceInput.value = (sp.price_cents / 100).toFixed(2);
     if (status) status.textContent = sp.active ? "✓ vendable" : (sp.price_cents ? "prix défini, activation en attente" : "");
     if (introTa && typeof sp.intro_md === "string") introTa.value = sp.intro_md;
-    if (profIntroTa && typeof sp.profile_intro_md === "string") profIntroTa.value = sp.profile_intro_md;
     if (sp.benefits && typeof sp.benefits === "object") {
       currentBenefits = { ...currentBenefits, ...sp.benefits };
       benefitCbs.forEach((cb) => { cb.checked = !!currentBenefits[cb.name]; });
@@ -433,9 +432,6 @@ async function loadSpacePricing(root) {
   };
   root.querySelector("#sp-intro-save")?.addEventListener("click", () =>
     introTa && saveIntro(introTa, introStatus, "/api/space/intro", "Intro de l'espace")
-  );
-  root.querySelector("#sp-profile-intro-save")?.addEventListener("click", () =>
-    profIntroTa && saveIntro(profIntroTa, profIntroStatus, "/api/space/profile-intro", "Intro du profil")
   );
 }
 
@@ -808,7 +804,11 @@ export function renderEditor(data) {
     </div>`;
   }
 
-  appState.commEmptyHtml = `<div class="comm-empty-state"><h3>Sélectionnez un contact</h3><p>Choisissez un contact pour démarrer une conversation ou passer un appel.</p></div>`;
+  // Pane droit vide tant qu'aucune conversation n'est montée : la sidebar prend
+  // toute la place via la règle CSS `.comm-layout:not(:has(... .chat-card)) …`.
+  // On ne garde plus de placeholder texte (« Sélectionne un contact… ») qui
+  // rendait un bloc noir disgracieux à côté d'une liste vide.
+  appState.commEmptyHtml = "";
 
   // Layout 3 colonnes : rail vertical (sous-modes) | sidebar (liste) | pane droit.
   // Le rail style WhatsApp Desktop expose les sous-modes du Chat (Discussions,
@@ -882,7 +882,7 @@ export function renderEditor(data) {
   const _displayName = data.fields.find(f => f.key === "display_name")?.value || null;
   // Source de vérité la plus riche pour le chip header : on alimente le cache
   // partagé avec le nom et la photo issus de /api/me.
-  setMeProfile({ name: _displayName, hasPhoto: data.hasPhoto });
+  setMeProfile({ name: _displayName, hasPhoto: data.hasPhoto, plan: data.plan });
   const BNAV = {
     Identité: { label: "Mon ID", ic: "user" },
     Agenda: { label: "Agenda", ic: "calendar" },
@@ -1121,6 +1121,62 @@ function wirePremiumPage(root, data) {
   });
   root.querySelector("#prem-portal")?.addEventListener("click", openBillingPortal);
 
+  // Pane Personnalisation — compte non-Premium : bouton « Démarrer mon essai
+  // gratuit ». 30 jours, sans CB, server-managed (POST /api/premium/trial/start).
+  // Après succès, on re-render la page pour basculer le pane en mode Premium.
+  const trialBtn = root.querySelector("#prem-upsell-trial");
+  const trialStatus = root.querySelector("#prem-upsell-status");
+  if (trialBtn) {
+    trialBtn.addEventListener("click", async () => {
+      trialBtn.disabled = true;
+      if (trialStatus) trialStatus.textContent = "Activation…";
+      try {
+        const r = await api("/api/premium/trial/start", { method: "POST", headers: jsonAuth() });
+        if (trialStatus) trialStatus.textContent = `✓ Premium activé pour ${r.days} jours`;
+        toast(`Essai Premium activé — ${r.days} jours offerts ✨`);
+        await reloadEditor();
+      } catch (e) {
+        trialBtn.disabled = false;
+        if (trialStatus) trialStatus.textContent = "";
+        toast(e?.message || "Échec de l'activation.");
+      }
+    });
+  }
+
+  // ── Tabs Premium : bascule entre les panes (subscription / space / profile).
+  // Persiste l'onglet actif dans le hash pour permettre le rechargement direct.
+  (() => {
+    const tabBtns = Array.from(root.querySelectorAll(".prem-tab-btn[data-prem-tab]"));
+    const panes = Array.from(root.querySelectorAll("[data-prem-pane]"));
+    if (!tabBtns.length || !panes.length) return;
+    const activate = (key) => {
+      const k = tabBtns.some(b => b.dataset.premTab === key) ? key : "premium";
+      tabBtns.forEach(b => {
+        const on = b.dataset.premTab === k;
+        b.classList.toggle("is-active", on);
+        b.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      panes.forEach(p => {
+        const on = p.dataset.premPane === k;
+        p.hidden = !on;
+        p.classList.toggle("is-active", on);
+      });
+      try {
+        if (location.hash.replace(/^#/, "") !== k) {
+          history.replaceState(null, "", `${location.pathname}${location.search}#${k}`);
+        }
+      } catch { /* ignore (sandbox) */ }
+      // Remonte le scroll dans le body Premium pour pas atterrir au milieu.
+      root.querySelector(".prem-body")?.scrollTo?.({ top: 0, behavior: "instant" });
+    };
+    tabBtns.forEach(b => b.addEventListener("click", () => activate(b.dataset.premTab)));
+    // Back-compat hash : "subscription"/"space" → "premium", "profile" → "public".
+    const HASH_ALIAS = { subscription: "premium", space: "premium", profile: "public" };
+    const rawHash = (location.hash || "").replace(/^#/, "");
+    const initial = HASH_ALIAS[rawHash] ?? rawHash ?? "premium";
+    activate(initial || "premium");
+  })();
+
   // Toggle « Profil hors annuaire » : inversé (case cochée = listed_in_directory false).
   const hiddenCb = root.querySelector("#prem-perk-hidden");
   const hiddenStatus = root.querySelector("#prem-perks-status");
@@ -1139,25 +1195,63 @@ function wirePremiumPage(root, data) {
       toast(e?.message || "Échec.");
     }
   });
+  // Raccourci vers l'onglet Galerie (premium feature de customisation : liens
+  // sur chaque photo). Pose un indice sessionStorage lu par setupTabs.
   root.querySelector("#prem-go-gallery")?.addEventListener("click", () => {
-    // Retour à l'éditeur en demandant l'ouverture de l'onglet Galerie (indice lu
-    // par setupTabs au prochain rendu).
     try { sessionStorage.setItem("mindlog.openTab", "Galerie"); } catch {}
     location.assign("/me");
   });
 
-  // Couverture (photo / vidéo) : cadrage + recompression côté navigateur
-  // (1080×1920 WebP image, WebM VP9 10 s sans audio vidéo) avant upload,
-  // pour rester sous COVER_MAX et garantir une lecture <video> fluide.
+  // ── Tags du profil (Premium) : ajout + suppression. Backend OSS (/api/tags)
+  // pour l'instant ; le gating Premium côté serveur reste à faire.
+  (() => {
+    const input = root.querySelector("#prem-tag-input");
+    const addBtn = root.querySelector("#prem-add-tag");
+    const status = root.querySelector("#prem-tag-status");
+    const list = root.querySelector("#prem-tags-edit");
+    if (!input || !addBtn || !list) return;
+    const setStatus = (txt) => { if (status) status.textContent = txt; };
+    const submit = async () => {
+      const tag = (input.value || "").trim();
+      if (!tag) return;
+      setStatus("Ajout…");
+      try {
+        await api("/api/tags", { method: "POST", headers: jsonAuth(), body: JSON.stringify({ tag }) });
+        input.value = "";
+        await reloadEditor();
+      } catch (e) {
+        setStatus("");
+        premErr(e);
+      }
+    };
+    addBtn.addEventListener("click", submit);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); void submit(); } });
+    list.addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-del-tag]");
+      if (!btn) return;
+      setStatus("Suppression…");
+      try {
+        await api(`/api/tags/${encodeURIComponent(btn.dataset.delTag)}`, { method: "DELETE", headers: jsonAuth() });
+        await reloadEditor();
+      } catch (err) {
+        setStatus("");
+        premErr(err);
+      }
+    });
+  })();
+
+  // Couverture (Premium) : cadrage + recompression côté navigateur (1080×1920
+  // WebP image, WebM VP9 10 s sans audio) avant upload. Backend `/api/cover`
+  // reste OSS pour l'instant ; gating Premium côté serveur à ajouter.
   const coverInput = root.querySelector("#cover-file");
   coverInput?.addEventListener("change", async () => {
     const file = coverInput.files?.[0];
-    coverInput.value = ""; // permet de re-sélectionner le même fichier après annulation
+    coverInput.value = "";
     if (!file) return;
     let out;
     try { out = await openCoverEditor(file); }
     catch (e) { premErr(e); return; }
-    if (!out) return; // annulé
+    if (!out) return;
     const fd = new FormData();
     fd.append("cover", new File([out.blob], `cover.${out.ext}`, { type: out.type }));
     try { await api("/api/cover", { method: "POST", headers: authHeaders(), body: fd }); toast("Couverture mise à jour ✓"); await reloadEditor(); }
@@ -1548,26 +1642,65 @@ export function wireEditor(data) {
     app.querySelector(`.edit-field[data-key="${CSS.escape(key)}"] .fv`)?.focus();
   });
 
-  // Tags : ajout + suppression (re-rendu de la colonne après chaque action).
-  const addTagEl = app.querySelector("#nt-tag");
-  const submitTag = async () => {
-    const tag = addTagEl.value.trim();
-    if (!tag) return;
-    try {
-      await api("/api/tags", { method: "POST", headers: jsonAuth(), body: JSON.stringify({ tag }) });
-      await renderPrivate(appState.key);
-    } catch (e) { toast(e.message); }
-  };
-  app.querySelector("#add-tag")?.addEventListener("click", submitTag);
-  addTagEl?.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); void submitTag(); } });
-  app.querySelectorAll("[data-del-tag]").forEach((b) =>
-    b.addEventListener("click", async () => {
+  // Intro du profil (OSS, autosave) : texte Markdown au-dessus de la bio sur
+  // /@handle. Stockage `identities.profile_intro_md` (migration 0032). Pré-rempli
+  // côté template à partir de `data.profile_intro_md` ; sauvegarde débouncée à
+  // 600 ms sur `input`, plus un flush sur `blur` pour ne jamais perdre la frappe.
+  const introTa = app.querySelector("#sp-profile-intro");
+  const introStatus = app.querySelector("#sp-profile-intro-status");
+  if (introTa) {
+    // Deep-link depuis /@handle (CTA « Définir mon intro ») : si l'URL arrive
+    // avec #intro, on bascule le deck sur la colonne Identité (où vit la
+    // textarea Markdown) PUIS on scroll/focus. Sans le deckGoLabel, la
+    // textarea est dans une colonne non active → focus invisible.
+    if (location.hash === "#intro") {
+      const focusIntro = () => {
+        try { window.__deckGoLabel?.("Identité"); } catch {}
+        // Laisse le temps à la transition de colonne avant de scroller.
+        setTimeout(() => {
+          introTa.scrollIntoView({ behavior: "smooth", block: "center" });
+          introTa.focus();
+          // Curseur en fin de texte (pas en début si déjà du contenu).
+          try { introTa.setSelectionRange(introTa.value.length, introTa.value.length); } catch {}
+          try { history.replaceState(null, "", location.pathname + location.search); } catch {}
+        }, 250);
+      };
+      requestAnimationFrame(focusIntro);
+    }
+    let lastSaved = introTa.value;
+    let saveTimer = null;
+    let fadeTimer = null;
+    const setStatus = (txt, cls) => {
+      if (!introStatus) return;
+      introStatus.textContent = txt;
+      introStatus.dataset.state = cls || "";
+      if (fadeTimer) { clearTimeout(fadeTimer); fadeTimer = null; }
+      if (cls === "ok") fadeTimer = setTimeout(() => setStatus("", ""), 1600);
+    };
+    const doSave = async () => {
+      if (introTa.value === lastSaved) return;
+      const sending = introTa.value;
+      setStatus("Enregistrement…", "saving");
       try {
-        await api(`/api/tags/${encodeURIComponent(b.dataset.delTag)}`, { method: "DELETE", headers: jsonAuth() });
-        await renderPrivate(appState.key);
-      } catch (e) { toast(e.message); }
-    })
-  );
+        await api("/api/me/profile-intro", { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ intro_md: sending }) });
+        lastSaved = sending;
+        setStatus("✓ enregistrée", "ok");
+      } catch (e) {
+        setStatus("", "");
+        toast(e?.message || "Échec.");
+      }
+    };
+    introTa.addEventListener("input", () => {
+      if (saveTimer) clearTimeout(saveTimer);
+      setStatus("Modifications…", "dirty");
+      saveTimer = setTimeout(() => { saveTimer = null; void doSave(); }, 600);
+    });
+    // Flush immédiat à la perte de focus pour ne pas attendre 600 ms si l'user quitte la zone.
+    introTa.addEventListener("blur", () => {
+      if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+      void doSave();
+    });
+  }
 
   // Événements : suppression directe (corbeille sur la carte), création et
   // édition via la modale composer (façon Teams).
@@ -1758,7 +1891,7 @@ export function wireEditor(data) {
     const newAction = {
       chats: { label: "Nouvelle discussion", run: () => openContactPicker("chat") },
       groups: { label: "Nouveau groupe", run: () => openNewGroupFormInline() },
-      live: { label: "Démarrer un live", run: () => openLiveInRightPane("/live/broadcast", "Démarrer un live") },
+      live: { label: "Démarrer un live", run: () => openLiveInRightPane("/me/broadcast", "Démarrer un live", { broadcast: true }) },
     };
     /* Formulaire "Nouveau groupe" rendu DIRECTEMENT dans commRight, sans la
      * coquille .card + liste qu'ajoutait openGroups (la liste est déjà dans la
@@ -1947,17 +2080,24 @@ export function wireEditor(data) {
         }
         liveHost.innerHTML = liveCol.html;
         liveCol.wire?.(liveHost);
-        // Intercepte les clics sur cartes Live (démarrage, en direct, à venir)
-        // pour rendre la cible dans commRight au lieu de naviguer en plein écran.
+        // Intercepte les clics sur cartes Live (démarrage, en direct, à venir,
+        // ainsi que les vignettes Netflix-style .lv-tile) pour rendre la cible
+        // dans commRight au lieu de naviguer en plein écran.
         liveHost.addEventListener("click", (e) => {
-          const a = e.target.closest("a.live-card");
+          const a = e.target.closest("a.live-card, a.lv-tile");
           if (!a) return;
           const href = a.getAttribute("href");
           if (!href || href.startsWith("#") || href.startsWith("javascript:")) return;
           if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return; // ctrl/cmd-click ouvre normalement
           e.preventDefault();
-          const title = a.querySelector("strong")?.textContent?.trim() || "Live";
-          openLiveInRightPane(href, title);
+          // Titre : sur .live-card on prend le <strong>, sur .lv-tile on
+          // prend .lv-tile-title (le <strong> est aussi présent).
+          const title = (a.querySelector(".lv-tile-title")?.textContent
+            || a.querySelector("strong")?.textContent
+            || "Live").trim();
+          // Le CTA « Démarrer un live » pointe vers /me/broadcast : on signale
+          // l'intention de diffuser pour permettre le gate Premium en amont.
+          openLiveInRightPane(href, title, { broadcast: href === "/me/broadcast" });
         });
         liveLoaded = true;
       } catch {
@@ -1968,7 +2108,36 @@ export function wireEditor(data) {
      * micro + screen-share autorisés en same-origin). Une topbar avec « Retour »
      * et « Ouvrir dans un onglet » permet de revenir à l'état vide ou d'ouvrir
      * la version standalone si besoin. */
-    function openLiveInRightPane(url, title) {
+    function openLiveInRightPane(url, title, opts = {}) {
+      // Gate Premium pour la diffusion : si l'intention est de broadcast et que
+      // le compte n'est pas Premium, on remplace l'iframe par un CTA inline
+      // plutôt que de charger une page qui se contenterait d'afficher la même
+      // chose en interne (et de prendre une frame pour rien).
+      if (opts.broadcast && appState.me?.plan !== "premium") {
+        commRight.innerHTML = `
+          <div class="comm-iframe-wrap">
+            <div class="comm-iframe-bar">
+              <button type="button" class="btn sm" id="comm-iframe-close" aria-label="Retour">← Retour</button>
+              <span class="comm-iframe-title">${esc(title)}</span>
+            </div>
+            <div class="live-cta-premium">
+              <div class="live-cta-icon" aria-hidden="true">📡</div>
+              <h2 class="live-cta-h">La diffusion live est réservée aux comptes Premium</h2>
+              <p class="live-cta-lead">Caméra, partage d'écran ou composition PIP — diffuse en direct à tes abonné·e·s, chiffré bout-en-bout en mesh P2P.</p>
+              <ul class="live-cta-list">
+                <li>✓ Diffusion HD / SD / LD avec adaptation automatique</li>
+                <li>✓ Chat broadcaster intégré</li>
+                <li>✓ Notifications aux abonné·e·s au démarrage</li>
+                <li>✓ Lives planifiés via l'agenda</li>
+              </ul>
+              <a class="btn primary" href="/me/premium">${icon("sparkles", 14)} Devenir Premium</a>
+            </div>
+          </div>`;
+        commRight.querySelector("#comm-iframe-close")?.addEventListener("click", () => {
+          commRight.innerHTML = appState.commEmptyHtml;
+        });
+        return;
+      }
       commRight.innerHTML = `
         <div class="comm-iframe-wrap">
           <div class="comm-iframe-bar">
