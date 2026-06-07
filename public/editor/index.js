@@ -1898,7 +1898,15 @@ export function wireEditor(data) {
     }
     const setMode = (mode) => {
       if (!railBtns[mode] || !views[mode]) return;
+      const prevMode = activeMode;
       activeMode = mode;
+      if (prevMode !== mode) {
+        // Changer d'onglet ferme le panneau contextuel ouvert à droite
+        // (diffusion live, chat ouvert, formulaire nouveau groupe…).
+        commRight.innerHTML = appState.commEmptyHtml;
+        commContactList.querySelectorAll(".comm-contact-item").forEach((el) => el.classList.remove("selected"));
+        commGroupsList?.querySelectorAll(".comm-group-item").forEach((el) => el.classList.remove("selected"));
+      }
       for (const k of Object.keys(railBtns)) {
         railBtns[k]?.classList.toggle("is-active", k === mode);
         railBtns[k]?.setAttribute("aria-selected", k === mode ? "true" : "false");

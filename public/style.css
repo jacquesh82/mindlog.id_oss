@@ -5496,6 +5496,7 @@ body:has(.overlay.open) .bottom-nav { transform: translateY(100%); }
   display: flex; align-items: center; gap: .65rem;
   padding: .6rem .85rem; border-radius: var(--r-md);
   border: 1px solid var(--line);
+  margin: 0 10px;
 }
 .acc-sub-banner--free {
   background: color-mix(in srgb, var(--accent) 8%, var(--card));
@@ -5709,8 +5710,8 @@ body:has(.overlay.open) .bottom-nav { transform: translateY(100%); }
    s'efface. La croix de la conversation sert alors de « retour à la liste »
    (elle appelle host.closeDeckColumn → #comm-right repasse à l'état vide). */
 @container comms (max-width: 600px) {
-  /* Mobile : rail toujours visible (48px), sidebar OU conv en plein écran. */
-  .comm-layout { grid-template-columns: 48px 1fr; }
+  /* Mobile : rail toujours visible (63px), sidebar OU conv en plein écran. */
+  .comm-layout { grid-template-columns: 63px 1fr; }
   .comm-right { display: none; }
   .comm-layout:has(#comm-right .chat-card) .comm-sidebar,
   .comm-layout:has(#comm-right .comm-iframe-wrap) .comm-sidebar { display: none; }
@@ -5834,7 +5835,7 @@ body:has(.overlay.open) .bottom-nav { transform: translateY(100%); }
 @media (max-width: 640px) {
   /* Sur mobile, on resserre le rail mais on garde le label : la sidebar passe
      en plein écran quand un mode est actif. */
-  .comm-rail { width: 48px; }
+  .comm-rail { width: 63px; }
   .comm-rail-btn { min-height: 48px; padding: .25rem .15rem; }
   .comm-rail-btn svg { width: 20px; height: 20px; }
   .comm-rail-label { font-size: .55rem; }
@@ -5978,11 +5979,11 @@ body:has(.overlay.open) .bottom-nav { transform: translateY(100%); }
 .acc-header { display: flex; flex-direction: column; gap: .75rem; margin-bottom: 1rem; }
 .acc-panels { display: contents; }
 @media (max-width: 640px) {
-  .acc-layout { grid-template-columns: 48px 1fr; }
+  .acc-layout { grid-template-columns: 63px 1fr; }
   .acc-scroll { padding: .75rem 1rem; }
 }
 @media (max-width: 640px) {
-  .subrail { width: 48px; }
+  .subrail { width: 63px; }
   .subrail-btn { min-height: 48px; padding: .25rem .15rem; }
   .subrail-btn svg { width: 20px; height: 20px; }
   .subrail-label { font-size: .55rem; }

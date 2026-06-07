@@ -35,7 +35,7 @@ export function renderAgendaColumn(data, { reqFilterChips, requestsHtml, dayLoad
   // le wiring (app.querySelectorAll('.agenda-tab')…) marche tel quel.
   return `<div class="card subrail-card">
       <nav class="subrail" role="tablist" aria-label="Sous-sections Agenda" id="agenda-tabs">
-        <button class="subrail-btn agenda-tab is-active active" data-tab="dispo" role="tab" aria-selected="true" title="Disponibilités" aria-label="Disponibilités">
+        <button class="subrail-btn agenda-tab active" data-tab="dispo" role="tab" aria-selected="true" title="Disponibilités" aria-label="Disponibilités">
           ${icon("calendar", 22)}<span class="subrail-label">Agenda</span>
         </button>
         <button class="subrail-btn agenda-tab" data-tab="events" role="tab" aria-selected="false" title="Événements" aria-label="Événements">
@@ -47,27 +47,24 @@ export function renderAgendaColumn(data, { reqFilterChips, requestsHtml, dayLoad
         </button>
       </nav>
       <div class="col-scroll subrail-body">
-        <div class="agenda-panel" id="agenda-dispo" role="tabpanel">
+        <div class="agenda-panel" id="agenda-dispo" role="tabpanel" style="padding:10px">
           <div class="calendar-fill">
             ${host.calendar.html(data.overrides, true, dayLoad, true, data.events || [])}
           </div>
           ${upcomingHtml}
-          <div style="padding-bottom:.6rem"></div>
         </div>
-        <div class="agenda-panel" id="agenda-events" role="tabpanel" hidden>
+        <div class="agenda-panel" id="agenda-events" role="tabpanel" hidden style="padding:10px">
           <div class="ev-toolbar">
             <span class="ev-toolbar-title">${icon("calendar", 15)} Mes événements</span>
             <button type="button" class="btn primary sm" data-event-new>${icon("plus", 15)} Nouvel événement</button>
           </div>
           <div class="agenda-events">${eventsHtml(data.events, true)}</div>
-          <div style="padding-bottom:.6rem"></div>
         </div>
-        <div class="agenda-panel" id="agenda-rdv" role="tabpanel" hidden>
+        <div class="agenda-panel" id="agenda-rdv" role="tabpanel" hidden style="padding:10px">
           <div class="req-filters" role="tablist" aria-label="Filtrer les demandes">
             ${reqFilterChips(data.requests || [])}
           </div>
           <ul class="requests">${requestsHtml(data.requests || [])}</ul>
-          <div style="padding-bottom:.6rem"></div>
         </div>
       </div>
     </div>`;
