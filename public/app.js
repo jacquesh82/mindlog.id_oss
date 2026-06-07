@@ -36,35 +36,17 @@ const TURNSTILE_SITE_KEY =
 // Mode d'affichage de la landing : "public" (grand public, simplifié, par défaut)
 // ou "expert" (vue complète, technique). Mémorisé localement.
 const LANDING_MODE_STORE = "mindlog.landing_mode";
+// Mode Geek temporairement désactivé — landing forcée en "public" (EASY) et
+// switch masqué. Pour réactiver : restaurer le corps d'origine de landingMode()
+// et landingModeSwitchHtml() (voir l'historique git).
 function landingMode() {
-  try {
-    const s = localStorage.getItem(LANDING_MODE_STORE);
-    if (s === "expert" || s === "public") return s;
-  } catch {}
   return "public";
 }
-function setLandingMode(m) {
-  const v = m === "expert" ? "expert" : "public";
-  try { localStorage.setItem(LANDING_MODE_STORE, v); } catch {}
-  // Re-rend la landing immédiatement
-  renderLanding();
+function setLandingMode(_m) {
+  // no-op tant que le switch est masqué
 }
-// Contrôle segmenté Easy / Geek — pilule moderne avec pouce coulissant.
 function landingModeSwitchHtml() {
-  const isExpert = landingMode() === "expert";
-  return `
-    <div class="seg ${isExpert ? "is-expert" : "is-public"}" id="mode-seg"
-         role="tablist" aria-label="${esc(t("mode_switch_aria"))}">
-      <span class="seg-thumb" aria-hidden="true"></span>
-      <button type="button" class="seg-btn" data-mode="public" role="tab"
-              aria-selected="${!isExpert}" aria-label="${esc(t("mode_public"))}">
-        ${icon("sparkles", 14)}<span>${esc(t("mode_public"))}</span>
-      </button>
-      <button type="button" class="seg-btn" data-mode="expert" role="tab"
-              aria-selected="${isExpert}" aria-label="${esc(t("mode_expert"))}">
-        ${icon("code", 14)}<span>${esc(t("mode_expert"))}</span>
-      </button>
-    </div>`;
+  return "";
 }
 
 // Tarif Premium adapté au pays du visiteur. Le prix réel reste 1 € (Stripe en
@@ -323,6 +305,7 @@ function headerAccount(unread = 0) {
     </button>
     <div class="profile-menu" id="profile-menu" role="menu">
       <button class="pmenu-item" id="pmenu-profil" role="menuitem" type="button">${icon("user", 15)} Mon profil</button>
+      <button class="pmenu-item" id="pmenu-edit" role="menuitem" type="button">${icon("home", 15)} Revenir à l'application</button>
       <button class="pmenu-item" id="pmenu-premium" role="menuitem" type="button">${icon("sparkles", 15)} Mon espace premium</button>
       <button class="pmenu-item" id="pmenu-theme" role="menuitem" type="button">${storedTheme() === "light" ? icon("moon", 15) + " Mode sombre" : icon("sun", 15) + " Mode clair"}</button>
       <button class="pmenu-item" id="pmenu-notifs" role="menuitem" type="button">${icon("bell", 15)} Notifications</button>
@@ -391,6 +374,12 @@ function wireProfileMenu() {
         if (location.pathname !== target) location.assign(target);
       } else goTab("Compte"); // fallback : pas connecté → éditeur
       _pmenu.close(); return;
+    }
+    if (e.target.closest("#pmenu-edit")) {
+      // Retour à l'éditeur /me : si déjà sur /me, no-op ; sinon navigation.
+      _pmenu.close();
+      if (location.pathname !== "/me") location.assign("/me");
+      return;
     }
     if (e.target.closest("#pmenu-notifs")) {
       const bell = document.getElementById("notif-bell");
@@ -3176,7 +3165,10 @@ async function renderPublicProfile(handle) {
     setTimeout(renderGallery, 100);
   }
 
-  host.calendar.wire(app.querySelector(".calendar"), data.overrides || {}, false, data.handle, undefined, !isSelf);
+  // editable = isSelf : sur sa propre page publique on peut éditer la dispo
+  // (toggle libre/occupé en cliquant un jour) ; sur la page d'un tiers c'est en
+  // lecture seule. canBook = !isSelf : on ne se prend pas un RDV à soi-même.
+  host.calendar.wire(app.querySelector(".calendar"), data.overrides || {}, isSelf, data.handle, undefined, !isSelf, data.events || []);
   // (bouton « Demander un RDV » retiré : seul le clic sur un jour libre
   // déclenche la modale, comme indiqué par .cal-hint.)
 
@@ -3624,7 +3616,7 @@ function cardViewHtml(data, editable, profileActions = "") {
           <section id="pub-agenda" class="pub-tab-panel" role="tabpanel" tabindex="-1" hidden>
             ${hasAvailability ? `<div class="pub-section-h first">${icon("clock", 16)} Disponibilités</div>
               <div class="calendar-fill">
-                ${host.calendar.html(data.overrides, false, undefined, canBook)}
+                ${host.calendar.html(data.overrides, isSelf, undefined, canBook, data.events || [])}
               </div>
               ${isSelf || data.options?.allowRequests === false ? "" :
                 `<p class="cal-hint" role="note">${icon("calendar", 14)} <span>Choisis un <b>jour libre</b> (en vert) pour demander un RDV.</span></p>`}` : ""}

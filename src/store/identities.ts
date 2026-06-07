@@ -110,18 +110,35 @@ export async function searchIdentities(
   limit = 12,
   opts: { includeTags?: boolean } = {}
 ): Promise<{ handle: string; display_name: string; title: string; has_photo: boolean }[]> {
-  const term = `%${q.trim().replace(/[%_]/g, "")}%`;
+  const raw = q.trim();
+  // Email = saisie COMPLÈTE uniquement (pas d'autocomplétion / dump partiel).
+  // Match exact (lowercased) sur recovery_email + card_field public 'email'.
+  // Quand on est en mode email, on désactive la recherche partielle pour ne pas
+  // laisser fuiter des adresses via un display_name qui en contiendrait une.
+  const email = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw) ? raw.toLowerCase() : null;
+  // Handle / display_name / tags : recherche partielle (ILIKE %term%). Le `@`
+  // initial éventuellement saisi est stripé pour que `@joe` matche `joe123`.
+  // Les jokers SQL (%, _) sont neutralisés.
+  const partial = raw.replace(/^@+/, "").replace(/[%_]/g, "");
+  const term = `%${partial}%`;
   // Filtre annuaire : exclut les comptes Premium qui se sont rendus invisibles
   // (settings.listed_in_directory === false). Le champ settings est JSON, on
   // s'appuie sur l'opérateur jsonb/`::jsonb` pour le filtrage.
   // - Match sur handle, display_name, et optionnellement tags (capability Premium).
   // - ILIKE : insensible à la casse. Les % et _ saisis sont neutralisés ci-dessus.
-  const tagJoin = opts.includeTags
+  const tagJoin = opts.includeTags && !email
     ? sql`LEFT JOIN tags tg ON tg.identity_id = i.id`
     : sql``;
-  const tagWhere = opts.includeTags
+  const tagWhere = opts.includeTags && !email
     ? sql`OR tg.tag ILIKE ${term}`
     : sql``;
+  const emailJoin = email
+    ? sql`LEFT JOIN card_fields em ON em.identity_id = i.id AND em.key = 'email'`
+    : sql``;
+  // En mode email : UNIQUEMENT match exact. En mode partiel : handle + display_name.
+  const matchWhere = email
+    ? sql`(lower(i.recovery_email) = ${email} OR lower(em.value) = ${email})`
+    : sql`(i.handle ILIKE ${term} OR dn.value ILIKE ${term} ${tagWhere})`;
   const res = await db.execute(sql`
     SELECT DISTINCT i.handle, i.photo_file,
            COALESCE(dn.value, '') AS display_name,
@@ -130,7 +147,8 @@ export async function searchIdentities(
       LEFT JOIN card_fields dn ON dn.identity_id = i.id AND dn.key = 'display_name'
       LEFT JOIN card_fields t  ON t.identity_id  = i.id AND t.key  = 'title'
       ${tagJoin}
-     WHERE (i.handle ILIKE ${term} OR dn.value ILIKE ${term} ${tagWhere})
+      ${emailJoin}
+     WHERE ${matchWhere}
        -- Match littéral du flag dans le JSON brut : robuste si settings invalide.
        -- Le défaut (true) reste donc affiché tant que l'utilisateur n'a pas coché « hors annuaire ».
        AND COALESCE(i.settings, '') NOT ILIKE '%"listed_in_directory":false%'

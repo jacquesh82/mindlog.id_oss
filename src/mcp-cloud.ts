@@ -344,7 +344,7 @@ export function buildCloudMcpServer(me: Identity): McpServer {
         return ok({ handle: target.handle, day, status: "closed", slots: [] });
       const status = await effectiveDayStatus(target.id, day);
       if (status !== "free") return ok({ handle: target.handle, day, status, slots: [] });
-      const booked = new Set(await bookedSlots(target.id, day));
+      const booked = new Set(await bookedSlots(target.id, day, settings.availability.slot_minutes));
       return ok({
         handle: target.handle,
         day,

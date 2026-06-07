@@ -385,14 +385,24 @@ const port = Number(process.env.PORT ?? 8787);
 
 // Chargement optionnel du module Premium (absent = édition communautaire).
 let _premiumStartAdmin: (() => void) | undefined;
+let _premiumEnsureMilo: (() => Promise<void>) | undefined;
 try {
-  const { register, startAdmin } = await import("./premium/index.js");
+  const { register, startAdmin, ensureMiloPremium } = await import("./premium/index.js");
   register(app);
   _premiumStartAdmin = startAdmin;
+  _premiumEnsureMilo = ensureMiloPremium;
 } catch { /* édition communautaire : Premium non disponible */ }
 
 await initDb(); // applique les migrations Drizzle
 await ensureMilo(); // crée/maj le profil mascotte @milo
+if (_premiumEnsureMilo) {
+  // En édition Premium, on enrichit @milo : abonnement actif, espace privé
+  // avec tarif et tous bénéfices, page premium publiée, live planifié. Permet
+  // d'avoir un compte de démo riche dès le premier boot.
+  await _premiumEnsureMilo().catch((e) =>
+    console.warn("[premium] ensureMiloPremium:", (e as Error)?.message ?? e),
+  );
+}
 
 // Purge périodique : tokens/codes OAuth, sessions et messages éphémères expirés.
 // (Les messages sont aussi purgés paresseusement à chaque lecture ; ce balayage

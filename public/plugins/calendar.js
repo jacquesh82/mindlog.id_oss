@@ -1,13 +1,23 @@
 /* ============================================================================
- * Plugin : Calendrier & demande de RDV
+ * Plugin : Calendrier (Jour / Semaine / Mois, style MS Teams) + demande de RDV
  * ----------------------------------------------------------------------------
  * Disponibilités par jour (libre en semaine, occupé le week-end par défaut ;
- * seules les exceptions sont stockées dans `overrides`) + modale de RDV.
+ * seules les exceptions sont stockées dans `overrides`), événements du
+ * propriétaire affichés en chips/blocs, modale de RDV pour les visiteurs.
  *
- * S'enregistre via le registre de plugins de app.js et expose ses capacités
- * sous `host.calendar` : { html, wire, openBooking, fmtDay }.
- * N'importe RIEN de app.js : toutes les primitives partagées (esc, api, toast,
- * jsonAuth…) arrivent par l'objet `host` injecté à l'enregistrement.
+ * Exposé sous `host.calendar` :
+ *   - html(overrides, editable, dayLoad, canBook=true, events=[])
+ *   - wire(container, overrides, editable, handle, dayLoad, locked=false,
+ *          events=[], onEventClick=fn)
+ *   - openBooking(handle, day)
+ *   - fmtDay(iso)
+ *   - defaultStatus(iso)
+ *   - setAvailability(a)
+ *
+ * `dayLoad` reste comme avant (compteur d'events par jour pour la heatmap en
+ * vue publique). `events` est la nouvelle liste plate des événements à rendre
+ * (chips/blocs). Si on est éditeur, `onEventClick(eventObj)` est appelé au clic
+ * sur un chip → l'app ouvre la modale d'édition.
  * ========================================================================== */
 
 export default function register(host) {
@@ -15,36 +25,51 @@ export default function register(host) {
 
   const pad2 = (n) => String(n).padStart(2, "0");
   const isoDay = (y, m, d) => `${y}-${pad2(m + 1)}-${pad2(d)}`;
+  const isoDayOf = (date) => isoDay(date.getFullYear(), date.getMonth(), date.getDate());
 
   // Règle de dispo générale courante (jours de semaine + périodes), réglée par
   // l'app avant chaque rendu via setAvailability(). Par défaut : L-V libre.
-  const DEFAULT_AVAIL = { weekdays: [true, true, true, true, true, false, false], periods: [] };
+  const DEFAULT_AVAIL = {
+    weekdays: [true, true, true, true, true, false, false],
+    periods: [],
+    start: "08:00",
+    end: "19:00",
+    slot_minutes: 30,
+  };
   let currentAvail = DEFAULT_AVAIL;
   function setAvailability(a) {
     currentAvail = a && Array.isArray(a.weekdays) && a.weekdays.length === 7
-      ? { weekdays: a.weekdays, periods: Array.isArray(a.periods) ? a.periods : [] }
+      ? {
+          weekdays: a.weekdays,
+          periods: Array.isArray(a.periods) ? a.periods : [],
+          start: typeof a.start === "string" ? a.start : DEFAULT_AVAIL.start,
+          end: typeof a.end === "string" ? a.end : DEFAULT_AVAIL.end,
+          slot_minutes: a.slot_minutes || DEFAULT_AVAIL.slot_minutes,
+        }
       : DEFAULT_AVAIL;
   }
 
-  // Statut par défaut d'un jour : périodes datées prioritaires, sinon jour de semaine.
   function defaultStatus(iso) {
     for (const p of currentAvail.periods) {
       if (p && iso >= p.from && iso <= p.to) return p.free ? "free" : "busy";
     }
-    const wd = new Date(iso + "T00:00:00Z").getUTCDay(); // 0 = dim … 6 = sam
+    const wd = new Date(iso + "T00:00:00Z").getUTCDay();
     return currentAvail.weekdays[(wd + 6) % 7] ? "free" : "busy";
   }
 
   function fmtDay(iso) {
     return new Date(iso + "T00:00:00Z").toLocaleDateString("fr-FR", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      timeZone: "UTC",
+      weekday: "long", day: "numeric", month: "long", timeZone: "UTC",
     });
   }
 
-  let calOffset = 0; // mois affiché, relatif au mois courant (persiste entre re-rendus)
+  /* ----------------------- État partagé du calendrier ---------------------- */
+  // calOffset : décalage en mois (compatibilité existante, vue Mois).
+  // cursor    : ancre Date pour Day/Week (lundi de la semaine ou jour visible).
+  // view      : "month" | "week" | "day".
+  let calOffset = 0;
+  let cursor = new Date();
+  let view = "month";
 
   function calYearMonth(offset) {
     const now = new Date();
@@ -54,7 +79,21 @@ export default function register(host) {
     return { y, m };
   }
 
-  // Heatmap de charge : 0-1 = vert, 2-3 = orange, 4+ = rouge.
+  // Lundi de la semaine contenant `date`, sans muter `date`.
+  function mondayOf(date) {
+    const d = new Date(date);
+    const wd = (d.getDay() + 6) % 7; // 0 = lundi
+    d.setDate(d.getDate() - wd);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+  function addDays(date, n) {
+    const d = new Date(date);
+    d.setDate(d.getDate() + n);
+    return d;
+  }
+
+  /* --------------------------- Heatmap (vue Mois pub) --------------------- */
   function heatClass(n) {
     if (!n) return "heat-0";
     if (n <= 1) return "heat-0";
@@ -62,119 +101,570 @@ export default function register(host) {
     return "heat-high";
   }
 
-  // Contenu interne du calendrier pour le mois courant (calOffset).
-  // `counts` (optionnel) : map iso→nombre d'événements du jour → heatmap.
-  // `canBook` (défaut true) : autorise la prise de RDV sur un jour libre (faux pour
-  // sa propre page — on ne se demande pas un RDV à soi-même).
-  function calInner(overrides, editable, counts, canBook = true) {
+  /* ----------------------- Indexation des événements ---------------------- */
+  // Regroupe les events par ISO day (UTC). Un event qui chevauche plusieurs
+  // jours est répété sur chacun. Conserve le tri par heure de début.
+  function eventsByDay(events) {
+    const map = new Map();
+    for (const e of events || []) {
+      if (!e?.starts_at) continue;
+      const s = new Date(e.starts_at);
+      const end = e.ends_at ? new Date(e.ends_at) : new Date(s.getTime() + 60 * 60_000);
+      if (isNaN(s) || isNaN(end)) continue;
+      const cur = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+      const last = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+      while (cur <= last) {
+        const k = isoDayOf(cur);
+        if (!map.has(k)) map.set(k, []);
+        map.get(k).push(e);
+        cur.setDate(cur.getDate() + 1);
+      }
+    }
+    for (const arr of map.values()) {
+      arr.sort((a, b) => (a.starts_at || "").localeCompare(b.starts_at || ""));
+    }
+    return map;
+  }
+
+  function fmtHourMin(date) {
+    return `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+  }
+
+  function chipClass(ev) {
+    return ev?.kind === "live" ? "cal-chip is-live" : "cal-chip is-event";
+  }
+
+  /* ------------------------------ Toolbar --------------------------------- */
+  function viewToolbar(title) {
+    const tab = (k, label) =>
+      `<button type="button" class="cal-view-tab${view === k ? " active" : ""}" data-view="${k}" role="tab" aria-selected="${view === k}">${label}</button>`;
+    return `
+      <div class="cal-toolbar">
+        <div class="cal-nav-cluster">
+          <button class="cal-nav" type="button" data-cal-prev aria-label="Précédent">‹</button>
+          <button class="cal-nav cal-today" type="button" data-cal-today>Aujourd'hui</button>
+          <button class="cal-nav" type="button" data-cal-next aria-label="Suivant">›</button>
+        </div>
+        <span class="cal-title">${title}</span>
+        <div class="cal-view-tabs" role="tablist" aria-label="Type de vue">
+          ${tab("day", "Jour")}
+          ${tab("week", "Semaine")}
+          ${tab("month", "Mois")}
+        </div>
+      </div>`;
+  }
+
+  /* ------------------------------- Vue Mois ------------------------------- */
+  function monthInner(overrides, editable, counts, canBook, evMap) {
     const { y, m } = calYearMonth(calOffset);
     const now = new Date();
-    const todayIso = isoDay(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayIso = isoDayOf(now);
     const first = new Date(Date.UTC(y, m, 1));
     const title = first.toLocaleDateString("fr-FR", { month: "long", year: "numeric", timeZone: "UTC" });
     const days = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
-    const startOffset = (first.getUTCDay() + 6) % 7; // lundi = 0
+    const startOffset = (first.getUTCDay() + 6) % 7;
     const dows = ["L", "M", "M", "J", "V", "S", "D"].map((d) => `<div class="cal-dow">${d}</div>`).join("");
 
+    const heatmap = !!counts && !editable;
     let cells = "";
     for (let i = 0; i < startOffset; i++) cells += '<div class="cal-cell empty"></div>';
-    const heatmap = !!counts && !editable; // heatmap : lecture seule avec compteurs
+
     for (let d = 1; d <= days; d++) {
       const iso = isoDay(y, m, d);
       const status = overrides[iso] || defaultStatus(iso);
       const past = iso < todayIso;
+      const isToday = iso === todayIso;
       const n = counts ? counts[iso] || 0 : 0;
-      // En édition, on colore selon la dispo (libre/occupé) — c'est ce qu'on règle ;
-      // la charge (heatmap) n'est utilisée qu'en lecture seule avec compteurs.
-      const cls = ["cal-cell", heatmap && !editable ? heatClass(n) : status, past ? "past" : ""].join(" ").trim();
+      const dayEvents = (evMap.get(iso) || []);
+
+      const cls = [
+        "cal-cell",
+        heatmap ? heatClass(n) : status,
+        past ? "past" : "",
+        isToday ? "is-today" : "",
+        dayEvents.length ? "has-events" : "",
+      ].filter(Boolean).join(" ");
+
       let attr = "";
       if (!past && editable) {
-        const load = n ? ` — ${n} événement${n > 1 ? "s" : ""}` : "";
+        const load = dayEvents.length ? ` — ${dayEvents.length} événement${dayEvents.length > 1 ? "s" : ""}` : "";
         attr = `data-day="${iso}" title="Cliquer pour basculer dispo/occupé${load}"`;
-      } else if (!past && !editable && canBook && status === "free") attr = `data-book="${iso}" title="Demander un RDV ce jour"`;
-      // En lecture seule sans prise de RDV (ma propre page), les jours ne sont pas cliquables.
+      } else if (!past && !editable && canBook && status === "free") {
+        attr = `data-book="${iso}" title="Demander un RDV ce jour"`;
+      }
       const inert = past || (!editable && (status === "busy" || !canBook));
-      cells += `<button class="${cls}" ${attr} ${inert ? "disabled" : ""}>${d}</button>`;
+
+      // Chips d'événements : max 2 visibles + "+N" si plus. Chips cliquables en
+      // éditeur (édition d'event) ; en vue publique, juste lecture.
+      const MAX_CHIPS = 2;
+      const chips = dayEvents.slice(0, MAX_CHIPS).map((ev) => {
+        const t = ev.starts_at ? fmtHourMin(new Date(ev.starts_at)) : "";
+        const tt = `${t ? t + " — " : ""}${ev.title || ""}`;
+        return `<button type="button" class="${chipClass(ev)}" data-event-id="${ev.id}" title="${esc(tt)}">
+          <span class="cal-chip-time">${t}</span>
+          <span class="cal-chip-title">${esc(ev.title || "")}</span>
+        </button>`;
+      }).join("");
+      const overflow = dayEvents.length > MAX_CHIPS
+        ? `<span class="cal-chip-more" title="${dayEvents.length} événements">+${dayEvents.length - MAX_CHIPS}</span>`
+        : "";
+
+      cells += `<div class="cal-cell-wrap">
+        <button class="${cls}" ${attr} ${inert ? "disabled" : ""}>
+          <span class="cal-cell-num">${d}</span>
+        </button>
+        ${(chips || overflow) ? `<div class="cal-cell-chips">${chips}${overflow}</div>` : ""}
+      </div>`;
     }
-    // On ne recule pas avant le mois courant.
+
     const prevDisabled = calOffset <= 0 ? "disabled" : "";
     const legend = heatmap
-      ? `
-      <div class="cal-legend">
-        <span><i class="dot-heat-0"></i> 0-1</span>
-        <span><i class="dot-heat-mid"></i> 2-3</span>
-        <span><i class="dot-heat-high"></i> 4+</span>
-        <span>charge du jour</span>
-      </div>`
-      : `
-      <div class="cal-legend">
-        <span><i class="dot-free"></i> Disponible</span>
-        <span><i class="dot-busy"></i> Occupé</span>
-        ${editable ? "<span>Clic = basculer</span>" : canBook ? "<span>Clic sur un jour libre = RDV</span>" : ""}
-      </div>`;
-    return `
-      <div class="cal-head">
-        <button class="cal-nav" type="button" data-cal-prev aria-label="Mois précédent" ${prevDisabled}>‹</button>
-        <span class="cal-title">${title}</span>
-        <button class="cal-nav" type="button" data-cal-next aria-label="Mois suivant">›</button>
-      </div>
-      <div class="cal-grid">${dows}${cells}</div>
-      ${legend}`;
-  }
+      ? `<div class="cal-legend"><span><i class="dot-heat-0"></i> 0-1</span><span><i class="dot-heat-mid"></i> 2-3</span><span><i class="dot-heat-high"></i> 4+</span><span>charge du jour</span></div>`
+      : `<div class="cal-legend">
+          <span><i class="dot-free"></i> Disponible</span>
+          <span><i class="dot-busy"></i> Occupé</span>
+          ${editable ? "<span>Clic = basculer dispo</span>" : canBook ? "<span>Clic sur un jour libre = RDV</span>" : ""}
+        </div>`;
 
-  function calendarHtml(overrides, editable, counts, canBook = true) {
-    return `<div class="calendar">${calInner(overrides || {}, editable, counts, canBook)}</div>`;
-  }
-
-  // Câble la navigation de mois + les jours (bascule en édition, RDV en public).
-  function wireCalendar(container, overrides, editable, handle, counts, canBook = true) {
-    if (!container) return;
-    const rerender = () => {
-      container.innerHTML = calInner(overrides, editable, counts, canBook);
-      wireCalendar(container, overrides, editable, handle, counts, canBook);
+    return {
+      title,
+      html: `${viewToolbar(title).replace("data-cal-prev", `data-cal-prev ${prevDisabled}`)}
+        <div class="cal-month-grid">${dows}${cells}</div>
+        ${legend}`,
     };
+  }
+
+  /* ----------------------- Grille horaire (Day / Week) -------------------- */
+  function hourRange() {
+    const [sh] = currentAvail.start.split(":").map(Number);
+    const [eh] = currentAvail.end.split(":").map(Number);
+    // Marge d'1h autour de la plage configurée pour mieux situer les events
+    // qui sortent légèrement du créneau de travail.
+    return { startHour: Math.max(0, sh - 1), endHour: Math.min(24, eh + 1) };
+  }
+
+  function timeGridDays(days, editable, canBook, overrides, evMap, onClickDay) {
+    const { startHour, endHour } = hourRange();
+    const nbHours = endHour - startHour;
+    const rowH = 40; // px par heure (cf. .cal-time-row)
+    const now = new Date();
+    const todayIso = isoDayOf(now);
+    const nowTopPx =
+      (now.getHours() - startHour + now.getMinutes() / 60) * rowH;
+
+    // Rail des heures à gauche
+    const hourLabels = Array.from({ length: nbHours }, (_, i) => {
+      const h = startHour + i;
+      return `<div class="cal-time-row" style="height:${rowH}px"><span class="cal-time-lbl">${pad2(h)}:00</span></div>`;
+    }).join("");
+
+    // Colonnes-jours
+    const cols = days.map((d) => {
+      const iso = isoDayOf(d);
+      const status = overrides[iso] || defaultStatus(iso);
+      const past = iso < todayIso;
+      const isToday = iso === todayIso;
+      const dayEvents = evMap.get(iso) || [];
+
+      // Blocs d'événements positionnés en absolu dans la colonne. Le contenu
+      // est ordonné par densité d'info (titre + heure → end-time + lieu →
+      // notes) : `overflow:hidden` clippe naturellement ce qui ne tient pas
+      // dans la hauteur du bloc, donc on garde le plus important en tête.
+      const blocks = dayEvents.map((ev) => {
+        const s = new Date(ev.starts_at);
+        const end = ev.ends_at ? new Date(ev.ends_at) : new Date(s.getTime() + 60 * 60_000);
+        const top = Math.max(0, ((s.getHours() + s.getMinutes() / 60) - startHour) * rowH);
+        const height = Math.max(20, ((end - s) / 3_600_000) * rowH - 2);
+        const t = fmtHourMin(s);
+        const tEnd = fmtHourMin(end);
+        const tooltipBase = `${t} — ${tEnd} · ${ev.title || ""}`;
+        const tooltip = ev.location ? `${tooltipBase} · ${ev.location}` : tooltipBase;
+        const locHtml = ev.location ? `<span class="cal-block-loc">📍 ${esc(ev.location)}</span>` : "";
+        const notesHtml = ev.notes ? `<div class="cal-block-notes">${esc(ev.notes)}</div>` : "";
+        return `<button type="button" class="cal-time-block ${ev.kind === "live" ? "is-live" : "is-event"}"
+          data-event-id="${ev.id}"
+          style="top:${top}px;height:${height}px"
+          title="${esc(tooltip)}">
+          <div class="cal-block-row cal-block-head">
+            <span class="cal-block-time">${t}</span>
+            <span class="cal-block-title">${esc(ev.title || "")}</span>
+          </div>
+          <div class="cal-block-row cal-block-meta">
+            <span class="cal-block-range">→ ${tEnd}</span>
+            ${locHtml}
+          </div>
+          ${notesHtml}
+        </button>`;
+      }).join("");
+
+      // Cases horaires (clic = nouvel event en éditeur, demande de RDV sinon)
+      const slots = Array.from({ length: nbHours }, (_, i) => {
+        const hour = startHour + i;
+        const slotIso = `${iso}T${pad2(hour)}:00`;
+        const clickable =
+          !past && (
+            (editable) ||
+            (!editable && canBook && status === "free")
+          );
+        const attr = clickable
+          ? (editable
+              ? `data-slot-new="${slotIso}"`
+              : `data-slot-book="${iso}|${pad2(hour)}:00"`)
+          : "";
+        return `<button type="button" class="cal-time-slot" ${attr} ${clickable ? "" : "disabled"} style="height:${rowH}px"></button>`;
+      }).join("");
+
+      // Header de colonne : jour + dot d'état (free/busy). En éditeur, le dot
+      // devient un bouton qui bascule la dispo (équivalent du clic sur cellule
+      // en vue Mois). En public, le dot reste informatif et permet de demander
+      // un RDV si le jour est libre.
+      const statusCls = past ? "is-past" : (status === "free" ? "is-free" : "is-busy");
+      const dotAttr = past
+        ? ""
+        : editable
+          ? `data-day-toggle="${iso}" title="Basculer dispo/occupé"`
+          : (canBook && status === "free")
+            ? `data-day-book="${iso}" title="Demander un RDV"`
+            : "";
+      const colHeader = `<div class="cal-day-header ${isToday ? "is-today" : ""} ${statusCls}">
+        <span class="cal-day-dow">${d.toLocaleDateString("fr-FR", { weekday: "short" })}</span>
+        <span class="cal-day-num">${d.getDate()}</span>
+        <button type="button" class="cal-day-dot" ${dotAttr} ${dotAttr ? "" : "disabled"} aria-label="${status === "free" ? "Disponible" : "Occupé"}">
+          <span class="cal-day-dot-label">${status === "free" ? "Libre" : "Occupé"}</span>
+        </button>
+      </div>`;
+
+      return `<div class="cal-day-col ${past ? "past" : ""} ${isToday ? "is-today" : ""} ${statusCls}" data-iso="${iso}">
+        ${colHeader}
+        <div class="cal-day-body ${statusCls}" data-day="${iso}" style="height:${nbHours * rowH}px">
+          ${slots}
+          ${blocks}
+        </div>
+      </div>`;
+    }).join("");
+
+    // Ligne « maintenant » globale : une seule pour toute la grille, traverse
+    // toutes les colonnes visibles. Affichée uniquement si aujourd'hui est dans
+    // la fenêtre rendue et que l'heure tombe dans la plage horaire affichée.
+    const todayInRange = days.some((d) => isoDayOf(d) === todayIso);
+    const headerH = 64; // doit matcher .cal-day-header height
+    const nowLineGlobal =
+      todayInRange && nowTopPx >= 0 && nowTopPx <= nbHours * rowH
+        ? `<div class="cal-now-line" style="top:${headerH + nowTopPx}px" aria-hidden="true">
+            <span class="cal-now-label">${pad2(now.getHours())}:${pad2(now.getMinutes())}</span>
+          </div>`
+        : "";
+
+    return `<div class="cal-time-grid" style="--cal-row-h:${rowH}px">
+      <div class="cal-time-rail">
+        <div class="cal-day-header is-spacer"></div>
+        ${hourLabels}
+      </div>
+      <div class="cal-time-cols">
+        ${cols}
+        ${nowLineGlobal}
+      </div>
+    </div>`;
+  }
+
+  function weekInner(overrides, editable, canBook, evMap) {
+    const monday = mondayOf(cursor);
+    const days = Array.from({ length: 7 }, (_, i) => addDays(monday, i));
+    const last = days[6];
+    const sameMonth = monday.getMonth() === last.getMonth();
+    const title = sameMonth
+      ? `${monday.getDate()} — ${last.getDate()} ${monday.toLocaleDateString("fr-FR", { month: "long", year: "numeric" })}`
+      : `${monday.getDate()} ${monday.toLocaleDateString("fr-FR", { month: "short" })} — ${last.getDate()} ${last.toLocaleDateString("fr-FR", { month: "short", year: "numeric" })}`;
+    return {
+      title,
+      html: `${viewToolbar(title)}
+        ${timeGridDays(days, editable, canBook, overrides, evMap)}`,
+    };
+  }
+
+  function dayInner(overrides, editable, canBook, evMap) {
+    const d = new Date(cursor);
+    d.setHours(0, 0, 0, 0);
+    const title = d.toLocaleDateString("fr-FR", {
+      weekday: "long", day: "numeric", month: "long", year: "numeric",
+    });
+    return {
+      title,
+      html: `${viewToolbar(title)}
+        ${timeGridDays([d], editable, canBook, overrides, evMap)}`,
+    };
+  }
+
+  /* ----------------------------- Render & wire ---------------------------- */
+  function renderInner(overrides, editable, counts, canBook, events) {
+    const evMap = eventsByDay(events);
+    if (view === "month") return monthInner(overrides, editable, counts, canBook, evMap);
+    if (view === "week") return weekInner(overrides, editable, canBook, evMap);
+    return dayInner(overrides, editable, canBook, evMap);
+  }
+
+  function calendarHtml(overrides, editable, counts, canBook = true, events = []) {
+    const { html } = renderInner(overrides || {}, editable, counts, canBook, events);
+    return `<div class="calendar view-${view}">${html}</div>`;
+  }
+
+  // Câblage : navigation, switcher de vue, clics jours/slots/chips.
+  // `onEventClick(ev)` est appelé par le code éditeur pour ouvrir la modale d'édition.
+  // ATTENTION : le 6e paramètre est bien `canBook` (true=autorise la demande
+  // de RDV, false=non — typiquement `false` sur sa propre page publique). Ne
+  // pas inverser : les appelants passent `!isSelf`.
+  function wireCalendar(container, overrides, editable, handle, counts, canBook = true, events = [], onEventClick) {
+    if (!container) return;
+    const eventsById = new Map((events || []).map((e) => [String(e.id), e]));
+
+    const rerender = () => {
+      const { html } = renderInner(overrides, editable, counts, canBook, events);
+      container.innerHTML = html;
+      const wrap = container.closest(".calendar");
+      if (wrap) wrap.className = `calendar view-${view}`;
+      wireCalendar(container, overrides, editable, handle, counts, canBook, events, onEventClick);
+    };
+
     container.querySelector("[data-cal-prev]")?.addEventListener("click", () => {
-      if (calOffset > 0) calOffset--;
+      if (view === "month") {
+        if (calOffset > 0) calOffset--;
+      } else if (view === "week") {
+        cursor = addDays(cursor, -7);
+      } else {
+        cursor = addDays(cursor, -1);
+      }
       rerender();
     });
     container.querySelector("[data-cal-next]")?.addEventListener("click", () => {
-      calOffset++;
+      if (view === "month") calOffset++;
+      else if (view === "week") cursor = addDays(cursor, 7);
+      else cursor = addDays(cursor, 1);
       rerender();
     });
+    container.querySelector("[data-cal-today]")?.addEventListener("click", () => {
+      calOffset = 0;
+      cursor = new Date();
+      rerender();
+    });
+    container.querySelectorAll("[data-view]").forEach((b) =>
+      b.addEventListener("click", () => {
+        view = b.dataset.view === "day" || b.dataset.view === "week" ? b.dataset.view : "month";
+        rerender();
+      })
+    );
 
-    if (editable) {
-      container.querySelectorAll("[data-day]").forEach((b) =>
-        b.addEventListener("click", async () => {
-          const day = b.dataset.day;
-          // Statut courant calculé depuis l'état (override ou défaut), pas la
-          // classe CSS — fiable quel que soit le mode d'affichage de la cellule.
-          const cur = overrides[day] || defaultStatus(day);
-          const next = cur === "free" ? "busy" : "free";
-          try {
-            await api(`/api/availability/${day}`, {
-              method: "PUT",
-              headers: jsonAuth(),
-              body: JSON.stringify({ status: next }),
-            });
-            // MAJ locale puis re-render du seul calendrier (conserve la position du deck).
-            if (next === defaultStatus(day)) delete overrides[day];
-            else overrides[day] = next;
-            rerender();
-          } catch (e) {
-            toast(e.message);
-          }
+    // Chips d'événements (vue Mois) → ouverture en édition au clic.
+    if (editable && typeof onEventClick === "function") {
+      container.querySelectorAll(".cal-chip[data-event-id]").forEach((b) =>
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const ev = eventsById.get(b.dataset.eventId);
+          if (ev) onEventClick(ev);
         })
       );
-    } else {
-      container.querySelectorAll("[data-book]").forEach((b) =>
-        b.addEventListener("click", () =>
-          openBooking(handle, { day: b.dataset.book, label: fmtDay(b.dataset.book) })
-        )
-      );
+    }
+
+    // Blocs d'événements (vues Jour/Semaine) → drag-to-move + resize bord bas.
+    // Clic court (< 4px de mouvement) = édition ; sinon = MAJ starts_at/ends_at
+    // via PUT /api/agenda/:id, snap au pas slot_minutes. Drag horizontal entre
+    // colonnes en vue Semaine (l'event change de jour).
+    if (editable && (view === "week" || view === "day")) {
+      const ROW_H = 40; // doit matcher --cal-row-h
+      const snapMin = currentAvail.slot_minutes || 30;
+      const snapPx = (snapMin / 60) * ROW_H;
+      const { startHour } = hourRange();
+
+      container.querySelectorAll(".cal-time-block[data-event-id]").forEach((block) => {
+        const ev = eventsById.get(block.dataset.eventId);
+        if (!ev) return;
+        let session = null;
+
+        // Sépare le clic de la prise (drag/resize) : on regarde la distance
+        // parcourue avant pointerup. Pas de preventDefault au pointerdown pour
+        // ne pas casser le focus/clic court.
+        block.addEventListener("pointerdown", (e) => {
+          if (e.button !== 0) return;
+          // Ignore les clics sur le bouton de fermeture/contenu interactif éventuel.
+          const rect = block.getBoundingClientRect();
+          const onResizeEdge = (e.clientY - rect.top) > rect.height - 8;
+          session = {
+            mode: onResizeEdge ? "resize" : "move",
+            startY: e.clientY,
+            startX: e.clientX,
+            startTop: parseFloat(block.style.top) || 0,
+            startHeight: parseFloat(block.style.height) || ROW_H,
+            startColIso: block.closest(".cal-day-body")?.dataset.day || null,
+            moved: false,
+          };
+          block.setPointerCapture(e.pointerId);
+        });
+
+        block.addEventListener("pointermove", (e) => {
+          if (!session) return;
+          const dy = e.clientY - session.startY;
+          const dx = e.clientX - session.startX;
+          if (!session.moved && (Math.abs(dy) > 4 || Math.abs(dx) > 4)) {
+            session.moved = true;
+            block.classList.add("is-dragging");
+          }
+          if (!session.moved) return;
+          // Snap au plus proche multiple de snapPx
+          const snappedDy = Math.round(dy / snapPx) * snapPx;
+
+          if (session.mode === "resize") {
+            const newH = Math.max(snapPx, session.startHeight + snappedDy);
+            block.style.height = newH + "px";
+          } else {
+            // Déplacement vertical (heure)
+            const newTop = Math.max(0, session.startTop + snappedDy);
+            block.style.top = newTop + "px";
+            // Déplacement horizontal entre colonnes (semaine uniquement)
+            if (view === "week") {
+              const cols = [...container.querySelectorAll(".cal-day-col")];
+              const colUnder = cols.find((c) => {
+                const r = c.getBoundingClientRect();
+                return e.clientX >= r.left && e.clientX <= r.right;
+              });
+              const destBody = colUnder?.querySelector(".cal-day-body");
+              if (destBody && destBody !== block.parentNode) {
+                destBody.appendChild(block); // change de colonne, conserve top/height
+              }
+            }
+          }
+        });
+
+        const finish = async (e) => {
+          if (!session) return;
+          const wasMoved = session.moved;
+          const mode = session.mode;
+          session = null;
+          block.classList.remove("is-dragging");
+          try { block.releasePointerCapture(e.pointerId); } catch { /* déjà relâché */ }
+
+          if (!wasMoved) {
+            // Tap court → édition. On laisse pointerup déclencher le click natif.
+            return;
+          }
+          // Empêche le click natif qui suivrait d'ouvrir la modale
+          const swallow = (ce) => { ce.stopPropagation(); ce.preventDefault(); block.removeEventListener("click", swallow, true); };
+          block.addEventListener("click", swallow, true);
+
+          // Recalcule starts_at/ends_at
+          const newTopPx = parseFloat(block.style.top) || 0;
+          const newHeightPx = parseFloat(block.style.height) || ROW_H;
+          const destIso = block.closest(".cal-day-body")?.dataset.day;
+          if (!destIso) { rerender(); return; }
+          const [yyyy, mm, dd] = destIso.split("-").map(Number);
+          const startMinutes = startHour * 60 + (newTopPx / ROW_H) * 60;
+          const startDate = new Date(yyyy, mm - 1, dd, 0, 0, 0);
+          startDate.setMinutes(Math.round(startMinutes));
+          const durationMin = Math.max(snapMin, Math.round((newHeightPx / ROW_H) * 60));
+          const endDate = new Date(startDate.getTime() + durationMin * 60_000);
+          const payload = {
+            starts_at: startDate.toISOString(),
+            ends_at: endDate.toISOString(),
+          };
+          try {
+            await api(`/api/agenda/${ev.id}`, {
+              method: "PUT", headers: jsonAuth(), body: JSON.stringify(payload),
+            });
+            ev.starts_at = payload.starts_at;
+            ev.ends_at = payload.ends_at;
+            toast(mode === "resize" ? "Durée mise à jour" : "Événement déplacé");
+            rerender();
+          } catch (err) {
+            toast(err.message || "Sauvegarde impossible");
+            rerender(); // revient à l'état serveur
+          }
+        };
+        block.addEventListener("pointerup", finish);
+        block.addEventListener("pointercancel", finish);
+
+        // Click natif sur bloc non-bougé → édition
+        block.addEventListener("click", (e) => {
+          if (block.classList.contains("is-dragging")) return;
+          e.stopPropagation();
+          if (typeof onEventClick === "function") onEventClick(ev);
+        });
+      });
+    }
+
+    // Mois : bascule dispo (éditeur) ou demande RDV (public).
+    if (view === "month") {
+      if (editable) {
+        container.querySelectorAll("[data-day]").forEach((b) =>
+          b.addEventListener("click", async () => {
+            const day = b.dataset.day;
+            const cur = overrides[day] || defaultStatus(day);
+            const next = cur === "free" ? "busy" : "free";
+            try {
+              await api(`/api/availability/${day}`, {
+                method: "PUT", headers: jsonAuth(), body: JSON.stringify({ status: next }),
+              });
+              if (next === defaultStatus(day)) delete overrides[day];
+              else overrides[day] = next;
+              rerender();
+            } catch (e) { toast(e.message); }
+          })
+        );
+      } else {
+        container.querySelectorAll("[data-book]").forEach((b) =>
+          b.addEventListener("click", () =>
+            openBooking(handle, { day: b.dataset.book, label: fmtDay(b.dataset.book) })
+          )
+        );
+      }
+    }
+
+    // Day/Week : dot du header — bascule dispo (éditeur) ou ouvre la modale
+    // RDV pour le jour (visiteur).
+    if (view === "week" || view === "day") {
+      if (editable) {
+        container.querySelectorAll("[data-day-toggle]").forEach((b) =>
+          b.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const day = b.dataset.dayToggle;
+            const cur = overrides[day] || defaultStatus(day);
+            const next = cur === "free" ? "busy" : "free";
+            try {
+              await api(`/api/availability/${day}`, {
+                method: "PUT", headers: jsonAuth(), body: JSON.stringify({ status: next }),
+              });
+              if (next === defaultStatus(day)) delete overrides[day];
+              else overrides[day] = next;
+              rerender();
+            } catch (err) { toast(err.message); }
+          })
+        );
+      } else {
+        container.querySelectorAll("[data-day-book]").forEach((b) =>
+          b.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const iso = b.dataset.dayBook;
+            openBooking(handle, { day: iso, label: fmtDay(iso) });
+          })
+        );
+      }
+      // Clic dans une case horaire vide → nouvel event (éditeur) ou RDV ciblé (visiteur).
+      if (editable) {
+        container.querySelectorAll("[data-slot-new]").forEach((b) =>
+          b.addEventListener("click", () => {
+            const ev = new CustomEvent("calendar:newAt", { detail: { startsAt: b.dataset.slotNew } });
+            container.dispatchEvent(ev);
+          })
+        );
+      } else {
+        container.querySelectorAll("[data-slot-book]").forEach((b) =>
+          b.addEventListener("click", () => {
+            const [iso, time] = b.dataset.slotBook.split("|");
+            openBooking(handle, { day: iso, label: fmtDay(iso), time });
+          })
+        );
+      }
     }
   }
 
-  // Modale « Demander un RDV » (visiteur).
+  /* --------------------------- Modale RDV (visiteur) ---------------------- */
   function openBooking(handle, day) {
     const overlay = document.createElement("div");
     overlay.className = "overlay";
@@ -206,8 +696,7 @@ export default function register(host) {
       </div>`;
     document.body.appendChild(overlay);
 
-    // Créneaux horaires du jour choisi : le visiteur sélectionne une heure précise.
-    let selectedTime = null;
+    let selectedTime = day?.time || null;
     if (day?.day) {
       const slotsBox = overlay.querySelector("#bk-slots");
       api(`/api/identities/${encodeURIComponent(handle)}/slots?day=${encodeURIComponent(day.day)}`, {
@@ -216,16 +705,13 @@ export default function register(host) {
         .then((res) => {
           if (!slotsBox) return;
           const slots = res.slots || [];
-          if (!slots.length) return; // pas de créneaux → demande sans heure précise
+          if (!slots.length) return;
           slotsBox.hidden = false;
           slotsBox.innerHTML =
             '<span class="bk-slots-label">Créneau souhaité</span><div class="bk-slot-grid">' +
-            slots
-              .map(
-                (s) =>
-                  `<button type="button" class="bk-slot${s.taken ? " taken" : ""}" data-time="${esc(s.time)}" ${s.taken ? "disabled" : ""}>${esc(s.time)}</button>`
-              )
-              .join("") +
+            slots.map((s) =>
+              `<button type="button" class="bk-slot${s.taken ? " taken" : ""}${s.time === selectedTime ? " sel" : ""}" data-time="${esc(s.time)}" ${s.taken ? "disabled" : ""}>${esc(s.time)}</button>`
+            ).join("") +
             "</div>";
           slotsBox.querySelectorAll(".bk-slot:not(.taken)").forEach((b) =>
             b.addEventListener("click", () => {
@@ -239,11 +725,10 @@ export default function register(host) {
         .catch(() => { /* créneaux indisponibles → demande sans heure */ });
     }
 
-    // Pre-fill si connecté (session cookie ou clé héritée)
     if (isLoggedIn()) {
       api("/api/me", { headers: viewerHeaders() })
-        .then(me => {
-          const dn = (me.fields || []).find(f => f.key === "display_name")?.value;
+        .then((me) => {
+          const dn = (me.fields || []).find((f) => f.key === "display_name")?.value;
           const nameEl = overlay.querySelector("#bk-name");
           const emailEl = overlay.querySelector("#bk-email");
           if (nameEl && !nameEl.value) nameEl.value = dn || me.handle || "";
@@ -271,18 +756,14 @@ export default function register(host) {
           body: JSON.stringify({
             day: day ? day.day : null,
             time: selectedTime,
-            name,
-            email,
+            name, email,
             message: overlay.querySelector("#bk-msg").value,
           }),
         });
         close();
         host.toast(host.t("msg_request_sent"));
-        // Auto-création de compte si visiteur non connecté + email fourni
         if (!isLoggedIn() && email) autoRegister(name, email).catch(() => {});
-      } catch (err) {
-        errEl.textContent = err.message;
-      }
+      } catch (err) { errEl.textContent = err.message; }
     });
   }
 
@@ -301,13 +782,18 @@ export default function register(host) {
         host.toast("📬 Compte créé — vérifie ta boîte mail pour accéder au chat E2E chiffré");
         return;
       } catch (err) {
-        if (!err.message?.includes("handle")) return; // abandon si erreur non liée au handle
+        if (!err.message?.includes("handle")) return;
       }
     }
   }
 
   host.registerPlugin({ name: "calendar" });
-  // Capacités exposées au cœur de l'app (utilisées en place dans l'éditeur,
-  // la vue carte publique et le profil public).
-  host.calendar = { html: calendarHtml, wire: wireCalendar, openBooking, fmtDay, defaultStatus, setAvailability };
+  host.calendar = {
+    html: calendarHtml,
+    wire: wireCalendar,
+    openBooking,
+    fmtDay,
+    defaultStatus,
+    setAvailability,
+  };
 }

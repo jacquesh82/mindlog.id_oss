@@ -41,7 +41,7 @@ export function renderAgendaColumn(data, { reqFilterChips, requestsHtml, dayLoad
       <div class="col-scroll">
         <div class="agenda-panel" id="agenda-dispo" role="tabpanel">
           <div class="calendar-fill">
-            ${host.calendar.html(data.overrides, true, dayLoad)}
+            ${host.calendar.html(data.overrides, true, dayLoad, true, data.events || [])}
           </div>
           ${upcomingHtml}
           <div style="padding-bottom:.6rem"></div>

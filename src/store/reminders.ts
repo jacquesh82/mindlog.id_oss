@@ -1,7 +1,8 @@
 // Domaine « reminders » — extrait de src/store.ts (barrel). Voir docs si besoin.
-import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { and, eq, gte, isNotNull, lte, or, sql } from "drizzle-orm";
 import { db } from "../db.js";
 import {
+  events as eventsTable,
   requests,
 } from "../schema.js";
 import { TIME_FMT } from "./shared.js";
@@ -103,14 +104,77 @@ export async function addRequest(
   return ins[0] as BookingRequest;
 }
 
-/** Créneaux déjà réservés (RDV acceptés) un jour donné, pour les griser. */
-export async function bookedSlots(identityId: number, day: string): Promise<string[]> {
-  const rows = (await db
+/** Créneaux déjà occupés un jour donné, à griser pour les demandes externes.
+ *  Inclut deux sources :
+ *   - RDV acceptés (table `requests` status=accepted) — ceux que le visiteur
+ *     pourrait vouloir prendre à nouveau ;
+ *   - événements perso de la table `events` qui chevauchent le jour — quand
+ *     l'utilisateur a noté « Réunion équipe 14h-15h », un visiteur ne doit pas
+ *     pouvoir lui proposer un RDV à 14:00 ce jour-là. Les slots dans l'intervalle
+ *     [event.starts_at, event.ends_at) sont marqués pris ; si `ends_at` est nul,
+ *     on suppose une durée d'1 heure (cohérent avec un RDV typique).
+ *  Le `day` est interprété en UTC — même convention que `defaultDayStatus` et le
+ *  plugin calendrier (isoDay).
+ */
+export async function bookedSlots(
+  identityId: number,
+  day: string,
+  slotMinutes = 30,
+): Promise<string[]> {
+  // 1) RDV acceptés (créneau pris à l'heure exacte) — conserve la sémantique
+  //    historique : un seul slot "HH:MM" grisé par RDV.
+  const reqRows = (await db
     .select({ time: requests.time })
     .from(requests)
     .where(and(eq(requests.identity_id, identityId), eq(requests.day, day), eq(requests.status, "accepted")))) as {
     time: string | null;
   }[];
-  return rows.map((r) => r.time).filter((t): t is string => !!t);
+  const taken = new Set<string>();
+  for (const r of reqRows) if (r.time) taken.add(r.time);
+
+  // 2) Événements perso qui chevauchent le jour. On élargit la fenêtre de
+  //    requête pour capturer un event qui a démarré la veille et déborde, ou
+  //    qui démarre dans la journée. Le filtrage fin (overlap exact) se fait en
+  //    JS sur les ISO strings — c'est trivial et évite une condition SQL avec
+  //    COALESCE sur ends_at.
+  const startOfDay = `${day}T00:00:00.000Z`;
+  const endOfDay = `${day}T23:59:59.999Z`;
+  const dayBefore = new Date(Date.parse(startOfDay) - 86_400_000).toISOString();
+  const evRows = (await db
+    .select({ starts_at: eventsTable.starts_at, ends_at: eventsTable.ends_at })
+    .from(eventsTable)
+    .where(
+      and(
+        eq(eventsTable.identity_id, identityId),
+        // starts_at <= endOfDay (l'event commence avant la fin du jour ciblé)
+        lte(eventsTable.starts_at, endOfDay),
+        // ET (ends_at >= startOfDay) OU (event court : starts_at >= dayBefore)
+        // → couvre les events sans fin (durée par défaut 1h) qui ont démarré
+        //   peu avant minuit UTC.
+        or(gte(eventsTable.ends_at, startOfDay), gte(eventsTable.starts_at, dayBefore)),
+      ),
+    )) as { starts_at: string; ends_at: string | null }[];
+
+  for (const e of evRows) {
+    const s = Date.parse(e.starts_at);
+    const end = e.ends_at ? Date.parse(e.ends_at) : s + 60 * 60_000;
+    if (!Number.isFinite(s) || !Number.isFinite(end)) continue;
+    const dayStart = Date.parse(startOfDay);
+    // Borne l'overlap au jour UTC. Tout slot dont [slotStart, slotEnd)
+    // intersecte [eventStart, eventEnd) est considéré pris.
+    const overlapStart = Math.max(s, dayStart);
+    const overlapEnd = Math.min(end, dayStart + 86_400_000);
+    if (overlapEnd <= overlapStart) continue;
+    for (let mins = 0; mins < 24 * 60; mins += slotMinutes) {
+      const slotStart = dayStart + mins * 60_000;
+      const slotEnd = slotStart + slotMinutes * 60_000;
+      if (slotStart < overlapEnd && slotEnd > overlapStart) {
+        const hh = String(Math.floor(mins / 60)).padStart(2, "0");
+        const mm = String(mins % 60).padStart(2, "0");
+        taken.add(`${hh}:${mm}`);
+      }
+    }
+  }
+  return [...taken];
 }
 

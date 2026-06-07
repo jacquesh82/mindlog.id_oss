@@ -1553,8 +1553,30 @@ export function wireEditor(data) {
     })
   );
 
-  // Disponibilités : navigation de mois + bascule des jours (plugin calendrier)
-  host.calendar.wire(app.querySelector(".calendar"), data.overrides || {}, true, data.handle, dayLoadMap(data));
+  // Disponibilités : navigation de période + bascule des jours + clics events.
+  // Le plugin émet `calendar:newAt` quand on clique une case horaire vide (vue
+  // Jour/Semaine) avec l'heure cible → on ouvre la modale d'évènement préfilée.
+  const calEl = app.querySelector(".calendar");
+  host.calendar.wire(
+    calEl,
+    data.overrides || {},
+    true,
+    data.handle,
+    dayLoadMap(data),
+    false,
+    data.events || [],
+    (ev) => openEventModal(ev, { liveAvailable: !!data.space?.benefits?.lives }),
+  );
+  calEl?.addEventListener("calendar:newAt", (e) => {
+    const startsAt = e.detail?.startsAt; // "YYYY-MM-DDTHH:00" local
+    if (!startsAt) return;
+    // openEventModal sait préremplir si on lui passe un objet ressemblant à un
+    // event (champs starts_at, ...). On forge un event "vide" non-éditant.
+    openEventModal(null, {
+      liveAvailable: !!data.space?.benefits?.lives,
+      prefill: { starts_at: startsAt },
+    });
+  });
 
   // Aperçu façon téléphone (colonne Accueil) : swipe entre Accueil / Calendrier /
   // Galerie + pastilles de pagination, et montage de la vraie galerie (plugin).
@@ -2795,6 +2817,9 @@ function toLocalInput(iso) {
 export function openEventModal(event, opts = {}) {
   const editing = !!event;
   const initialKind = editing && event.kind === "live" ? "live" : "event";
+  // Préfill création depuis un clic sur une case horaire de la vue Jour/Semaine :
+  // opts.prefill = { starts_at: "YYYY-MM-DDTHH:00" } (heure locale).
+  const prefillStart = !editing && opts.prefill?.starts_at ? opts.prefill.starts_at : "";
   // On expose le toggle si le créateur peut planifier un live, OU si on édite
   // un live existant (pour permettre la rétrogradation en simple événement).
   const showKindToggle = !!opts.liveAvailable || initialKind === "live";
@@ -2841,7 +2866,7 @@ export function openEventModal(event, opts = {}) {
         <div class="group ev-grid2">
           <div>
             <label for="ev-start">Début <span class="req" aria-hidden="true">*</span></label>
-            <input id="ev-start" name="starts_at" type="datetime-local" required aria-required="true" value="${editing ? toLocalInput(event.starts_at) : ""}" />
+            <input id="ev-start" name="starts_at" type="datetime-local" required aria-required="true" value="${editing ? toLocalInput(event.starts_at) : prefillStart}" />
           </div>
           <div>
             <label for="ev-end">Fin <span class="opt">(optionnel)</span></label>

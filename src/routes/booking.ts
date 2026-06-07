@@ -67,7 +67,7 @@ route.get("/api/identities/:handle/slots", async (c) => {
   if (!settings.allow_requests && !isOwner) return c.json({ day, status: "closed", slots: [] });
   const status = await effectiveDayStatus(idn.id, day);
   if (status !== "free") return c.json({ day, status, slots: [] });
-  const booked = new Set(await bookedSlots(idn.id, day));
+  const booked = new Set(await bookedSlots(idn.id, day, settings.availability.slot_minutes));
   return c.json({
     day,
     status: "free",

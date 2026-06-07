@@ -328,6 +328,10 @@ route.get("/api/me", async (c) => {
       ? { url: `/api/identities/${encodeURIComponent(id.handle)}/cover?v=${coverVersion(id.cover_file)}`, type: id.cover_type || "image" }
       : null,
     buttons: await listButtons(id.id),
+    // Espace premium (vue propriétaire) : tarif, intros, bénéfices opt-in.
+    // Indispensable côté éditeur pour décider si la modale agenda propose le
+    // type « Live » (data.space.benefits.lives) et afficher l'onglet Premium.
+    space: premium ? await getSpaceInfo(id.id, id.id) : null,
     settings: parseSettings(id.settings),
     private: true,
     publicUrl: `/@${id.handle}`,

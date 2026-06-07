@@ -34,6 +34,12 @@ docs/features-oss-vs-premium.md
 
 # Scripts d'administration
 scripts/gen-admin-certs.sh
+scripts/make-premium.sh
+scripts/subscribe-to-space.sh
+scripts/reset-prod-db.sh
+
+# Docs déploiement prod (infra interne str01)
+docs/deploy-str01.md
 
 # Workflows privés (deploy prod + miroir) — le CI de test reste dans l'OSS
 .github/workflows/mirror-oss.yml
