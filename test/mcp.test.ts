@@ -3,6 +3,20 @@ import assert from "node:assert/strict";
 import { sql } from "drizzle-orm";
 import { closeDb, db, initDb } from "../src/db.js";
 import { createIdentity, getFields, getIdentityByHandle, upsertField, setSettings } from "../src/store.js";
+import { upsertFromProvider } from "../src/premium/store/subscriptions.js";
+
+/** Active premium pour une identité (provider 'dev'). */
+async function grantPremium(identityId: number): Promise<void> {
+  const farFuture = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+  await upsertFromProvider(identityId, {
+    provider: "dev",
+    customer_id: "dev",
+    subscription_id: "dev",
+    status: "active",
+    current_period_end: farFuture,
+    cancel_at_period_end: false,
+  });
+}
 
 process.env.MINDLOG_NO_LISTEN = "1";
 
@@ -246,4 +260,218 @@ test("préférences respectées : dispo privée masquée, RDV refusé", async ()
 
   const rdv = await callTool(me.access_key, "request_meeting", { handle: "tom", day: "2026-06-03" });
   assert.ok(typeof rdv.error === "string");
+});
+
+/* ------------------------------- Préférences ---------------------------- */
+
+test("get_my_preferences renvoie les défauts ; set_my_preferences ne touche que les clés fournies", async () => {
+  const me = await makeUser("prefsuser");
+  const before = await callTool(me.access_key, "get_my_preferences", {});
+  assert.equal(before.allow_chat, true);
+  assert.equal(before.public_availability, true);
+
+  const set = await callTool(me.access_key, "set_my_preferences", { allow_chat: false, allow_video: false });
+  const s = (set.settings ?? {}) as Record<string, unknown>;
+  assert.equal(s.allow_chat, false);
+  assert.equal(s.allow_video, false);
+  assert.equal(s.allow_call, true, "clé non fournie = inchangée");
+
+  const after = await callTool(me.access_key, "get_my_preferences", {});
+  assert.equal(after.allow_chat, false);
+});
+
+/* -------------------------------- Invitations --------------------------- */
+
+test("create_invite + get_invite_preview : aperçu correct, token réutilisable jusqu'à acceptation", async () => {
+  const me = await makeUser("inviter");
+  await upsertField(me.id, { key: "display_name", value: "Inviter Display" });
+  const created = await callTool(me.access_key, "create_invite", { type: "pro" });
+  assert.ok(typeof created.token === "string" && (created.token as string).length > 10);
+  assert.ok(typeof created.url === "string" && (created.url as string).includes("/i/"));
+
+  const preview = await callTool(me.access_key, "get_invite_preview", { token: created.token });
+  assert.equal(preview.handle, "inviter");
+  assert.equal(preview.display_name, "Inviter Display");
+});
+
+test("get_invite_preview sur token bidon renvoie null", async () => {
+  const me = await makeUser("invreader");
+  const preview = await callTool(me.access_key, "get_invite_preview", { token: "totalement-bidon" });
+  assert.equal(preview as unknown as null, null);
+});
+
+/* --------------------------------- Galerie ------------------------------ */
+
+test("list_gallery vide par défaut ; delete_gallery_photo refuse photo inconnue", async () => {
+  const me = await makeUser("galuser");
+  const out = await callTool(me.access_key, "list_gallery", {});
+  assert.deepEqual(out.photos, []);
+  assert.equal(out.handle, "galuser");
+
+  const del = await callTool(me.access_key, "delete_gallery_photo", { id: 999999 });
+  assert.ok(typeof del.error === "string");
+});
+
+test("set_gallery_link refuse hors-Premium", async () => {
+  const me = await makeUser("galnopremium");
+  const out = await callTool(me.access_key, "set_gallery_link", { id: 1, url: "https://example.com" });
+  assert.ok(typeof out.error === "string");
+  assert.ok((out.error as string).toLowerCase().includes("premium"));
+});
+
+/* --------------------------- Boutons de page ---------------------------- */
+
+test("get_page_buttons d'un compte non-Premium = liste vide", async () => {
+  const me = await makeUser("btnviewer");
+  const other = await makeUser("btnowner");
+  const mine = await callTool(me.access_key, "get_page_buttons", {});
+  assert.deepEqual(mine.buttons, []);
+  const them = await callTool(me.access_key, "get_page_buttons", { handle: other.handle });
+  assert.deepEqual(them.buttons, []);
+});
+
+test("set_page_buttons Premium-gated : sans premium → erreur, avec premium → boutons persistés", async () => {
+  const me = await makeUser("btncreator");
+  const denied = await callTool(me.access_key, "set_page_buttons", {
+    buttons: [{ label: "Mon site", url: "https://exemple.fr" }],
+  });
+  assert.ok(typeof denied.error === "string");
+
+  await grantPremium(me.id);
+  const ok2 = await callTool(me.access_key, "set_page_buttons", {
+    buttons: [
+      { label: "Mon site", url: "https://exemple.fr", shape: "square", show_label: true },
+      { label: "Mail", url: "mailto:a@b.fr" },
+    ],
+  });
+  const buttons = (ok2.buttons ?? []) as Array<{ label: string; url: string; shape: string }>;
+  assert.equal(buttons.length, 2);
+  assert.equal(buttons[0].label, "Mon site");
+  assert.equal(buttons[0].shape, "square");
+
+  // get_page_buttons reflète l'état pour MOI.
+  const read = await callTool(me.access_key, "get_page_buttons", {});
+  assert.equal((read.buttons as unknown[]).length, 2);
+});
+
+/* ----------------------------- Espace Premium --------------------------- */
+
+test("get_my_space sans Premium renvoie defaults inactifs ; get_space sur handle vide → available:false", async () => {
+  const me = await makeUser("spacefree");
+  const mine = await callTool(me.access_key, "get_my_space", {});
+  assert.equal(mine.available, true);
+  assert.equal(mine.price_cents, 0);
+  assert.equal(mine.active, false);
+  // Vue d'un autre profil sans rien → available:false (pas null pour rester sérialisable).
+  const other = await makeUser("spaceother");
+  const them = await callTool(me.access_key, "get_space", { handle: other.handle });
+  assert.equal(them.available, false);
+});
+
+test("set_space_price refuse sans Premium et accepte avec Premium (sans Stripe : active reste false)", async () => {
+  const me = await makeUser("spaceprice");
+  const denied = await callTool(me.access_key, "set_space_price", { price_cents: 500 });
+  assert.ok(typeof denied.error === "string");
+
+  await grantPremium(me.id);
+  const ok2 = await callTool(me.access_key, "set_space_price", { price_cents: 500, currency: "eur" });
+  assert.equal(ok2.price_cents, 500);
+  assert.equal(ok2.currency, "eur");
+  // Pas de Stripe configuré en test → active=false, Connect non connecté.
+  assert.equal(ok2.active, false);
+  const connect = ok2.connect as { connected: boolean; chargesEnabled: boolean };
+  assert.equal(connect.connected, false);
+});
+
+test("set_space_intro persiste l'intro et set_space_benefits le bénéfice opt-in", async () => {
+  const me = await makeUser("spaceintro");
+  await grantPremium(me.id);
+  await callTool(me.access_key, "set_space_price", { price_cents: 700 });
+  const introOut = await callTool(me.access_key, "set_space_intro", {
+    intro_md: "# Bienvenue\nTexte d'intro.",
+    kind: "space",
+  });
+  assert.equal((introOut.intro_md as string).startsWith("# Bienvenue"), true);
+
+  const benefitsOut = await callTool(me.access_key, "set_space_benefits", {
+    chat: true, call: false, pages: true, rdv: false, lives: false,
+  });
+  const b = benefitsOut.benefits as Record<string, boolean>;
+  assert.equal(b.chat, true);
+  assert.equal(b.call, false);
+});
+
+/* ------------------------------ Pages premium --------------------------- */
+
+test("list_my_pages vide ; upsert_my_page refuse sans Premium ; avec Premium crée la page ; delete la retire", async () => {
+  const me = await makeUser("pageowner");
+  const empty = await callTool(me.access_key, "list_my_pages", {});
+  assert.deepEqual(empty.pages, []);
+
+  const denied = await callTool(me.access_key, "upsert_my_page", {
+    slug: "guide", title: "Guide", type: "markdown", content: "# Hello",
+  });
+  assert.ok(typeof denied.error === "string");
+
+  await grantPremium(me.id);
+  const created = await callTool(me.access_key, "upsert_my_page", {
+    slug: "guide", title: "Guide", type: "markdown", content: "# Hello", published: true,
+  });
+  assert.equal(created.slug, "guide");
+  assert.equal(created.title, "Guide");
+  assert.equal(created.published, 1);
+
+  const got = await callTool(me.access_key, "get_my_page", { slug: "guide" });
+  assert.equal(got.title, "Guide");
+
+  const listed = await callTool(me.access_key, "list_my_pages", {});
+  assert.equal((listed.pages as unknown[]).length, 1);
+
+  const del = await callTool(me.access_key, "delete_my_page", { slug: "guide" });
+  assert.equal(del.deleted, true);
+});
+
+test("upsert_my_page rejette un slug invalide (caractères non autorisés)", async () => {
+  const me = await makeUser("pagevalid");
+  await grantPremium(me.id);
+  const bad = await callTool(me.access_key, "upsert_my_page", { slug: "Slug Avec Espaces", title: "T", type: "markdown" });
+  assert.ok(typeof bad.error === "string");
+  // Le type invalide est rejeté en amont par zod (validation au boundary MCP) ;
+  // pas un cas applicatif — couvert par le contrat de l'outil, pas par ce test.
+});
+
+/* ------------------------------- Export RGPD ---------------------------- */
+
+test("export_my_data renvoie handle, fields, events, relations, requests, notifications", async () => {
+  const me = await makeUser("exporter");
+  await upsertField(me.id, { key: "bio", value: "ma bio export", visibility: "private" });
+  const out = await callTool(me.access_key, "export_my_data", {});
+  assert.equal(out.handle, "exporter");
+  assert.ok(Array.isArray(out.fields));
+  assert.ok(Array.isArray(out.events));
+  assert.ok(Array.isArray(out.relations));
+  assert.ok(Array.isArray(out.requests));
+  assert.ok(Array.isArray(out.notifications));
+  const fields = out.fields as Array<{ key: string; value: string }>;
+  // Les attributs privés DOIVENT être inclus dans l'export (vue owner).
+  assert.equal(fields.find((f) => f.key === "bio")?.value, "ma bio export");
+});
+
+/* ------------------------------ Billing handoff ------------------------- */
+
+test("start_connect_onboarding et billing_portal échouent proprement sans billing configuré", async () => {
+  const me = await makeUser("billnoop");
+  await grantPremium(me.id);
+  const onb = await callTool(me.access_key, "start_connect_onboarding", {});
+  assert.ok(typeof onb.error === "string");
+  const portal = await callTool(me.access_key, "billing_portal", {});
+  assert.ok(typeof portal.error === "string");
+});
+
+test("subscribe_to_space refuse 'moi-même' et profil inconnu", async () => {
+  const me = await makeUser("subuser");
+  const self = await callTool(me.access_key, "subscribe_to_space", { handle: me.handle });
+  assert.ok(typeof self.error === "string");
+  const unknown = await callTool(me.access_key, "subscribe_to_space", { handle: "personne-ici" });
+  assert.ok(typeof unknown.error === "string");
 });

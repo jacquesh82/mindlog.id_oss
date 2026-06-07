@@ -1113,7 +1113,12 @@ paths:
         Endpoint MCP authentifié et **scopé à une seule identité**. Authentification :
         **token OAuth 2.1** (`Authorization: Bearer`, voie standard des connecteurs)
         ou, en repli, la **clé d'accès** brute (Bearer / `X-Access-Key` / `?key=`).
-        Transport Streamable HTTP stateless (réponses JSON), 23 outils scopés.
+        Transport Streamable HTTP stateless (réponses JSON), **63 outils scopés**
+        couvrant profil, agenda, dispos/créneaux, RDV, relations, notifications,
+        groupes (membership), invitations, galerie, boutons de page, espace premium,
+        pages premium, abonnements, et URLs hostées Stripe (Connect onboarding,
+        Checkout abonnement, portail client). Volontairement hors MCP : messages E2E,
+        upload binaire, live WebRTC, passkeys/PIN/vault, sessions navigateur.
         En 401, l'en-tête `WWW-Authenticate` pointe vers les métadonnées de ressource.
       security:
         - oauth2: []

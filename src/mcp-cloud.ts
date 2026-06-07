@@ -60,6 +60,7 @@ import {
   bookedSlots,
   SLOT_MINUTES,
   type Identity,
+  type Settings,
   createGroup,
   listGroups,
   getGroup,
@@ -71,8 +72,36 @@ import {
   transferGroupOwnership,
   renameGroup,
   groupMemberIds,
+  createInvite,
+  getInvitePreview,
+  getDirectRelations,
 } from "./store.js";
-import { isPremium } from "./premium-api.js";
+import {
+  isPremium,
+  listButtons as listPageButtons,
+  getSpaceInfo,
+  mcpPremiumAvailable,
+  mcpListPages,
+  mcpGetPage,
+  mcpUpsertPage,
+  mcpDeletePage,
+  mcpGetSpace,
+  mcpSetSpacePrice,
+  mcpSetSpaceIntro,
+  mcpSetSpaceBenefits,
+  mcpListOutgoingSubs,
+  mcpSetPageButtons,
+  mcpStartConnectOnboarding,
+  mcpSubscribeCheckout,
+  mcpBillingPortal,
+  mcpBillingConfigured,
+} from "./premium-api.js";
+import {
+  getGallery,
+  setGalleryLink,
+  deleteGalleryPhoto,
+  getOwnedGalleryPhotoFile,
+} from "./db.js";
 import { publish } from "./realtime.js";
 import { appUrl, isMailConfigured, sendMail } from "./mailer.js";
 import { bookingAcceptedEmail, bookingRequestEmail } from "./emails.js";
@@ -110,12 +139,14 @@ export function buildCloudMcpServer(me: Identity): McpServer {
     content: [{ type: "text" as const, text: JSON.stringify({ error: message }, null, 2) }],
     isError: true,
   });
-  // Exécute une opération qui peut lever une StoreError et la convertit en erreur d'outil.
+  // Exécute une opération qui peut lever une StoreError (ou une Error premium-api)
+  // et la convertit en erreur d'outil JSON sérialisable, attendue par le client.
   const guard = async (fn: () => Promise<unknown>) => {
     try {
       return ok(await fn());
     } catch (e) {
       if (e instanceof StoreError) return fail(e.message);
+      if (e instanceof Error) return fail(e.message);
       throw e;
     }
   };
@@ -800,6 +831,468 @@ export function buildCloudMcpServer(me: Identity): McpServer {
         await renameGroup(me.id, id, name);
         for (const mid of await groupMemberIds(id)) publish(mid, "group", { gid: id });
         return { name };
+      })
+  );
+
+  /* ------------------------------ Préférences --------------------------- */
+
+  server.registerTool(
+    "get_my_preferences",
+    {
+      description:
+        "MES préférences (onglet Options) : autorisations chat/call/vidéo, demandes de RDV ouvertes, " +
+        "disponibilités publiques, présence dans l'annuaire, forme/taille avatar.",
+      inputSchema: {},
+      annotations: RO("Mes préférences"),
+    },
+    async () => {
+      const s = parseSettings(me.settings);
+      return ok({
+        allow_chat: s.allow_chat,
+        allow_call: s.allow_call,
+        allow_video: s.allow_video,
+        allow_requests: s.allow_requests,
+        public_availability: s.public_availability,
+        listed_in_directory: s.listed_in_directory,
+        avatar_size: s.avatar_size,
+        avatar_shape: s.avatar_shape,
+      });
+    }
+  );
+
+  server.registerTool(
+    "set_my_preferences",
+    {
+      description:
+        "Met à jour MES préférences. Seuls les champs fournis sont modifiés. " +
+        "`listed_in_directory` n'est appliqué que si le compte est Premium (sinon ignoré).",
+      inputSchema: {
+        allow_chat: z.boolean().optional(),
+        allow_call: z.boolean().optional(),
+        allow_video: z.boolean().optional(),
+        allow_requests: z.boolean().optional(),
+        public_availability: z.boolean().optional(),
+        listed_in_directory: z.boolean().optional(),
+        avatar_size: z.enum(["s", "m", "l", "xl"]).optional(),
+        avatar_shape: z.enum(["square", "circle"]).optional(),
+      },
+      annotations: WR("Modifier mes préférences"),
+    },
+    (patch) =>
+      guard(async () => {
+        const premium = await isPremium(me.id);
+        const settings = await setSettings(me.id, patch as Partial<Settings>, { isPremium: premium });
+        return { settings };
+      })
+  );
+
+  /* ------------------------------ Invitations --------------------------- */
+
+  server.registerTool(
+    "create_invite",
+    {
+      description:
+        "Crée un jeton d'invitation à usage unique (7 jours). Partager le lien `/i/:token` " +
+        "permet à qui l'accepte d'établir une relation mutuelle directe avec moi.",
+      inputSchema: {
+        type: z.enum(["amis", "pro", "autre"]).optional().describe("Type de relation par défaut. Défaut : amis."),
+      },
+      annotations: WR("Créer une invitation"),
+    },
+    ({ type }) =>
+      guard(async () => {
+        const token = await createInvite(me.id, type ?? "amis");
+        return { token, url: `${appUrl().replace(/\/$/, "")}/i/${token}` };
+      })
+  );
+
+  server.registerTool(
+    "get_invite_preview",
+    {
+      description: "Aperçu public d'une invitation (qui invite, photo, nom affiché). Null si invalide/expirée.",
+      inputSchema: { token: z.string() },
+      annotations: { ...RO("Aperçu invitation"), openWorldHint: true },
+    },
+    async ({ token }) => ok(await getInvitePreview(token))
+  );
+
+  /* ------------------------------ Galerie ------------------------------- */
+  // Lecture : la mienne ou celle d'un autre handle (publique).
+  // Écriture (lien/suppression) : uniquement sur MES photos.
+  // Pas d'upload : binaire non géré par MCP.
+
+  server.registerTool(
+    "list_gallery",
+    {
+      description:
+        "Liste les photos de la galerie : la mienne sans `handle`, sinon celle d'un autre profil. " +
+        "Le `link_url` (lien cliquable Premium) n'est visible publiquement que si le titulaire est Premium.",
+      inputSchema: { handle: z.string().optional() },
+      annotations: { ...RO("Lister la galerie"), openWorldHint: true },
+    },
+    async ({ handle }) => {
+      const target = handle ? await getIdentityByHandle(handle.replace(/^@/, "")) : me;
+      if (!target) return fail("Identité introuvable.");
+      const mine = target.id === me.id;
+      const premium = await isPremium(target.id);
+      const photos = (await getGallery(target.id)).map((p) => ({
+        id: p.id,
+        url: `/api/gallery/photo/${p.id}`,
+        likes: p.likes,
+        link_url: mine || premium ? p.link_url : "",
+        position: p.position,
+        mine,
+      }));
+      return ok({ handle: target.handle, photos });
+    }
+  );
+
+  server.registerTool(
+    "set_gallery_link",
+    {
+      description:
+        "Définit (ou efface avec `url:''`) le lien cliquable d'une de MES photos. Réservé aux comptes Premium.",
+      inputSchema: {
+        id: z.number().describe("Id de la photo."),
+        url: z.string().describe("URL http/https/mailto/tel ; chaîne vide = efface le lien."),
+      },
+      annotations: WR("Lien d'une photo"),
+    },
+    ({ id, url }) =>
+      guard(async () => {
+        if (!(await isPremium(me.id))) throw new StoreError(402, "Premium requis.");
+        const raw = (url ?? "").trim();
+        // Validation simple ; même règle que sanitizeButtonUrl côté serveur.
+        const cleaned = !raw
+          ? ""
+          : /^https?:\/\//i.test(raw) || /^mailto:/i.test(raw) || /^tel:/i.test(raw)
+            ? raw.slice(0, 2000)
+            : null;
+        if (cleaned === null) throw new StoreError(400, "URL invalide (http/https/mailto/tel attendu).");
+        const updated = await setGalleryLink(id, me.id, cleaned);
+        if (!updated) throw new StoreError(404, "Photo introuvable.");
+        return { id, link_url: cleaned };
+      })
+  );
+
+  server.registerTool(
+    "delete_gallery_photo",
+    {
+      description: "Supprime une de MES photos de galerie (fichier inclus).",
+      inputSchema: { id: z.number() },
+      annotations: DES("Supprimer une photo"),
+    },
+    ({ id }) =>
+      guard(async () => {
+        const filename = await getOwnedGalleryPhotoFile(id, me.id);
+        if (!filename) throw new StoreError(404, "Photo introuvable.");
+        await deleteGalleryPhoto(me.id, id);
+        try { rmSync(resolve(DATA_DIR, filename)); } catch { /* ignoré */ }
+        return { deleted: true };
+      })
+  );
+
+  /* --------------------------- Boutons de page -------------------------- */
+
+  server.registerTool(
+    "get_page_buttons",
+    {
+      description:
+        "Boutons personnalisés affichés sur la cover : les miens sans `handle`, sinon ceux d'un autre profil " +
+        "(uniquement visibles si ce profil est Premium).",
+      inputSchema: { handle: z.string().optional() },
+      annotations: { ...RO("Boutons de page"), openWorldHint: true },
+    },
+    async ({ handle }) => {
+      const target = handle ? await getIdentityByHandle(handle.replace(/^@/, "")) : me;
+      if (!target) return fail("Identité introuvable.");
+      const isMine = target.id === me.id;
+      if (!isMine && !(await isPremium(target.id))) return ok({ handle: target.handle, buttons: [] });
+      return ok({ handle: target.handle, buttons: await listPageButtons(target.id) });
+    }
+  );
+
+  server.registerTool(
+    "set_page_buttons",
+    {
+      description:
+        "Remplace MES boutons de page (max 5). Chaque bouton : label + URL (http/https/mailto/tel). " +
+        "`pos_x`/`pos_y` sont normalisés 0..1 sur la cover-hero. `shape` : 'circle' (défaut) ou 'square'. " +
+        "Réservé Premium.",
+      inputSchema: {
+        buttons: z.array(z.object({
+          label: z.string().min(1).max(80),
+          url: z.string(),
+          icon: z.string().optional(),
+          pos_x: z.number().min(0).max(1).optional(),
+          pos_y: z.number().min(0).max(1).optional(),
+          shape: z.enum(["circle", "square"]).optional(),
+          show_label: z.boolean().optional(),
+        })).max(5),
+      },
+      annotations: WR("Définir mes boutons"),
+    },
+    ({ buttons }) =>
+      guard(async () => {
+        if (!mcpPremiumAvailable()) throw new StoreError(503, "Module premium indisponible.");
+        const out = await mcpSetPageButtons(me.id, buttons);
+        return { buttons: out };
+      })
+  );
+
+  /* ----------------------------- Espace Premium ------------------------- */
+  // CRUD MON espace (tarif, intros, bénéfices) + lecture publique d'un autre.
+
+  server.registerTool(
+    "get_my_space",
+    {
+      description:
+        "MON espace premium : tarif mensuel, statut Stripe, intros (espace + profil), bénéfices, " +
+        "et état du compte Stripe Connect (chargesEnabled / payoutsEnabled).",
+      inputSchema: {},
+      annotations: RO("Mon espace premium"),
+    },
+    async () => {
+      if (!mcpPremiumAvailable()) return ok({ available: false });
+      return ok({ available: true, ...(await mcpGetSpace(me.id)) });
+    }
+  );
+
+  server.registerTool(
+    "set_space_price",
+    {
+      description:
+        "Fixe MON tarif mensuel (en centimes, min 100 = 1,00 €). Crée/recrée Product+Price côté " +
+        "Stripe si mon Connect est `chargesEnabled` (sinon activation différée).",
+      inputSchema: {
+        price_cents: z.number().int().min(100).max(100_000),
+        currency: z.string().length(3).optional().describe("Code ISO 4217 ; défaut 'eur'."),
+      },
+      annotations: WR("Fixer mon tarif"),
+    },
+    ({ price_cents, currency }) =>
+      guard(async () => {
+        if (!mcpPremiumAvailable()) throw new StoreError(503, "Module premium indisponible.");
+        return mcpSetSpacePrice(me.id, price_cents, currency ?? "eur");
+      })
+  );
+
+  server.registerTool(
+    "set_space_intro",
+    {
+      description:
+        "Met à jour un texte introductif Markdown (max 4000 caractères) : " +
+        "`kind='space'` → bloc en haut de /@handle/space ; `kind='profile'` → bloc bio sur /@handle.",
+      inputSchema: {
+        intro_md: z.string().max(4000),
+        kind: z.enum(["space", "profile"]).describe("Cible : 'space' (page espace) ou 'profile' (bio profil)."),
+      },
+      annotations: WR("Texte d'intro espace"),
+    },
+    ({ intro_md, kind }) =>
+      guard(async () => {
+        if (!mcpPremiumAvailable()) throw new StoreError(503, "Module premium indisponible.");
+        return mcpSetSpaceIntro(me.id, intro_md, kind);
+      })
+  );
+
+  server.registerTool(
+    "set_space_benefits",
+    {
+      description:
+        "Configure les bénéfices opt-in offerts à MES abonnés. `chat`/`call` activés = ces canaux deviennent " +
+        "RÉSERVÉS aux abonnés. `pages`/`rdv`/`lives` = affichage marketing uniquement.",
+      inputSchema: {
+        chat: z.boolean(),
+        call: z.boolean(),
+        pages: z.boolean(),
+        rdv: z.boolean(),
+        lives: z.boolean(),
+      },
+      annotations: WR("Bénéfices d'abonnement"),
+    },
+    (benefits) =>
+      guard(async () => {
+        if (!mcpPremiumAvailable()) throw new StoreError(503, "Module premium indisponible.");
+        return mcpSetSpaceBenefits(me.id, benefits);
+      })
+  );
+
+  server.registerTool(
+    "get_space",
+    {
+      description:
+        "Vue PUBLIQUE de l'espace premium d'un autre créateur : tarif, statut, pages publiées, intros, bénéfices, " +
+        "et statut d'abonnement du visiteur (moi).",
+      inputSchema: { handle: z.string() },
+      annotations: { ...RO("Espace d'un créateur"), openWorldHint: true },
+    },
+    async ({ handle }) => {
+      const owner = await getIdentityByHandle(handle.replace(/^@/, ""));
+      if (!owner) return fail("Identité introuvable.");
+      const info = await getSpaceInfo(owner.id, me.id);
+      if (!info) return ok({ handle: owner.handle, available: false });
+      return ok({ handle: owner.handle, available: true, ...info });
+    }
+  );
+
+  server.registerTool(
+    "list_my_subscriptions",
+    {
+      description: "Liste les espaces premium auxquels JE suis abonné (handle, provider, statut, échéance).",
+      inputSchema: {},
+      annotations: RO("Mes abonnements"),
+    },
+    async () => {
+      if (!mcpPremiumAvailable()) return ok({ subscriptions: [] });
+      return ok({ subscriptions: await mcpListOutgoingSubs(me.id) });
+    }
+  );
+
+  /* ----------------------------- Pages premium -------------------------- */
+
+  server.registerTool(
+    "list_my_pages",
+    {
+      description: "Liste MES pages premium (slug, titre, type, publié, contenu brut).",
+      inputSchema: {},
+      annotations: RO("Mes pages premium"),
+    },
+    async () => {
+      if (!mcpPremiumAvailable()) return ok({ pages: [] });
+      return ok({ pages: await mcpListPages(me.id) });
+    }
+  );
+
+  server.registerTool(
+    "get_my_page",
+    {
+      description: "Lit une de MES pages premium par slug (contenu brut sérialisé).",
+      inputSchema: { slug: z.string() },
+      annotations: RO("Lire ma page premium"),
+    },
+    ({ slug }) =>
+      guard(async () => {
+        if (!mcpPremiumAvailable()) throw new StoreError(404, "Module premium indisponible.");
+        const p = await mcpGetPage(me.id, slug);
+        if (!p) throw new StoreError(404, "Page introuvable.");
+        return p;
+      })
+  );
+
+  server.registerTool(
+    "upsert_my_page",
+    {
+      description:
+        "Crée ou met à jour une de MES pages premium. Types : 'markdown' (content = string MD), " +
+        "'link' (content = {url, note?}), 'gallery' (content = {items:[{url,kind,caption?}]} — uniquement liens externes via MCP, " +
+        "pas d'upload de média), 'file' (content = {url, name, size} — uniquement lien externe via MCP). " +
+        "Réservé Premium.",
+      inputSchema: {
+        slug: z.string().describe("slug minuscule, a-z/0-9/tirets, max 49 caractères."),
+        title: z.string().min(1).max(200),
+        type: z.enum(["markdown", "gallery", "link", "file"]),
+        content: z.unknown().optional().describe("Contenu selon le type ; chaîne MD ou objet JSON."),
+        published: z.boolean().optional().describe("Brouillon par défaut (false)."),
+      },
+      annotations: WR("Page premium"),
+    },
+    ({ slug, title, type, content, published }) =>
+      guard(async () => {
+        if (!mcpPremiumAvailable()) throw new StoreError(503, "Module premium indisponible.");
+        return mcpUpsertPage(me.id, { slug, title, type, content, published });
+      })
+  );
+
+  server.registerTool(
+    "delete_my_page",
+    {
+      description: "Supprime une de MES pages premium (par slug).",
+      inputSchema: { slug: z.string() },
+      annotations: DES("Supprimer une page premium"),
+    },
+    async ({ slug }) => {
+      if (!mcpPremiumAvailable()) return ok({ deleted: false });
+      return ok({ deleted: await mcpDeletePage(me.id, slug) });
+    }
+  );
+
+  /* -------------------------------- Export RGPD ------------------------- */
+
+  /* --------------------------- Billing (hand-off) ----------------------- */
+  // Ces outils renvoient des URLs Stripe hostées : MILO LES TRANSMET à l'humain,
+  // qui les ouvre dans son navigateur pour finaliser le flux (CB, 3DS, KYC).
+  // Aucun paiement ne peut être validé en agent-mode — c'est volontaire.
+
+  server.registerTool(
+    "start_connect_onboarding",
+    {
+      description:
+        "Démarre/relance l'onboarding Stripe Connect (créateur). Renvoie une URL hostée Stripe à ouvrir " +
+        "dans un navigateur pour saisir les infos KYC. Requiert Premium et billing configuré côté serveur.",
+      inputSchema: {},
+      annotations: WR("Onboarding Stripe Connect"),
+    },
+    async () => {
+      if (!mcpPremiumAvailable() || !mcpBillingConfigured()) return fail("Paiement indisponible côté serveur.");
+      const r = await mcpStartConnectOnboarding(me.id);
+      return "error" in r ? fail(r.error) : ok({ url: r.url });
+    }
+  );
+
+  server.registerTool(
+    "subscribe_to_space",
+    {
+      description:
+        "Demande une URL de Checkout Stripe pour m'abonner à l'espace premium de `@handle`. À ouvrir " +
+        "dans un navigateur pour payer. Si je suis déjà abonné, renvoie `{already:true}`.",
+      inputSchema: { handle: z.string() },
+      annotations: { ...WR("S'abonner à un espace"), openWorldHint: true },
+    },
+    async ({ handle }) => {
+      if (!mcpPremiumAvailable() || !mcpBillingConfigured()) return fail("Paiement indisponible côté serveur.");
+      const r = await mcpSubscribeCheckout(me.id, handle);
+      if ("error" in r) return fail(r.error);
+      if ("already" in r) return ok({ already: true });
+      return ok({ url: r.url });
+    }
+  );
+
+  server.registerTool(
+    "billing_portal",
+    {
+      description:
+        "Renvoie l'URL Stripe Customer Portal pour gérer MON abonnement (factures, méthode de paiement, " +
+        "annulation). À ouvrir dans un navigateur.",
+      inputSchema: {},
+      annotations: WR("Portail de facturation"),
+    },
+    async () => {
+      if (!mcpPremiumAvailable() || !mcpBillingConfigured()) return fail("Paiement indisponible côté serveur.");
+      const r = await mcpBillingPortal(me.id);
+      return "error" in r ? fail(r.error) : ok({ url: r.url });
+    }
+  );
+
+  server.registerTool(
+    "export_my_data",
+    {
+      description:
+        "Export RGPD complet de MES données : handle, email de récup, attributs (privés inclus), événements, " +
+        "relations directes, demandes de RDV, notifications. Renvoyé inline (pas de téléchargement).",
+      inputSchema: {},
+      annotations: RO("Exporter mes données"),
+    },
+    async () =>
+      ok({
+        exported_at: new Date().toISOString(),
+        handle: me.handle,
+        recovery_email: me.recovery_email,
+        fields: await getFields(me.id, "owner"),
+        events: await getEvents(me.id, true),
+        relations: await getDirectRelations(me.id),
+        requests: await getRequests(me.id),
+        notifications: await getNotifications(me.id),
       })
   );
 

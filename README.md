@@ -195,6 +195,17 @@ premier (healthcheck), puis `mindlog` s'y connecte via `DATABASE_URL`.
 | GET/POST | `/api/groups/:id/messages` | ✓ | Lire / envoyer un message de groupe chiffré |
 | GET/PUT/DELETE | `/api/e2e/vault` | ✓ | Coffre de clé E2E portable (opaque) |
 | POST | `/api/photo` · POST `/api/access-key/rotate` · PUT `/api/recovery-email` | ✓ | Photo / clé / email |
+| GET/POST | `/api/gallery[/:handle]` · DELETE `/api/gallery/:id` | mixte | Galerie photos (lecture publique, écriture privée) |
+| PATCH | `/api/gallery/:id/link` | ✓ Premium | Lien cliquable sur une photo |
+| GET/PUT | `/api/page/:handle/buttons` · `/api/page/buttons` | mixte | Boutons personnalisés (Premium) |
+| GET/PUT | `/api/space` · `/api/space/intro` · `/api/space/profile-intro` · `/api/space/benefits` | ✓ Premium | Tarif mensuel + intros Markdown + bénéfices opt-in |
+| GET | `/api/space/:handle` | mixte | Vue publique d'un espace (tarif + statut d'abo) |
+| POST | `/api/space/:handle/subscribe` | ✓ | Checkout Stripe (URL hostée) |
+| GET/PUT/DELETE | `/api/pages[/:slug]` · `/api/pages/:handle/:slug` | mixte | CRUD pages premium + lecture paywall |
+| POST/DELETE | `/api/pages/:slug/media[/:filename]` | ✓ Premium | Médias des pages (galerie/fichier) |
+| POST | `/api/billing/checkout` · `/api/billing/portal` · `/api/billing/connect/onboard` | ✓ | Flux Stripe (renvoient des URLs hostées) |
+| POST | `/api/billing/webhook` · `/api/billing/google/rtdn` · `/api/billing/google/verify` | — | Webhooks Stripe / Google Play (signatures vérifiées) |
+| GET/POST | `/api/live/[…]` | ✓ Premium | Live streams P2P (signaling, roster, heartbeat) |
 
 Auth : en-tête `x-access-key: <clé>` ou paramètre `?key=<clé>`.
 
@@ -238,20 +249,47 @@ manuelle par clé d'accès (sans OAuth), toujours supportée :
 }
 ```
 
-**29 outils scopés** : `whoami`, `get_my_card`, `set_card_field`, `delete_card_field`,
-`list_tags`, `add_tag`, `remove_tag`, `search_identities`, `get_card` *(autrui,
-visibilité respectée)*, `list_events`, `add_event`, `delete_event`, `get_availability` *(la mienne
-ou celle d'autrui — règle de dispo + prochains jours libres ; respecte la préférence
-« disponibilités publiques »)*, `get_day_slots` *(créneaux horaires d'un jour)*,
-`set_availability` *(régler jours libres, plage horaire, finesse 15/30/60 min)*,
-`set_day_status`, `request_meeting` *(demander un RDV à autrui, avec créneau `time` ;
-respecte la préférence « demandes de RDV »)*, `list_requests`,
-`respond_request`, `delete_request`, `list_relations`,
-`list_incoming_relations`, `add_relation`, `remove_relation`, `list_notifications`,
-`mark_notifications_read`, `set_recovery_email`, `rotate_access_key`, `delete_account`.
+**63 outils scopés**, groupés par domaine — toutes les écritures portent sur « moi » :
 
-> **Non exposé par MCP** (volontaire) : messagerie E2E (chiffrée côté client), galerie,
-> photo de profil, passkeys/sessions.
+- **Profil & tags** : `whoami`, `get_my_card`, `set_card_field`, `delete_card_field`,
+  `list_tags`, `add_tag`, `remove_tag`.
+- **Découverte (autrui, visibilité respectée)** : `search_identities`, `get_card`.
+- **Agenda** : `list_events`, `add_event`, `update_event`, `delete_event`.
+- **Disponibilités & créneaux** : `get_availability` *(la mienne ou autrui — règle + prochains
+  jours libres, respecte « disponibilités publiques »)*, `get_day_slots`, `set_availability`
+  *(jours, plage horaire, finesse 15/30/60 min)*, `set_day_status`.
+- **RDV** : `request_meeting` *(avec créneau `time` ; respecte « demandes ouvertes »)*,
+  `list_requests`, `respond_request`, `delete_request`.
+- **Relations** : `list_relations`, `list_incoming_relations`, `add_relation`,
+  `remove_relation`.
+- **Notifications** : `list_notifications`, `mark_notifications_read`.
+- **Compte** : `set_recovery_email`, `rotate_access_key`, `delete_account`,
+  `set_my_preferences`, `get_my_preferences`, `export_my_data` *(RGPD)*.
+- **Invitations** : `create_invite`, `get_invite_preview`.
+- **Groupes (membership uniquement, jamais les messages — E2E client)** :
+  `list_groups`, `get_group`, `create_group`, `add_group_member`, `remove_group_member`,
+  `leave_group`, `promote_group_member`, `demote_group_member`,
+  `transfer_group_ownership`, `rename_group`.
+- **Galerie** : `list_gallery` *(mine ou autrui)*, `set_gallery_link` *(Premium)*,
+  `delete_gallery_photo`.
+- **Boutons de page (Premium)** : `get_page_buttons`, `set_page_buttons`.
+- **Espace Premium (créateur)** : `get_my_space`, `set_space_price`, `set_space_intro`,
+  `set_space_benefits`.
+- **Espace Premium (visiteur)** : `get_space`, `list_my_subscriptions`.
+- **Pages premium** : `list_my_pages`, `get_my_page`, `upsert_my_page`, `delete_my_page`.
+- **Facturation (hand-off Stripe)** — renvoient une URL hostée à ouvrir dans un navigateur :
+  `start_connect_onboarding`, `subscribe_to_space`, `billing_portal`.
+
+> **Non exposé par MCP** (volontaire) :
+> - Messages 1:1 et de groupe (chiffrement E2E navigateur, clés privées en IndexedDB).
+> - Upload binaire (photos galerie, médias de pages, photo/cover de profil).
+> - Live streams (WebRTC mesh, signaling local).
+> - Passkeys, PIN, passphrase, coffre E2E, prekeys X3DH (sécurité critique).
+> - Push web, sessions navigateur (couplage UA).
+> - Admin (`/admin/*`, mTLS local).
+>
+> Les flux de paiement Stripe (KYC Connect, abonnement, portail client) restent
+> finalisés par l'humain dans son navigateur — Milo prépare et fournit l'URL.
 
 ## Sécurité — limites connues
 
