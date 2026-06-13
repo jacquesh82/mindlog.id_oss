@@ -47,6 +47,8 @@ export const ICONS = {
   database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>',
   cloud: '<path d="M17.5 19a4.5 4.5 0 1 0 0-9h-1.8A7 7 0 1 0 4 16.5"/>',
   "hard-drive": '<line x1="22" y1="12" x2="2" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" y1="16" x2="6.01" y2="16"/><line x1="10" y1="16" x2="10.01" y2="16"/>',
+  list: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
+  share2: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>',
 };
 
 export const icon = (n, size = 20) =>
@@ -161,10 +163,11 @@ export const avatarHtml = (handle, hasPhoto, cls) =>
     ? `<img class="${cls}" src="/api/identities/${encodeURIComponent(handle)}/photo" alt="" />`
     : `<span class="${cls}">${esc((handle[0] || "·").toUpperCase())}</span>`;
 
-// Header commun : brand gauche · centre · actions droite.
-export function siteHeader({ center = "", right = "" } = {}) {
+// Header commun : brand gauche (+ actions accolées à la marque) · centre · actions droite.
+export function siteHeader({ center = "", right = "", left = "" } = {}) {
   return `<header class="topbar site-header">
     <a class="brand" href="/"><span class="brand-milo">${miloSvg(40)}</span><span class="brand-text"> mindlog · id</span></a>
+    ${left ? `<div class="site-header-left">${left}</div>` : ""}
     <div class="site-header-center">${center}</div>
     <div class="editor-head-right">${right}</div>
   </header>`;

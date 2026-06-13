@@ -3,6 +3,7 @@
 // cf. docs/web-app-split-proposal.md
 import { relItemHtml, relationsListHtml } from "../../app.js";
 import { icon } from "../../ui/icons.js";
+import { relationsGraphHtml } from "../relations-graph.js";
 
 // Inject data-degree + data-type into a single relItemHtml output.
 function withDeg(r, deg, opts) {
@@ -45,6 +46,16 @@ export function renderRelationsColumn(data, { incomingListHtml }) {
   return `<div class="card">
     <div class="section-title" style="border-top:none;padding-top:0;margin-top:0">Relations <span class="deg">votre réseau</span></div>
 
+    <div class="rel-view-tabs" role="tablist" aria-label="Affichage des relations">
+      <button class="rel-view-tab active" data-relview="list" role="tab" aria-selected="true">${icon("list", 14)} Liste</button>
+      <button class="rel-view-tab" data-relview="graph" role="tab" aria-selected="false">${icon("share2", 14)} Graphe</button>
+    </div>
+
+    <div id="rel-graph-pane" hidden>
+      ${relationsGraphHtml(data)}
+    </div>
+
+    <div id="rel-list-pane">
     <input id="rel-search" class="rel-search-input" placeholder="Rechercher…" autocomplete="off" />
 
     <div class="rel-chips-row" id="rel-degree-chips" role="group" aria-label="Filtrer par degré">
@@ -90,6 +101,7 @@ export function renderRelationsColumn(data, { incomingListHtml }) {
         </select>
         <button class="btn" id="add-rel">+ Relier</button>
       </div>
+    </div>
     </div>
   </div>`;
 }

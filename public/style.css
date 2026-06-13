@@ -255,6 +255,15 @@ body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top { display: non
 }
 .milo-palette { align-items: center; }
 .milo-palette.show { opacity: 1; pointer-events: auto; transform: none; }
+/* Croix de fermeture du sélecteur de couleur (palette de la marque). */
+.brand-palette-close {
+  width: 22px; height: 22px; flex: none; padding: 0; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.05rem; line-height: 1; border-radius: 50%;
+  background: var(--inset); border: 1px solid var(--line); color: var(--muted);
+  margin-left: .15rem; transition: transform .12s, color .12s, border-color .12s;
+}
+.brand-palette-close:hover { transform: scale(1.12); color: var(--fg); border-color: var(--accent-ink); }
 .theme-toggle {
   width: 24px; height: 24px; flex: none; padding: 0; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
@@ -3585,6 +3594,7 @@ select:focus { outline: none; border-color: var(--accent-ink); box-shadow: 0 0 0
   padding-bottom: .25rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
 }
 .cal-cell-wrap {
+  position: relative;
   display: flex; flex-direction: column; gap: 2px;
   min-height: 84px; padding: 4px;
   border: 1px solid var(--cal-line); border-radius: var(--r-xs);
@@ -3592,6 +3602,20 @@ select:focus { outline: none; border-color: var(--accent-ink); box-shadow: 0 0 0
   transition: border-color var(--dur-fast) var(--ease-out);
 }
 .cal-cell-wrap:hover { border-color: rgba(91,95,199,.4); }
+/* Bouton « + » : ajouter un événement ce jour-là (vue Mois, éditeur). */
+.cal-cell-add {
+  position: absolute; top: 4px; right: 4px;
+  width: 20px; height: 20px; padding: 0;
+  border: 0; border-radius: 999px;
+  background: var(--accent-ink); color: #fff;
+  font: 700 1rem/1 inherit;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; opacity: 0; z-index: 3;
+  transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+.cal-cell-wrap:hover .cal-cell-add,
+.cal-cell-add:focus-visible { opacity: 1; }
+.cal-cell-add:hover { transform: scale(1.12); }
 .cal-cell {
   align-self: flex-start; border: 0; background: transparent;
   width: 26px; height: 26px; padding: 0;
@@ -3719,12 +3743,26 @@ select:focus { outline: none; border-color: var(--accent-ink); box-shadow: 0 0 0
 .cal-day-body.is-busy { background: rgba(139,147,163,.06); }
 .cal-day-body.is-past { background: rgba(139,147,163,.04); }
 .cal-time-slot {
+  position: relative;
   border: 0; border-bottom: 1px solid var(--cal-line);
   background: transparent; padding: 0; cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out);
 }
 .cal-time-slot:hover:not(:disabled) { background: rgba(91,95,199,.06); }
 .cal-time-slot:disabled { cursor: default; }
+/* « + » au survol d'une case horaire vide (vues Jour/Semaine, éditeur) :
+   pastille accent centrée, même langage visuel que le bouton « + » de la
+   vue Mois (.cal-cell-add). pointer-events:none → le clic atteint la case. */
+.cal-time-slot[data-slot-new]:hover { background: rgba(91,95,199,.12); }
+.cal-time-slot[data-slot-new]:hover::after {
+  content: "+";
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 20px; height: 20px; border-radius: 999px;
+  background: var(--accent-ink); color: #fff;
+  font-size: .95rem; font-weight: 700; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 1px 4px rgba(0,0,0,.25); pointer-events: none;
+}
 
 .cal-time-block {
   position: absolute; left: 4px; right: 4px;
@@ -3900,6 +3938,10 @@ select:focus { outline: none; border-color: var(--accent-ink); box-shadow: 0 0 0
   flex: none; width: 100%;
 }
 .site-header-center { display: flex; justify-content: center; flex: 1; min-width: 0; }
+/* Actions accolées à la marque (ex. « Ouvrir ma page » dans l'éditeur). */
+.site-header-left { display: flex; align-items: center; flex: none; }
+/* Sur petit écran, on garde l'icône seule pour ne pas serrer la barre. */
+@media (max-width: 600px) { .topbar-publink-label { display: none; } }
 
 /* ---- Header moderne (landing) : barre collante translucide + groupe d'outils ----
    Sticky + blur léger, fine ligne de séparation. La barre d'ancres (GEEK) vient
@@ -4070,6 +4112,61 @@ label.row input { width: auto; }
 .rel-mutual { color: var(--success); font-weight: 700; }
 /* search input standalone (replaces old .rel-filters) */
 .rel-search-input { width: 100%; margin-bottom: .4rem; }
+
+/* ---- Bascule Liste / Graphe + vue graphe du réseau ---- */
+.rel-view-tabs {
+  display: flex; gap: .25rem; margin: .15rem 0 .6rem;
+  padding: 3px; border-radius: var(--r-sm);
+  background: var(--inset, rgba(127,127,127,.08));
+}
+.rel-view-tab {
+  flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: .35rem;
+  padding: .35rem .5rem; border: 0; border-radius: calc(var(--r-sm) - 2px);
+  background: transparent; color: var(--muted); cursor: pointer;
+  font: inherit; font-size: .78rem; font-weight: 600;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.rel-view-tab:hover { color: var(--fg); }
+.rel-view-tab.active { background: var(--card); color: var(--accent-ink); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+
+.rel-graph-wrap {
+  position: relative; width: 100%; height: clamp(320px, 56vh, 560px);
+  border: 1px solid var(--cal-line, var(--line)); border-radius: var(--r-sm);
+  background:
+    radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 60%),
+    var(--bg);
+  overflow: hidden;
+}
+.rel-graph-svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; user-select: none; }
+.rel-graph-svg:active { cursor: grabbing; }
+.rg-loading {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: .85rem; pointer-events: none;
+}
+.rg-edge { stroke: var(--line); stroke-width: 1.3; opacity: .7; }
+.rg-node { cursor: pointer; }
+.rg-node-c { stroke: var(--bg); stroke-width: 2; transition: stroke .12s var(--ease-out); }
+.rg-node:hover .rg-node-c { stroke: var(--accent-ink); }
+.rg-me .rg-node-c { stroke: color-mix(in srgb, var(--accent) 50%, var(--bg)); }
+.rg-init { fill: #fff; font-weight: 700; font-family: inherit; pointer-events: none; }
+.rg-label { fill: var(--fg); font-size: 15px; font-weight: 600; font-family: inherit; pointer-events: none; }
+.rg-legend {
+  position: absolute; left: 8px; bottom: 8px; display: flex; gap: .6rem;
+  padding: .25rem .5rem; border-radius: 999px;
+  background: color-mix(in srgb, var(--card) 80%, transparent); backdrop-filter: blur(4px);
+  font-size: .68rem; color: var(--muted);
+}
+.rg-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 999px; margin-right: 3px; vertical-align: middle; }
+.rg-reset {
+  position: absolute; top: 8px; right: 8px; width: 30px; height: 30px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--card) 80%, transparent); backdrop-filter: blur(4px);
+  color: var(--muted); cursor: pointer; font-size: 1.05rem; line-height: 1;
+}
+.rg-reset:hover { color: var(--accent-ink); border-color: var(--accent-line); }
+.rg-empty { padding: 2.5rem 1rem; text-align: center; color: var(--muted); font-size: .85rem; line-height: 1.6; }
+
 /* filter chips row */
 .rel-chips-row { display: flex; gap: .3rem; flex-wrap: wrap; margin-bottom: .3rem; }
 .rel-chip { padding: .2rem .55rem; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: .72rem; cursor: pointer; transition: background .15s, color .15s, border-color .15s; white-space: nowrap; line-height: 1.6; }

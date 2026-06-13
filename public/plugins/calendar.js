@@ -209,10 +209,18 @@ export default function register(host) {
         ? `<span class="cal-chip-more" title="${dayEvents.length} événements">+${dayEvents.length - MAX_CHIPS}</span>`
         : "";
 
+      // En éditeur, bouton « + » au survol → nouvel événement ce jour-là
+      // (heure par défaut = début de plage). Dispatch le même event que les
+      // cases horaires des vues Jour/Semaine.
+      const addBtn = (editable && !past)
+        ? `<button type="button" class="cal-cell-add" data-add-day="${iso}" title="Ajouter un événement" aria-label="Ajouter un événement le ${iso}">+</button>`
+        : "";
+
       cells += `<div class="cal-cell-wrap">
         <button class="${cls}" ${attr} ${inert ? "disabled" : ""}>
           <span class="cal-cell-num">${d}</span>
         </button>
+        ${addBtn}
         ${(chips || overflow) ? `<div class="cal-cell-chips">${chips}${overflow}</div>` : ""}
       </div>`;
     }
@@ -592,6 +600,14 @@ export default function register(host) {
     // Mois : bascule dispo (éditeur) ou demande RDV (public).
     if (view === "month") {
       if (editable) {
+        // Bouton « + » au survol d'une cellule → nouvel événement ce jour-là.
+        container.querySelectorAll("[data-add-day]").forEach((b) =>
+          b.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const startsAt = `${b.dataset.addDay}T${currentAvail.start || "09:00"}`;
+            container.dispatchEvent(new CustomEvent("calendar:newAt", { detail: { startsAt } }));
+          })
+        );
         container.querySelectorAll("[data-day]").forEach((b) =>
           b.addEventListener("click", async () => {
             const day = b.dataset.day;

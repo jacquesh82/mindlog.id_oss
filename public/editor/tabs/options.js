@@ -36,7 +36,6 @@ export function renderOptionsColumn(data) {
           ${mkToggle("gallery_public",      "Galerie publique", "Les visiteurs voient votre galerie.",         data.settings?.gallery_public !== false)}
         </div>
         <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.8rem">
-          <a href="/@${esc(data.handle)}" target="_blank" rel="noopener noreferrer" class="btn sm">${icon("link", 13)} Ouvrir ma page</a>
           <button type="button" class="btn sm" id="hm-tour-btn">🦎 Visite guidée</button>
         </div>
       </div>

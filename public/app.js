@@ -209,7 +209,8 @@ function _ensureBrandPalette() {
   if (_brandPalette) return _brandPalette;
   _brandPalette = document.createElement("div");
   _brandPalette.className = "milo-palette brand-palette";
-  _brandPalette.innerHTML = swatchesHtml() + themeToggleHtml();
+  _brandPalette.innerHTML = swatchesHtml() + themeToggleHtml() +
+    `<button type="button" class="brand-palette-close" aria-label="Fermer le sélecteur de couleur" title="Fermer">×</button>`;
   document.body.appendChild(_brandPalette);
   _brandPalette.querySelectorAll(".swatch").forEach((s) =>
     s.addEventListener("click", () => {
@@ -226,6 +227,13 @@ function _ensureBrandPalette() {
     toggleTheme();
     clearTimeout(_brandFlashT);
     clearTimeout(_brandHideT);
+  });
+  // Croix de fermeture explicite (utile au tactile : pas de survol pour fermer).
+  _brandPalette.querySelector(".brand-palette-close").addEventListener("click", (e) => {
+    e.stopPropagation();
+    clearTimeout(_brandFlashT);
+    clearTimeout(_brandHideT);
+    _brandPalette.classList.remove("show");
   });
   applyTheme(storedTheme() || "dark"); // synchronise l'icône du bouton
   _brandPalette.addEventListener("mouseenter", () => {
@@ -375,7 +383,6 @@ function headerAccount(unread = 0) {
     </button>
     <div class="profile-menu" id="profile-menu" role="menu">
       <button class="pmenu-item" id="pmenu-profil" role="menuitem" type="button">${icon("user", 15)} Mon profil</button>
-      ${location.pathname.startsWith("/@") ? `<button class="pmenu-item" id="pmenu-edit" role="menuitem" type="button">${icon("home", 15)} Revenir à l'application</button>` : ""}
       <button class="pmenu-item" id="pmenu-premium" role="menuitem" type="button">${icon("sparkles", 15)} Mes Espaces</button>
       <button class="pmenu-item" id="pmenu-theme" role="menuitem" type="button">${storedTheme() === "light" ? icon("moon", 15) + " Mode sombre" : icon("sun", 15) + " Mode clair"}</button>
       <button class="pmenu-item" id="pmenu-notifs" role="menuitem" type="button">${icon("bell", 15)} Notifications</button>
@@ -441,12 +448,6 @@ function wireProfileMenu() {
       // La page publique est accessible via le bouton « Voir ↗ » dans la colonne.
       _pmenu.close();
       goTab("Identité");
-      return;
-    }
-    if (e.target.closest("#pmenu-edit")) {
-      // Retour à l'éditeur /me : si déjà sur /me, no-op ; sinon navigation.
-      _pmenu.close();
-      if (location.pathname !== "/me") location.assign("/me");
       return;
     }
     if (e.target.closest("#pmenu-notifs")) {
@@ -3212,8 +3213,14 @@ async function renderPublicProfile(handle) {
          <span>Créer ma page</span>
        </a>`
     : "";
+  // Connecté : raccourci « Revenir à l'application » (éditeur /me) accolé à la
+  // marque — symétrique du « Ouvrir ma page » de l'éditeur.
+  const _backToAppHtml = loggedIn
+    ? `<a class="btn sm topbar-publink" href="/me">${icon("home", 13)} <span class="topbar-publink-label">Revenir à l'application</span></a>`
+    : "";
   app.innerHTML = `
     ${siteHeader({
+      left: _backToAppHtml,
       center: headerSearchHtml(),
       right: `${_backBtnHtml}${_createCtaHtml}${headerAccount()}`,
     })}

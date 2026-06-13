@@ -31,3 +31,16 @@ docs/whitepaper/*.pdf
 .env
 .env.*
 !.env.example
+
+# Données de démo générées (contiennent des access keys) — ne JAMAIS committer
+SEED-DEMO.md
+
+# Artefacts d'enregistrement / médias de test
+public/cam.mp4
+
+# Outils & état locaux (agents / IDE)
+.agents/
+.cursor/
+.cursorignore
+.projects/state.json
+.projects/state.local.json

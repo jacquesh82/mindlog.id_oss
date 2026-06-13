@@ -25,6 +25,7 @@ import { renderOptionsColumn } from "./tabs/options.js";
 import { renderIdentityColumn } from "./tabs/identity.js";
 import { renderAgendaColumn } from "./tabs/agenda.js";
 import { renderRelationsColumn } from "./tabs/relations.js";
+import { wireRelationsGraph } from "./relations-graph.js";
 import { renderNotificationsColumn } from "./tabs/notifications.js";
 import { renderAccountColumn } from "./tabs/account.js";
 import { pbRowHtml, renderPremiumPage } from "./tabs/premium.js";
@@ -1113,6 +1114,7 @@ export function renderEditor(data) {
   app.setAttribute("data-view", "private");
   app.innerHTML = `
    ${siteHeader({
+     left: `<a class="btn sm topbar-publink" href="/@${esc(data.handle)}" target="_blank" rel="noopener noreferrer">${icon("link", 13)} <span class="topbar-publink-label">Ouvrir ma page</span></a>`,
      center: headerSearchHtml(),
      right: `<button class="btn sm notif-wrap" id="notif-bell" aria-label="Notifications" style="display:none"><span class="notif-badge" id="notif-badge" ${data.unread ? "" : "hidden"}>${data.unread || ""}</span></button>
        ${headerAccount(data.unread || 0)}`,
@@ -1914,54 +1916,78 @@ export function wireEditor(data) {
     });
   }
 
-  // Événements : suppression directe (corbeille sur la carte), création et
-  // édition via la modale composer (façon Teams).
-  app.querySelectorAll("[data-del-event]").forEach((b) =>
-    b.addEventListener("click", async () => {
-      const card = b.closest(".ev-card");
-      const title = card?.querySelector(".ev-title")?.textContent?.trim() || "cet événement";
-      if (!(await confirmDialog(`Supprimer « ${title} » ?`, { ok: "Supprimer", danger: true }))) return;
-      await api(`/api/agenda/${b.dataset.delEvent}`, { method: "DELETE", headers: authHeaders() });
-      renderPrivate(appState.key);
-    })
-  );
   // Si le créateur est Premium ET a coché le bénéfice « Lives », la modale
   // propose un type « Live » qui rend l'événement joignable par les abonnés.
   const _liveAvailable = !!data.space?.benefits?.lives;
-  app.querySelectorAll("[data-event-new]").forEach((b) =>
-    b.addEventListener("click", () => openEventModal(null, { liveAvailable: _liveAvailable }))
-  );
-  app.querySelectorAll("[data-event-edit]").forEach((b) =>
-    b.addEventListener("click", () => {
-      const ev = (data.events || []).find((e) => String(e.id) === b.dataset.eventEdit);
-      if (ev) openEventModal(ev, { liveAvailable: _liveAvailable });
-    })
-  );
 
-  // Disponibilités : navigation de période + bascule des jours + clics events.
-  // Le plugin émet `calendar:newAt` quand on clique une case horaire vide (vue
-  // Jour/Semaine) avec l'heure cible → on ouvre la modale d'évènement préfilée.
-  const calEl = app.querySelector(".calendar");
-  host.calendar.wire(
-    calEl,
-    data.overrides || {},
-    true,
-    data.handle,
-    dayLoadMap(data),
-    false,
-    data.events || [],
-    (ev) => openEventModal(ev, { liveAvailable: !!data.space?.benefits?.lives }),
-  );
-  calEl?.addEventListener("calendar:newAt", (e) => {
-    const startsAt = e.detail?.startsAt; // "YYYY-MM-DDTHH:00" local
-    if (!startsAt) return;
-    // openEventModal sait préremplir si on lui passe un objet ressemblant à un
-    // event (champs starts_at, ...). On forge un event "vide" non-éditant.
-    openEventModal(null, {
-      liveAvailable: !!data.space?.benefits?.lives,
-      prefill: { starts_at: startsAt },
+  // Rafraîchit l'agenda EN PLACE après ajout/édition/suppression d'un événement
+  // (calendrier + liste « Mes événements »), sans recharger tout l'éditeur : on
+  // conserve la vue (Jour/Semaine/Mois) et le scroll courants. `data.events` est
+  // la source de vérité locale, mutée par onSaved/onDeleted.
+  const refreshAgenda = () => {
+    const fill = app.querySelector(".calendar-fill");
+    if (fill) fill.innerHTML = host.calendar.html(data.overrides || {}, true, dayLoadMap(data), false, data.events || []);
+    const list = app.querySelector(".agenda-events");
+    if (list) list.innerHTML = eventsHtml(data.events, true);
+    wireAgenda();
+  };
+  const onSaved = (saved) => {
+    if (!saved?.id) { renderPrivate(appState.key); return; }
+    const evs = (data.events ||= []);
+    const i = evs.findIndex((e) => String(e.id) === String(saved.id));
+    if (i >= 0) evs[i] = saved; else evs.push(saved);
+    refreshAgenda();
+  };
+  const onDeleted = (eventId) => {
+    data.events = (data.events || []).filter((e) => String(e.id) !== String(eventId));
+    refreshAgenda();
+  };
+  const modalOpts = () => ({ liveAvailable: _liveAvailable, onSaved, onDeleted });
+
+  // Câblage (ré-appliqué à chaque refreshAgenda, car le DOM agenda est régénéré).
+  function wireAgenda() {
+    // Événements : suppression directe (corbeille sur la carte), création et
+    // édition via la modale composer (façon Teams).
+    app.querySelectorAll("[data-del-event]").forEach((b) =>
+      b.addEventListener("click", async () => {
+        const card = b.closest(".ev-card");
+        const title = card?.querySelector(".ev-title")?.textContent?.trim() || "cet événement";
+        if (!(await confirmDialog(`Supprimer « ${title} » ?`, { ok: "Supprimer", danger: true }))) return;
+        await api(`/api/agenda/${b.dataset.delEvent}`, { method: "DELETE", headers: authHeaders() });
+        onDeleted(b.dataset.delEvent);
+      })
+    );
+    app.querySelectorAll("[data-event-new]").forEach((b) =>
+      b.addEventListener("click", () => openEventModal(null, modalOpts()))
+    );
+    app.querySelectorAll("[data-event-edit]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const ev = (data.events || []).find((e) => String(e.id) === b.dataset.eventEdit);
+        if (ev) openEventModal(ev, modalOpts());
+      })
+    );
+
+    // Disponibilités : navigation de période + bascule des jours + clics events.
+    // Le plugin émet `calendar:newAt` au clic d'une case horaire vide (vues
+    // Jour/Semaine) ou du bouton « + » d'une cellule (vue Mois) → modale
+    // d'événement préremplie à l'heure cible.
+    const calEl = app.querySelector(".calendar");
+    host.calendar.wire(
+      calEl,
+      data.overrides || {},
+      true,
+      data.handle,
+      dayLoadMap(data),
+      false,
+      data.events || [],
+      (ev) => openEventModal(ev, modalOpts()),
+    );
+    calEl?.addEventListener("calendar:newAt", (e) => {
+      const startsAt = e.detail?.startsAt; // "YYYY-MM-DDTHH:00" local
+      if (startsAt) openEventModal(null, { ...modalOpts(), prefill: { starts_at: startsAt } });
     });
-  });
+  }
+  wireAgenda();
 
   // Aperçu façon téléphone (colonne Accueil) : swipe entre Accueil / Calendrier /
   // Galerie + pastilles de pagination, et montage de la vraie galerie (plugin).
@@ -2914,6 +2940,28 @@ export function wireEditor(data) {
       filterRels();
     });
   });
+  // Bascule Liste / Graphe de la colonne Relations. Le graphe (réseau radial
+  // D1/D2/D3) est rendu d'avance, masqué ; pan/zoom câblé une seule fois au
+  // premier passage en vue graphe.
+  let _relGraphWired = false;
+  const relListPane = app.querySelector("#rel-list-pane");
+  const relGraphPane = app.querySelector("#rel-graph-pane");
+  app.querySelectorAll(".rel-view-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const graph = tab.dataset.relview === "graph";
+      app.querySelectorAll(".rel-view-tab").forEach((t) => {
+        const on = t === tab;
+        t.classList.toggle("active", on);
+        t.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      if (relListPane) relListPane.hidden = graph;
+      if (relGraphPane) relGraphPane.hidden = !graph;
+      if (graph && !_relGraphWired && relGraphPane) {
+        wireRelationsGraph(relGraphPane, data);
+        _relGraphWired = true;
+      }
+    });
+  });
   // Bannière demandes en attente
   app.querySelector("#rel-pending-toggle")?.addEventListener("click", () => {
     const panel = app.querySelector("#rel-pending-panel");
@@ -3854,7 +3902,8 @@ export function openEventModal(event, opts = {}) {
     if (!(await confirmDialog(`Supprimer « ${event.title} » ?`, { ok: "Supprimer", danger: true }))) return;
     await api(`/api/agenda/${event.id}`, { method: "DELETE", headers: authHeaders() });
     close();
-    renderPrivate(appState.key);
+    if (typeof opts.onDeleted === "function") opts.onDeleted(event.id);
+    else renderPrivate(appState.key);
   });
 
   // Toggle « Événement / Live » : maintient form.dataset.kind (CSS gère la
@@ -3913,14 +3962,17 @@ export function openEventModal(event, opts = {}) {
     const submitBtn = e.target.querySelector("button[type=submit]");
     submitBtn.disabled = true;
     try {
-      await api(editing ? `/api/agenda/${event.id}` : "/api/agenda", {
+      const saved = await api(editing ? `/api/agenda/${event.id}` : "/api/agenda", {
         method: editing ? "PUT" : "POST",
         headers: jsonAuth(),
         body: JSON.stringify(payload),
       });
       close();
       toast(editing ? "Événement modifié 🦎" : "Événement ajouté 🦎");
-      renderPrivate(appState.key);
+      // Rafraîchissement EN PLACE si l'appelant fournit onSaved (cas agenda) :
+      // on évite le rechargement complet de l'éditeur (flash + perte de vue/scroll).
+      if (typeof opts.onSaved === "function") opts.onSaved(saved);
+      else renderPrivate(appState.key);
     } catch (err) {
       submitBtn.disabled = false;
       errEl.textContent = "Échec de l'enregistrement. Réessayez.";
