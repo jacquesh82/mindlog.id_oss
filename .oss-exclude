@@ -31,10 +31,13 @@ drizzle/0027_premium_space_profile_intro.sql
 drizzle/0028_premium_space_benefits.sql
 drizzle/0029_premium_lives.sql
 drizzle/0033_premium_profile_intro_backfill.sql
+drizzle/0034_premium_storage_config.sql
+drizzle/0035_space_media_keys_fix.sql
 
 # Docs internes
 docs/premium-offer-plan.md
 docs/features-oss-vs-premium.md
+docs/third-party-storage.md
 
 # Scripts d'administration
 scripts/gen-admin-certs.sh

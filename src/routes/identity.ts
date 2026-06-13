@@ -123,7 +123,11 @@ route.post("/api/identities", async (c) => {
     display_name: string;
     email: string;
     autoCreated: boolean;
+    ack_adult_content: boolean;
   }>(c);
+  if (!body.autoCreated && body.ack_adult_content !== true) {
+    return c.json({ error: "Vous devez accepter l'engagement : avatar et image de couverture sans contenu 18+ (seuls médias hébergés par la plateforme)." }, 400);
+  }
   if (TURNSTILE_SECRET_KEY && !isLocalHost(c.req.header("host") ?? "")) {
     const ip = c.req.header("cf-connecting-ip") ?? c.req.header("x-forwarded-for")?.split(",")[0].trim();
     const ok = await verifyTurnstile(body.turnstileToken ?? "", ip);

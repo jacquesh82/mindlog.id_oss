@@ -15,10 +15,11 @@ import { CREDIT, t } from "../i18n.js";
 import { api, authHeaders, jsonAuth, setAccessKey } from "../net.js";
 import { appState } from "../state.js";
 import { ACCENT_STORE, applyAccent, applyTheme, storedAccent, toggleTheme } from "../theme.js";
-import { confirmDialog, copyText, esc, promptPassphrase, promptPin, toast } from "../ui/dom.js";
+import { confirmDialog, copyText, esc, promptDialog, promptPassphrase, promptPin, toast } from "../ui/dom.js";
 import { SOCIALS, SOCIAL_BY_KEY, avatarHtml, genericAvatarSvg, icon, isSocialKey, miloSvg, siteHeader, socialFieldKey, socialIcon, socialUrl } from "../ui/icons.js";
 import { openE2eBackup, openE2eRestore } from "../ui/modals.js";
 import { openCoverEditor } from "../ui/cover-editor.js";
+import { resolveMediaUrl, syncOwnerMediaKeys, uploadEncrypted } from "../premium/storage-client.js";
 import { addDeckColumn, deckState, removeDeckColumn } from "./deck.js";
 import { renderOptionsColumn } from "./tabs/options.js";
 import { renderIdentityColumn } from "./tabs/identity.js";
@@ -271,47 +272,43 @@ function ppTypeFieldsHtml(type, current, ctx = {}) {
             <input id="pp-link-note" placeholder="Note pour l'abonné (optionnel)" maxlength="500" value="${esc(o.note || "")}">`;
   }
   if (type === "gallery") {
-    // Système identique à la galerie classique : grille de vignettes + zone de
-    // dépôt + sélecteur de fichiers. Les médias sont uploadés sur le serveur
-    // (data/page-media/<page_id>/…) puis servis via /api/pages/.../media/….
+    // Médias chiffrés côté client puis uploadés DIRECTEMENT vers le stockage
+    // tiers du créateur (cf. premium/storage-client). Rien n'est hébergé par
+    // id.mindlog ; le tiers ne voit que du chiffré. Les vignettes chiffrées sont
+    // déchiffrées à l'affichage (hydrateGalThumbs).
     const items = (current && Array.isArray(current.items)) ? current.items : [];
-    const slug = ctx.slug || "";
     const handle = ctx.handle || "";
-    const gridHtml = items.map((it) => galItemHtml(it, handle, slug)).join("");
-    return `<div class="gal-grid pp-gal-grid" id="pp-gal-grid" data-slug="${esc(slug)}" data-handle="${esc(handle)}">${gridHtml}</div>
+    const gridHtml = items.map((it) => galItemHtml(it)).join("");
+    return `<div class="gal-grid pp-gal-grid" id="pp-gal-grid" data-handle="${esc(handle)}">${gridHtml}</div>
             <div class="gal-drop pp-gal-drop" id="pp-gal-drop">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-              <span>Glisse des images ou des vidéos (≤25 Mo, max 30)</span>
+              <span>Glisse des images ou des vidéos — chiffrées avant l'envoi (max 30)</span>
               <label class="btn sm" style="cursor:pointer">Parcourir
                 <input type="file" accept="image/*,video/*" multiple hidden id="pp-gal-file" />
               </label>
+              <button type="button" class="btn sm ghost" id="pp-gal-url">Ajouter par URL</button>
             </div>
-            <p class="lbl-sm" id="pp-gal-hint" style="margin:.4rem 0 0;opacity:.7">${slug ? "Tes médias sont privés et ne sont accessibles qu'aux abonné·e·s." : "Enregistre la page une première fois pour pouvoir ajouter des médias."}</p>`;
+            <p class="lbl-sm" id="pp-gal-hint" style="margin:.4rem 0 0;opacity:.7">${icon("lock", 12)} Médias chiffrés, servis depuis ton stockage tiers (Compte → Stockage). Réservés aux abonné·e·s.</p>`;
   }
   if (type === "file") {
     const o = (current && typeof current === "object") ? current : {};
-    const slug = ctx.slug || "";
     const handle = ctx.handle || "";
     const hasFile = !!o.url;
-    const fileUrl = hasFile && !String(o.url).startsWith("http")
-      ? `/api/pages/${encodeURIComponent(handle)}/${encodeURIComponent(slug)}/media/${encodeURIComponent(o.url)}`
-      : (o.url || "");
-    return `<div class="pp-file-state" id="pp-file-state" data-slug="${esc(slug)}" data-handle="${esc(handle)}" data-filename="${esc(o.url || "")}">
+    return `<div class="pp-file-state" id="pp-file-state" data-handle="${esc(handle)}" data-url="${esc(o.url || "")}" data-enc="${o.enc ? "1" : ""}" data-mime="${esc(o.mime || "")}" data-name="${esc(o.name || "")}" data-size="${esc(String(o.size || 0))}">
         ${hasFile
           ? `<div class="pp-file-card">
               <span class="pp-file-ic">${icon("download", 18)}</span>
               <div class="pp-file-info">
                 <b>${esc(o.name || "fichier")}</b>
-                <span class="lbl-sm">${o.size ? `${(o.size/1024).toFixed(1)} Ko` : ""}</span>
+                <span class="lbl-sm">${o.size ? `${(o.size/1024).toFixed(1)} Ko` : ""} ${o.enc ? "· chiffré" : ""}</span>
               </div>
-              <a class="btn sm" href="${esc(fileUrl)}" target="_blank" rel="noopener">Aperçu</a>
               <button type="button" class="btn sm danger" id="pp-file-del">Remplacer</button>
             </div>`
           : `<div class="pp-file-empty">
               <span class="pp-file-ic">${icon("download", 22)}</span>
-              <p>${slug ? "Choisis un fichier PDF ou ZIP à téléverser (≤25 Mo)." : "Enregistre la page une première fois pour pouvoir téléverser le fichier."}</p>
+              <p>${icon("lock", 12)} Choisis un fichier — chiffré avant l'envoi vers ton stockage tiers.</p>
               <label class="btn primary sm" style="cursor:pointer">Choisir un fichier
-                <input type="file" accept=".pdf,.zip,application/pdf,application/zip" hidden id="pp-file-input" ${slug ? "" : "disabled"}>
+                <input type="file" hidden id="pp-file-input">
               </label>
             </div>`}
       </div>`;
@@ -319,19 +316,37 @@ function ppTypeFieldsHtml(type, current, ctx = {}) {
   return "";
 }
 
-// Vignette unique pour la grille galerie du wizard. data-filename sert au DELETE.
-function galItemHtml(it, handle, slug) {
-  const filename = String(it.url || "");
-  const src = filename.startsWith("http")
-    ? filename
-    : `/api/pages/${encodeURIComponent(handle)}/${encodeURIComponent(slug)}/media/${encodeURIComponent(filename)}`;
-  const isVideo = it.kind === "video" || /\.(mp4|webm|mov)(\?|$)/i.test(filename);
-  return `<div class="gal-item" data-filename="${esc(filename)}">
+// Vignette unique pour la grille galerie du wizard. L'item porte l'URL externe
+// (stockage tiers) + `enc`/`mime`. Pour un média chiffré, le src est posé après
+// déchiffrement par hydrateGalThumbs ; sinon directement.
+function galItemHtml(it) {
+  const url = String(it.url || "");
+  const enc = it.enc === true || it.enc === "1";
+  const isVideo = it.kind === "video" || /\.(mp4|webm|mov)(\?|$)/i.test(url);
+  const src = enc ? "" : (/^https?:\/\//i.test(url) ? ` src="${esc(url)}"` : "");
+  return `<div class="gal-item${enc ? " pp-media-enc pp-gal-loading" : ""}" data-url="${esc(url)}" data-enc="${enc ? "1" : ""}" data-mime="${esc(it.mime || "")}" data-kind="${isVideo ? "video" : "image"}">
     ${isVideo
-      ? `<video src="${esc(src)}" muted playsinline preload="metadata"></video>`
-      : `<img src="${esc(src)}" alt="${esc(it.caption || "")}" loading="lazy" />`}
+      ? `<video${src} muted playsinline preload="metadata"></video>`
+      : `<img${src} alt="${esc(it.caption || "")}" loading="lazy" />`}
     <button type="button" class="gal-del" title="Supprimer">✕</button>
   </div>`;
+}
+
+// Déchiffre les vignettes chiffrées de la grille (éditeur) et pose l'objectURL.
+async function hydrateGalThumbs(grid, handle) {
+  const els = grid.querySelectorAll(".pp-media-enc:not([data-hydrated])");
+  for (const el of els) {
+    el.dataset.hydrated = "1";
+    try {
+      const objUrl = await resolveMediaUrl(handle, { url: el.dataset.url, enc: true, mime: el.dataset.mime, kind: el.dataset.kind });
+      const media = el.querySelector("img,video");
+      if (media) media.src = objUrl;
+      el.classList.remove("pp-gal-loading");
+    } catch {
+      el.classList.add("pp-gal-error");
+      el.classList.remove("pp-gal-loading");
+    }
+  }
 }
 
 // Lit les inputs du formulaire et reconstruit le payload `content` attendu
@@ -349,16 +364,25 @@ function collectTypeContent(root, type) {
   if (type === "gallery") {
     const grid = root.querySelector("#pp-gal-grid");
     if (!grid) return { items: [] };
-    const items = [...grid.querySelectorAll(".gal-item")].map((el) => {
-      const filename = el.dataset.filename || "";
-      const isVideo = !!el.querySelector("video");
-      return { url: filename, kind: isVideo ? "video" : "image", caption: "" };
-    }).filter((it) => it.url);
+    const items = [...grid.querySelectorAll(".gal-item")].map((el) => ({
+      url: el.dataset.url || "",
+      kind: el.dataset.kind === "video" ? "video" : "image",
+      caption: "",
+      enc: el.dataset.enc === "1",
+      mime: el.dataset.mime || "",
+    })).filter((it) => /^https?:\/\//i.test(it.url));
     return { items };
   }
   if (type === "file") {
     const st = root.querySelector("#pp-file-state");
-    return { url: st?.dataset.filename || "", name: "", size: 0 };
+    if (!st) return { url: "", name: "", size: 0 };
+    return {
+      url: st.dataset.url || "",
+      name: st.dataset.name || "",
+      size: Number(st.dataset.size || 0),
+      enc: st.dataset.enc === "1",
+      mime: st.dataset.mime || "",
+    };
   }
   return null;
 }
@@ -435,6 +459,197 @@ async function loadSpacePricing(root) {
   );
 }
 
+// Stockage tiers : sélecteur de fournisseur (catalogue TOP 10) + config/test +
+// OAuth. Les médias sont chiffrés côté client et uploadés directement chez le
+// fournisseur ; id.mindlog n'héberge rien. `root` = la page Premium.
+async function loadStorageConfig(root) {
+  const wrap = root.querySelector("#sp-storage");
+  const statusEl = root.querySelector("#sp-storage-status");
+  if (!wrap) return;
+
+  // Feedback retour OAuth (?storage=gdrive_ok…) puis nettoyage de l'URL.
+  try {
+    const sp = new URLSearchParams(location.search).get("storage");
+    if (sp) {
+      if (/_ok$/.test(sp)) toast("Stockage connecté ✓");
+      else if (/_denied$/.test(sp)) toast("Connexion refusée.");
+      else if (/(_error|_state|_unavailable|badprovider)$/.test(sp)) toast("Échec de connexion au stockage.");
+      else if (sp === "premium") toast("Premium requis.");
+      const u = new URL(location.href); u.searchParams.delete("storage"); history.replaceState(null, "", u);
+    }
+  } catch { /* no-op */ }
+
+  let state;
+  try {
+    state = await api("/api/storage/config", { headers: authHeaders() });
+  } catch (e) {
+    wrap.innerHTML = `<p class="lbl-sm">${esc(e?.message || "Indisponible.")}</p>`;
+    return;
+  }
+  const catalog = state.catalog || [];
+  const cfg = state.config || null;
+  const curId = cfg?.providerId || cfg?.kind || "";
+  if (statusEl) statusEl.textContent = state.configured ? "✓ connecté" : "non connecté";
+
+  // Ré-enveloppe la clé média pour les (éventuels) nouveaux abonnés. Best-effort :
+  // garantit que les abonnés récents pourront déchiffrer la galerie.
+  if (state.configured) void syncOwnerMediaKeys(myHandle()).catch(() => { /* best-effort */ });
+
+  // Regroupe pour guider : « en un clic » (OAuth grand public DISPONIBLES),
+  // « avec vos identifiants » (S3-compatibles), « lien direct » (http). Les
+  // fournisseurs OAuth non activés côté serveur sont MASQUÉS (pas grisés).
+  const oauthReady = catalog.filter((e) => e.authType === "oauth" && e.serverReady);
+  const oauthHidden = catalog.filter((e) => e.authType === "oauth" && !e.serverReady);
+  const keyProviders = catalog.filter((e) => e.authType === "keys");
+  const httpProviders = catalog.filter((e) => e.authType === "none");
+  const advProviders = [...keyProviders, ...httpProviders];
+  const labelOf = (id) => catalog.find((e) => e.id === id)?.label || id;
+  const isCurrent = (e) => cfg && (cfg.providerId === e.id || cfg.kind === e.kind);
+
+  const collect = (entry) => {
+    const o = { kind: entry.kind, providerId: entry.id };
+    if (entry.authType === "keys") {
+      wrap.querySelectorAll("[data-field]").forEach((inp) => { o[inp.dataset.field] = inp.value.trim(); });
+    } else if (entry.authType === "none") {
+      const f = wrap.querySelector('[data-field="baseUrl"]'); if (f) o.baseUrl = f.value.trim();
+    } else {
+      o.folderId = wrap.querySelector("#sp-st-folderId")?.value.trim() || "";
+    }
+    return o;
+  };
+  const setMsg = (txt) => { const m = wrap.querySelector("#sp-st-msg"); if (m) m.textContent = txt; };
+  const save = async (entry) => {
+    const payload = collect(entry);
+    // Garde-fou « clés inversées » : le Secret est quasi toujours plus long que
+    // l'Access Key ID (R2 : 32 vs 64, AWS : 20 vs 40). Si l'utilisateur a saisi
+    // de nouvelles valeurs (≠ masque) et que l'ID est plus long, on prévient —
+    // cause n°1 de « access key has length 64, should be 32 ».
+    if (entry.kind === "s3") {
+      const ak = String(payload.accessKeyId || ""), sk = String(payload.secretAccessKey || "");
+      const realAk = ak && ak !== "••••", realSk = sk && sk !== "••••";
+      if (realAk && realSk && ak.length > sk.length) {
+        const ok = await confirmDialog(
+          "L'« Access Key ID » est plus long que le « Secret Access Key » — ils sont presque toujours inversés (ex. Cloudflare R2 : ID = 32 caractères, Secret = 64). Enregistrer quand même ?",
+          { ok: "Enregistrer quand même", cancel: "Corriger", danger: true }
+        );
+        if (!ok) return;
+      }
+    }
+    try {
+      const r = await api("/api/storage/config", { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ config: payload }) });
+      if (statusEl) statusEl.textContent = r.configured ? "✓ connecté" : "non connecté";
+      const cors = r.cors ? (r.cors.ok ? " · CORS ✓" : ` · CORS non posé (${r.cors.error || "?"}) → voir l'aide`) : "";
+      setMsg(`Enregistré ✓${cors}`);
+      toast("Stockage enregistré ✓");
+    } catch (e) { setMsg(e?.message || "Échec"); toast(e?.message || "Échec."); }
+  };
+  const test = async () => {
+    setMsg("Test en cours…");
+    try {
+      const r = await api("/api/storage/test", { method: "POST", headers: authHeaders() });
+      const cors = r.cors ? (r.cors.ok ? " · CORS ✓" : ` · CORS non posé (${r.cors.error || "?"}) → configure-le à la main, voir l'aide`) : "";
+      setMsg(r.ok ? `Connexion OK ✓${cors}` : (r.error || "Échec"));
+      toast(r.ok ? "Connexion au stockage OK ✓" : (r.error || "Échec du test"));
+    } catch (e) { setMsg(e?.message || "Échec"); }
+  };
+
+  // ── Bandeau « connecté à … » ───────────────────────────────────────────────
+  const bannerHtml = state.configured
+    ? `<div class="sp-st-connected">${icon("shield", 15)} <b>Connecté</b> — vos médias sont chiffrés et stockés sur <b>${esc(labelOf(curId))}</b>.</div>`
+    : `<p class="lbl-sm" style="margin:.1rem 0 .7rem;line-height:1.5">Choisissez où vivront vos médias. Le plus simple : connecter un compte grand public en un clic.</p>`;
+
+  // ── Section « en un clic » (OAuth grand public disponibles) ────────────────
+  const oneClickHtml = oauthReady.length
+    ? `<div class="sp-oc-grid">${oauthReady.map((e) => {
+        const cur = isCurrent(e) && state.configured;
+        return `<div class="sp-oc-card${cur ? " is-on" : ""}">
+          <div class="sp-oc-head"><b>${esc(e.label)}</b>${e.badge ? `<span class="sp-oc-badge">${esc(e.badge)}</span>` : ""}</div>
+          <p class="lbl-sm sp-oc-hint">${esc(e.hint)}</p>
+          ${cur
+            ? `<div class="sp-oc-on">${icon("shield", 13)} Connecté</div>
+               <label class="sp-st-field" style="margin:.4rem 0 .2rem"><span class="lbl-sm">Dossier cible (optionnel)</span><input id="sp-st-folderId" placeholder="ID du dossier" value="${esc(cfg.folderId || "")}"></label>
+               <div class="lt-prem-actions" style="align-items:center">
+                 <button type="button" class="btn sm" data-oc-save="${esc(e.id)}">Enregistrer le dossier</button>
+                 <button type="button" class="btn sm" id="sp-st-test">Tester</button>
+                 <a class="btn sm" href="/api/storage/oauth/${encodeURIComponent(e.kind)}/connect">Reconnecter</a>
+               </div>`
+            : `<a class="btn primary sm sp-oc-cta" href="/api/storage/oauth/${encodeURIComponent(e.kind)}/connect">${icon("link", 14)} Connecter ${esc(e.label)}</a>`}
+        </div>`;
+      }).join("")}</div>`
+    : `<div class="sp-oc-empty lbl-sm">${icon("clock", 13)} Aucun service « en un clic » (Google Drive, Dropbox, OneDrive) n'est activé pour l'instant. Utilisez vos identifiants ci-dessous — <b>Cloudflare R2</b> est gratuit et rapide à mettre en place.</div>`;
+
+  // ── Section « avec vos identifiants » (S3-compatibles + lien) ──────────────
+  const advOptions = advProviders.map((e) =>
+    `<option value="${esc(e.id)}" ${e.id === curId ? "selected" : ""}>${esc(e.label)}${e.badge ? ` — ${esc(e.badge)}` : ""}</option>`
+  ).join("");
+
+  const renderAdv = (entryId) => {
+    const entry = advProviders.find((e) => e.id === entryId) || advProviders[0];
+    const bodyEl = wrap.querySelector("#sp-st-adv-body");
+    if (!entry || !bodyEl) return;
+    const same = isCurrent(entry);
+    let body = `<p class="lbl-sm" style="opacity:.8;margin:.2rem 0 .55rem;line-height:1.5">${esc(entry.hint)}${entry.helpUrl ? ` <a href="${esc(entry.helpUrl)}" target="_blank" rel="noopener">Où trouver mes identifiants ?</a>` : ""}</p>`;
+    let actions = "";
+    if (entry.authType === "keys") {
+      body += `<div class="sp-st-fields">` + (entry.fields || []).map((f) => {
+        const preset = (entry.presets && entry.presets[f.name]) || "";
+        const cur = same ? (cfg[f.name] ?? "") : preset;
+        return `<label class="sp-st-field"><span class="lbl-sm">${esc(f.label)}${f.required ? " *" : ""}</span>
+          <input data-field="${esc(f.name)}" type="${f.type === "password" ? "password" : "text"}" placeholder="${esc(f.placeholder || "")}" value="${esc(cur)}" autocomplete="off"></label>`;
+      }).join("") + `</div>`;
+      body += `<details class="sp-st-op" style="margin-top:.5rem" open><summary class="lbl-sm">⚠ CORS : indispensable pour l'upload navigateur — comment faire</summary>
+        <p class="lbl-sm" style="margin:.4rem 0;line-height:1.5">On essaie de le poser automatiquement à l'enregistrement, <b>mais ça exige un jeton avec droits d'admin sur le bucket</b> (les jetons « Object Read &amp; Write » ne peuvent pas modifier le CORS → message « CORS non posé »). Le plus simple : le coller dans la console.</p>
+        <p class="lbl-sm" style="margin:.4rem 0;line-height:1.4"><b>Cloudflare R2</b> : Dashboard → R2 → ton bucket → <b>Settings → CORS Policy → Edit</b> → colle :</p>
+        <pre class="lbl-sm" style="white-space:pre-wrap;background:var(--bg-soft);border:1px solid var(--line);border-radius:8px;padding:.5rem;overflow:auto">[{ "AllowedOrigins": ["*"], "AllowedMethods": ["GET","PUT","HEAD"], "AllowedHeaders": ["*"], "ExposeHeaders": ["ETag"], "MaxAgeSeconds": 3600 }]</pre>
+        <p class="lbl-sm" style="margin:.3rem 0 0;opacity:.8">(Pour l'auto-CORS : crée un jeton R2 « Admin Read &amp; Write » à la place. <code>AllowedOrigins:["*"]</code> est sûr — écrire exige une URL présignée.)</p></details>`;
+      actions = `<button type="button" class="btn primary sm" id="sp-st-save">Enregistrer</button> <button type="button" class="btn sm" id="sp-st-test">Tester</button>`;
+    } else {
+      const cur = same ? (cfg.baseUrl || "") : "";
+      body += `<label class="sp-st-field"><span class="lbl-sm">Base URL (optionnel)</span><input data-field="baseUrl" type="text" placeholder="https://cdn.exemple.com" value="${esc(cur)}"></label>`;
+      actions = `<button type="button" class="btn primary sm" id="sp-st-save">Enregistrer</button>`;
+    }
+    bodyEl.innerHTML = body + `<div class="lt-prem-actions" style="margin-top:.6rem;align-items:center">${actions}</div>`;
+    wrap.querySelector("#sp-st-save")?.addEventListener("click", () => save(entry));
+    wrap.querySelector("#sp-st-test")?.addEventListener("click", () => test());
+  };
+
+  // ── Note opérateur (discrète) si des services OAuth sont masqués ────────────
+  const operatorNote = oauthHidden.length
+    ? `<details class="sp-st-op"><summary class="lbl-sm">Vous gérez la plateforme ? Activer les services « en un clic »</summary>
+        <p class="lbl-sm" style="margin:.4rem 0 0;line-height:1.5">Pour proposer ${esc(oauthHidden.map((e) => e.label).join(", "))} en un clic à tous vos créateurs, enregistrez une application OAuth chez chaque fournisseur et renseignez ses clés côté serveur (<code>GOOGLE_DRIVE_CLIENT_ID/SECRET</code>, <code>DROPBOX_CLIENT_ID/SECRET</code>, <code>ONEDRIVE_CLIENT_ID/SECRET</code>). URI de redirection : <code>${esc(location.origin)}/api/storage/oauth/&lt;fournisseur&gt;/callback</code>. Voir <code>.env.example</code> et <code>docs/third-party-storage.md</code>.</p>
+       </details>`
+    : "";
+
+  wrap.innerHTML = `${bannerHtml}
+    ${oneClickHtml}
+    <details class="sp-st-adv" ${state.configured && advProviders.some(isCurrent) ? "open" : ""}>
+      <summary class="lbl-sm">${icon("key", 13)} Connecter avec mes identifiants (Amazon S3, Cloudflare R2, Backblaze, Wasabi, Scaleway, DigitalOcean, MinIO…)</summary>
+      <div class="sp-st-adv-inner">
+        <div class="sp-st-pick" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin:.5rem 0 .4rem">
+          <label class="lbl-sm" for="sp-st-provider" style="margin:0">Fournisseur</label>
+          <select id="sp-st-provider">${advOptions}</select>
+        </div>
+        <div id="sp-st-adv-body"></div>
+      </div>
+    </details>
+    <div class="lt-prem-actions" style="margin-top:.5rem"><span id="sp-st-msg" class="lbl-sm" style="opacity:.75" aria-live="polite"></span></div>
+    ${operatorNote}`;
+
+  // Wiring : sauvegarde du dossier OAuth (cartes « en un clic »), test, select avancé.
+  wrap.querySelectorAll("[data-oc-save]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const entry = catalog.find((e) => e.id === btn.dataset.ocSave);
+      if (entry) save(entry);
+    });
+  });
+  wrap.querySelector("#sp-st-test")?.addEventListener("click", () => test());
+  const sel = wrap.querySelector("#sp-st-provider");
+  if (sel) {
+    sel.addEventListener("change", () => renderAdv(sel.value));
+    renderAdv(advProviders.some(isCurrent) ? curId : (advProviders[0] && advProviders[0].id));
+  }
+}
+
 // Peuple les blocs « Tarif de l'espace » + « Pages de l'espace » de la page
 // Premium (statut Connect, liste de pages, wizard d'ajout). `root` = la page
 // Premium (hors #app), donc on requête dans `root`, pas dans `app`.
@@ -461,6 +676,9 @@ async function loadPaidPages(root, data) {
 
   // ── Tarif de l'espace ─────────────────────────────────────────────────────
   void loadSpacePricing(root);
+
+  // Le stockage tiers se gère désormais dans Compte → Stockage (loadStorageConfig
+  // y est chargé paresseusement à l'ouverture de l'onglet).
 
   // ── Liste des pages ──────────────────────────────────────────────────────
   const pagesEl = root.querySelector("#pp-pages");
@@ -598,38 +816,46 @@ function closeWizard(root) {
   if (wiz) wiz.hidden = true;
 }
 
-// Câble upload/drop/delete pour les types média (gallery + file). Disponible
-// seulement après la première sauvegarde de la page (slug existant dans ctx).
+// Câble upload/drop/delete pour les types média (gallery + file). Les fichiers
+// sont chiffrés côté client puis uploadés DIRECTEMENT vers le stockage tiers du
+// créateur (premium/storage-client). L'item (URL externe + enc/mime) est gardé
+// dans le DOM et persisté à l'enregistrement de la page (collectTypeContent).
 function wirePpTypeFields(root, type, ctx) {
   if (type !== "gallery" && type !== "file") return;
-  const slug = ctx.slug;
-  if (!slug) return; // page pas encore enregistrée → upload désactivé
+  const handle = ctx.handle;
+  if (!handle) return;
 
   if (type === "gallery") {
     const grid = root.querySelector("#pp-gal-grid");
     const drop = root.querySelector("#pp-gal-drop");
     const fileInp = root.querySelector("#pp-gal-file");
+    const urlBtn = root.querySelector("#pp-gal-url");
     if (!grid || !drop || !fileInp) return;
 
+    const addItem = (it) => {
+      const tmp = document.createElement("div");
+      tmp.innerHTML = galItemHtml(it);
+      const node = tmp.firstElementChild;
+      grid.appendChild(node);
+      wireGalDelete(node);
+      void hydrateGalThumbs(grid, handle);
+    };
+
     const uploadFiles = async (files) => {
-      if (!files?.length) return;
-      const fd = new FormData();
-      for (const f of files) fd.append("media", f);
-      try {
-        const r = await api(`/api/pages/${encodeURIComponent(slug)}/media`, {
-          method: "POST", headers: authHeaders(), body: fd,
-        });
-        for (const it of (r.added || [])) {
-          const tmp = document.createElement("div");
-          tmp.innerHTML = galItemHtml(it, ctx.handle, slug);
-          const node = tmp.firstElementChild;
-          grid.appendChild(node);
-          wireGalDelete(node, slug);
+      const list = [...(files || [])];
+      if (!list.length) return;
+      toast(`Chiffrement & envoi de ${list.length} média(s)…`);
+      let ok = 0;
+      for (const f of list) {
+        try {
+          const item = await uploadEncrypted({ file: f, handle });
+          addItem(item);
+          ok++;
+        } catch (e) {
+          toast(e?.message || "Upload échoué (stockage connecté ?).");
         }
-        toast(`${r.added?.length || 0} média(s) ajouté(s) ✓`);
-      } catch (e) {
-        toast(e?.message || "Upload échoué.");
       }
+      if (ok) toast(`${ok} média(s) chiffré(s) ajouté(s) ✓`);
     };
 
     fileInp.addEventListener("change", () => {
@@ -643,84 +869,70 @@ function wirePpTypeFields(root, type, ctx) {
       drop.classList.remove("drag-over");
       if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
     });
-    grid.querySelectorAll(".gal-item").forEach((el) => wireGalDelete(el, slug));
+    urlBtn?.addEventListener("click", async () => {
+      const url = await promptDialog("URL publique du média (image ou vidéo) :", { type: "url", placeholder: "https://…" });
+      if (!url) return;
+      if (!/^https?:\/\//i.test(url)) { toast("URL http(s) requise."); return; }
+      const kind = /\.(mp4|webm|mov)(\?|$)/i.test(url) ? "video" : "image";
+      addItem({ url, kind, enc: false, mime: "" });
+    });
+    grid.querySelectorAll(".gal-item").forEach((el) => wireGalDelete(el));
+    void hydrateGalThumbs(grid, handle);
   }
 
   if (type === "file") {
     const st = root.querySelector("#pp-file-state");
     if (!st) return;
+    const renderCard = (name, size, enc) => {
+      st.innerHTML = `<div class="pp-file-card">
+        <span class="pp-file-ic">${icon("download", 18)}</span>
+        <div class="pp-file-info"><b>${esc(name)}</b><span class="lbl-sm">${size ? `${(size/1024).toFixed(1)} Ko` : ""} ${enc ? "· chiffré" : ""}</span></div>
+        <button type="button" class="btn sm danger" id="pp-file-del">Remplacer</button>
+      </div>`;
+      wirePpTypeFields(root, "file", ctx);
+    };
     const inp = root.querySelector("#pp-file-input");
     const del = root.querySelector("#pp-file-del");
     inp?.addEventListener("change", async () => {
       const file = inp.files?.[0];
       inp.value = "";
       if (!file) return;
-      const fd = new FormData();
-      fd.append("file", file);
+      toast("Chiffrement & envoi…");
       try {
-        const r = await api(`/api/pages/${encodeURIComponent(slug)}/media`, {
-          method: "POST", headers: authHeaders(), body: fd,
-        });
-        const a = r.added?.[0];
-        if (a) {
-          st.dataset.filename = a.url;
-          // Re-rendu local : on remplace l'état vide par la carte fichier.
-          const fileUrl = `/api/pages/${encodeURIComponent(ctx.handle)}/${encodeURIComponent(slug)}/media/${encodeURIComponent(a.url)}`;
-          st.innerHTML = `<div class="pp-file-card">
-            <span class="pp-file-ic">${icon("download", 18)}</span>
-            <div class="pp-file-info">
-              <b>${esc(a.caption || file.name)}</b>
-              <span class="lbl-sm">${(file.size/1024).toFixed(1)} Ko</span>
-            </div>
-            <a class="btn sm" href="${esc(fileUrl)}" target="_blank" rel="noopener">Aperçu</a>
-            <button type="button" class="btn sm danger" id="pp-file-del">Remplacer</button>
-          </div>`;
-          // Re-câble le bouton de remplacement.
-          wirePpTypeFields(root, "file", ctx);
-        }
-        toast("Fichier téléversé ✓");
+        const item = await uploadEncrypted({ file, handle });
+        st.dataset.url = item.url;
+        st.dataset.enc = item.enc ? "1" : "";
+        st.dataset.mime = item.mime || "";
+        st.dataset.name = file.name;
+        st.dataset.size = String(file.size);
+        renderCard(file.name, file.size, item.enc);
+        toast("Fichier chiffré & téléversé ✓");
       } catch (e) {
-        toast(e?.message || "Upload échoué.");
+        toast(e?.message || "Upload échoué (stockage connecté ?).");
       }
     });
-    del?.addEventListener("click", async () => {
-      const filename = st.dataset.filename;
-      if (!filename) return;
-      try {
-        await api(`/api/pages/${encodeURIComponent(slug)}/media/${encodeURIComponent(filename)}`, {
-          method: "DELETE", headers: authHeaders(),
-        });
-        st.dataset.filename = "";
-        // Re-rendu de l'état vide.
-        const handle = ctx.handle;
-        st.innerHTML = `<div class="pp-file-empty">
-          <span class="pp-file-ic">${icon("download", 22)}</span>
-          <p>Choisis un fichier PDF ou ZIP à téléverser (≤25 Mo).</p>
-          <label class="btn primary sm" style="cursor:pointer">Choisir un fichier
-            <input type="file" accept=".pdf,.zip,application/pdf,application/zip" hidden id="pp-file-input">
-          </label>
-        </div>`;
-        void handle;
-        wirePpTypeFields(root, "file", ctx);
-        toast("Fichier retiré");
-      } catch (e) { toast(e?.message || "Échec."); }
+    del?.addEventListener("click", () => {
+      st.dataset.url = ""; st.dataset.enc = ""; st.dataset.mime = ""; st.dataset.name = ""; st.dataset.size = "0";
+      st.innerHTML = `<div class="pp-file-empty">
+        <span class="pp-file-ic">${icon("download", 22)}</span>
+        <p>${icon("lock", 12)} Choisis un fichier — chiffré avant l'envoi vers ton stockage tiers.</p>
+        <label class="btn primary sm" style="cursor:pointer">Choisir un fichier
+          <input type="file" hidden id="pp-file-input">
+        </label>
+      </div>`;
+      wirePpTypeFields(root, "file", ctx);
+      toast("Fichier retiré");
     });
   }
 }
 
-function wireGalDelete(itemEl, slug) {
+// Suppression d'une vignette : on retire juste du DOM. Le média reste sur le
+// stockage tiers du créateur (à lui de le gérer) ; la page est re-persistée
+// sans cet item à l'enregistrement.
+function wireGalDelete(itemEl) {
   const btn = itemEl.querySelector(".gal-del");
   if (!btn) return;
-  btn.addEventListener("click", async () => {
-    const filename = itemEl.dataset.filename;
-    if (!filename) { itemEl.remove(); return; }
-    try {
-      await api(`/api/pages/${encodeURIComponent(slug)}/media/${encodeURIComponent(filename)}`, {
-        method: "DELETE", headers: authHeaders(),
-      });
-      itemEl.remove();
-    } catch (e) { toast(e?.message || "Suppression échouée."); }
-  });
+  btn.addEventListener("click", () => itemEl.remove());
 }
 
 export function renderEditor(data) {
@@ -2737,8 +2949,19 @@ export function wireEditor(data) {
       app.querySelectorAll(".opt-panel").forEach((p) => {
         p.hidden = p.id !== `opt-${id}`;
       });
+      // Stockage : chargé paresseusement la première fois qu'on ouvre l'onglet.
+      if (id === "stockage") {
+        const panel = app.querySelector("#opt-stockage");
+        if (panel && !panel.dataset.loaded) {
+          panel.dataset.loaded = "1";
+          void loadStorageConfig(app);
+        }
+      }
     });
   });
+
+  // Stockage : CTA upgrade pour les comptes non-premium.
+  app.querySelector("#opt-upgrade-storage")?.addEventListener("click", startCheckout);
 
   // Abonnement (Mon compte) : « 1 €/mois » démarre l'abonnement ; « Gérer » ouvre
   // la page dédiée « Espace Premium » (facturation + toutes les fonctions premium).

@@ -1432,6 +1432,7 @@ function renderSimpleLanding(landingHandle) {
           <span class="tg-trust-chip">${icon("plug", 14)}${t("gp_trust_3")}</span>
           <span class="tg-trust-chip">${icon("eye-off", 14)}${t("gp_trust_4")}</span>
           <span class="tg-trust-chip">${icon("code", 14)}${t("gp_trust_5")}</span>
+          <span class="tg-trust-chip">${icon("database", 14)}${t("gp_trust_6")}</span>
         </div>
       </section>
 
@@ -1485,6 +1486,28 @@ function renderSimpleLanding(landingHandle) {
             <h2>${t("gp_p2p_h")}</h2>
             <p>${t("gp_p2p_p")}</p>
           </div>
+        </div>
+      </section>
+
+      <!-- Stockage souverain : id.mindlog n'héberge AUCUN contenu persistant.
+           Le créateur·rice branche son propre stockage tiers (Premium). -->
+      <section class="tg-store" aria-label="${esc(t("nostore_h"))}">
+        <div class="tg-store-inner">
+          <span class="tg-prem-eyebrow">${icon("database", 14)} ${t("nostore_eyebrow")}</span>
+          <h2>${t("nostore_h")}</h2>
+          <p>${t("nostore_p")}</p>
+          <p class="tg-store-enc">${icon("lock", 15)} ${t("nostore_enc")}</p>
+          <p class="tg-store-choice">${t("nostore_choice")}</p>
+          <div class="tg-store-chips">
+            <span class="tg-trust-chip">${icon("cloud", 14)} Amazon S3</span>
+            <span class="tg-trust-chip">${icon("cloud", 14)} Cloudflare R2</span>
+            <span class="tg-trust-chip">${icon("hard-drive", 14)} Google Drive</span>
+            <span class="tg-trust-chip">${icon("hard-drive", 14)} Dropbox</span>
+            <span class="tg-trust-chip">${icon("hard-drive", 14)} OneDrive</span>
+            <span class="tg-trust-chip">${icon("link", 14)} HTTP / URL</span>
+            <span class="tg-trust-chip">+ Backblaze · Wasabi · Scaleway · MinIO…</span>
+          </div>
+          <p class="tg-store-note">${icon("sparkles", 13)} ${t("nostore_premium")}</p>
         </div>
       </section>
 
@@ -2156,6 +2179,12 @@ function openCreate() {
           <p class="hint">Permet de récupérer l'accès si vous perdez votre clé privée.</p>
         </div>
         ${TURNSTILE_SITE_KEY ? '<div class="group"><div id="cr-turnstile"></div></div>' : ""}
+        <div class="group">
+          <label class="cr-ack" for="cr-ack-adult">
+            <input type="checkbox" id="cr-ack-adult" required />
+            <span>Je m'engage à ce que mon <strong>avatar</strong> et mon <strong>image de couverture</strong> (les seuls médias hébergés par id.mindlog) ne contiennent aucun contenu pour adultes (18+), conformément aux <a href="/cgu" target="_blank" rel="noopener">CGU</a>. Mes autres médias (galerie, fichiers…) vivent sur mon stockage tiers et ne sont pas hébergés par la plateforme.</span>
+          </label>
+        </div>
         <div class="err" id="cr-err"></div>
         <div class="actions">
           <button type="button" class="btn" id="cr-cancel">Annuler</button>
@@ -2211,11 +2240,16 @@ function openCreate() {
     const handle = overlay.querySelector("#cr-handle").value;
     const display_name = overlay.querySelector("#cr-name").value;
     const email = overlay.querySelector("#cr-email").value;
+    const ack_adult_content = overlay.querySelector("#cr-ack-adult").checked;
+    if (!ack_adult_content) {
+      errEl.textContent = "Vous devez accepter l'engagement sur les contenus 18+.";
+      return;
+    }
     try {
       const r = await api("/api/identities", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ handle, display_name, email, turnstileToken }),
+        body: JSON.stringify({ handle, display_name, email, turnstileToken, ack_adult_content }),
       });
       // Initialise la clé E2E dès la création du compte, sans attendre l'ouverture de l'éditeur.
       ensureE2E(r.handle, r.accessKey).catch(() => {});
@@ -2564,7 +2598,12 @@ async function renderSpaceIndex(handle) {
   wireHeaderSearch();
   wireProfileMenuBtn();
   wireBackBtn(app);
+  wireSpaceSubscribe(handle);
+}
 
+// Câble le bouton d'abonnement « #spx-subscribe » (page /@handle/space ET onglet
+// « Espace privé » du profil). Redirige vers Stripe, ou fallback dev.
+function wireSpaceSubscribe(handle) {
   app.querySelector("#spx-subscribe")?.addEventListener("click", async (e) => {
     const btn = e.currentTarget;
     if (!isLoggedIn()) {
@@ -2613,6 +2652,239 @@ async function renderSpaceIndex(handle) {
   });
 }
 
+// Contenu de l'onglet « Espace privé » du profil : intro, liste de pages
+// (déverrouillées ou en teaser cadenassé), CTA (gérer / s'abonner / accès OK).
+// Propriétaire : toujours affiché, même vide (onboarding). Réutilise les classes
+// spx-* de la page /@handle/space.
+function spaceBodyHtml(data, handle, isSelf) {
+  const sp = data.space;
+  const canAccess = isSelf || !!sp?.subscribed;
+  const pages = Array.isArray(sp?.pages) ? sp.pages : [];
+  const introMd = sp?.intro_md || "";
+  const price = sp?.price_cents
+    ? `${(sp.price_cents / 100).toFixed(2).replace(".", ",")} ${(sp.currency || "eur").toUpperCase()}/mois`
+    : "";
+  const pageIcon = (ty) =>
+    ty === "gallery" ? icon("image", 16)
+    : ty === "link"  ? icon("link", 16)
+    : ty === "file"  ? icon("download", 16)
+    : icon("chat", 16);
+
+  const benefits = sp?.benefits || {};
+
+  // ── Espace privé en 3 sous-onglets : Galerie · Fichiers · Pages privées ──
+  // Propriétaire : les 3 toujours visibles. Visiteur : galerie/fichiers si
+  // activés (visibles aux abonnés), pages si au moins une page.
+  const showGallery = isSelf || !!benefits.gallery;
+  const showFiles   = isSelf || !!benefits.files;
+  const showPages   = isSelf || pages.length > 0;
+  const first = (showGallery && "gallery") || (showFiles && "files") || (showPages && "pages") || "gallery";
+
+  // CTA d'abonnement (visiteur sans accès) — une seule instance, en tête.
+  const subscribeCta = !isSelf && !canAccess && sp?.price_cents
+    ? `<button type="button" class="btn primary spx-cta" id="spx-subscribe" aria-label="S'abonner à l'espace privé de @${esc(handle)} pour ${esc(price)}">
+         ${icon("sparkles", 18)}<span class="spx-cta-main">S'abonner pour <b>${esc(price)}</b></span></button>
+       <p class="spx-cta-sub">Accès immédiat aux contenus réservés · résiliable à tout moment</p>` : "";
+
+  // Bascule « visible par mes abonné·e·s » (propriétaire), par section.
+  const ownerVis = (key) => isSelf
+    ? `<label class="priv-vis"><input type="checkbox" data-vis="${key}" ${benefits[key] ? "checked" : ""}> <span>Visible par mes abonné·e·s</span></label>`
+    : "";
+
+  const galleryPanel = canAccess
+    ? `${ownerVis("gallery")}<div class="priv-slot" id="priv-gallery"></div>`
+    : `<p class="pub-empty">${icon("lock", 16)} Galerie réservée aux abonné·e·s.</p>`;
+  const filesPanel = canAccess
+    ? `${ownerVis("files")}<div class="priv-slot" id="priv-files"></div>`
+    : `<p class="pub-empty">${icon("lock", 16)} Espace fichiers réservé aux abonné·e·s.</p>`;
+  const pagesGrid = pages.length
+    ? (canAccess
+      ? `<div class="spx-grid" role="list">${pages.map((p) => {
+          const isDraft = p.published === false;
+          return `<a class="spx-card${isDraft ? " is-draft" : ""}" role="listitem" href="/@${esc(handle)}/p/${esc(p.slug)}">
+            <span class="spx-card-ic">${pageIcon(p.type)}</span><span class="spx-card-title">${esc(p.title)}</span>
+            ${isDraft ? `<span class="spx-card-badge">brouillon</span>` : ""}<span class="spx-card-arrow" aria-hidden="true">→</span></a>`;
+        }).join("")}</div>`
+      : `<div class="spx-grid spx-grid--teaser" role="list">${pages.map((p) =>
+          `<div class="spx-card spx-card--locked" role="listitem"><span class="spx-card-ic">${pageIcon(p.type)}</span><span class="spx-card-title">${esc(p.title)}</span><span class="spx-card-lock">${icon("lock", 16)}</span></div>`).join("")}</div>`)
+    : `<p class="pub-empty">Aucune page pour l'instant.</p>`;
+  const pagesPanel = `${pagesGrid}${isSelf ? `<p class="lbl-sm" style="margin-top:.7rem"><a href="/me/premium">${icon("sparkles", 13)} Gérer mes pages →</a></p>` : ""}`;
+
+  const subBtn = (key, ic, label) => `<button type="button" class="priv-subtab${first === key ? " is-on" : ""}" data-psub="${key}" role="tab" aria-selected="${first === key}">${ic}<span>${label}</span></button>`;
+  const panel = (key, html) => `<div class="priv-subpanel" id="psub-${key}" role="tabpanel"${first === key ? "" : " hidden"}>${html}</div>`;
+
+  return `${introMd ? `<section class="pub-intro" aria-label="Présentation de l'espace">${mdLite(introMd)}</section>` : ""}
+    <div class="pub-section-h first">${icon("lock", 14)} Espace privé${price && !canAccess ? ` · <b>${esc(price)}</b>` : ""}</div>
+    ${!isSelf && canAccess ? `<div class="spx-status spx-status--ok" role="status">${icon("shield", 16)} Accès débloqué</div>` : ""}
+    ${subscribeCta}
+    <nav class="priv-subtabs" role="tablist" aria-label="Sections de l'espace privé">
+      ${showGallery ? subBtn("gallery", icon("image", 16), "Galerie") : ""}
+      ${showFiles ? subBtn("files", icon("download", 16), "Fichiers") : ""}
+      ${showPages ? subBtn("pages", icon("chat", 16), "Pages privées") : ""}
+    </nav>
+    <div class="priv-subbody">
+      ${showGallery ? panel("gallery", galleryPanel) : ""}
+      ${showFiles ? panel("files", filesPanel) : ""}
+      ${showPages ? panel("pages", pagesPanel) : ""}
+    </div>`;
+}
+
+// Câble les sections privées de l'onglet « Espace privé » : boutons d'activation
+// (propriétaire) + montage des composants galerie/fichiers (chiffrés).
+function wireSpacePrivateSections(data, handle, isSelf) {
+  const sp = data.space;
+  let benefits = { ...(sp?.benefits || {}) };
+  const canAccess = isSelf || !!sp?.subscribed;
+  const mounted = new Set();
+
+  // Montage paresseux d'un sous-onglet (galerie/fichiers) à sa 1ʳᵉ ouverture.
+  const mount = (key) => {
+    if (mounted.has(key)) return;
+    if (key === "gallery") {
+      const g = app.querySelector("#priv-gallery");
+      if (g) { mounted.add(key); void mountPrivateGallery(g, handle, isSelf); }
+    } else if (key === "files") {
+      const f = app.querySelector("#priv-files");
+      if (f) { mounted.add(key); void mountPrivateFiles(f, handle, isSelf); }
+    }
+  };
+
+  // Navigation entre sous-onglets.
+  const tabs = [...app.querySelectorAll(".priv-subtab")];
+  tabs.forEach((t) => t.addEventListener("click", () => {
+    const key = t.dataset.psub;
+    tabs.forEach((x) => { const on = x === t; x.classList.toggle("is-on", on); x.setAttribute("aria-selected", String(on)); });
+    app.querySelectorAll(".priv-subpanel").forEach((p) => { p.hidden = p.id !== `psub-${key}`; });
+    mount(key);
+  }));
+  // Monte le sous-onglet actif au chargement.
+  mount(app.querySelector(".priv-subtab.is-on")?.dataset.psub || "gallery");
+
+  // Bascule « visible par mes abonné·e·s » (propriétaire) → PUT benefits.
+  app.querySelectorAll("[data-vis]").forEach((cb) => cb.addEventListener("change", async () => {
+    const key = cb.dataset.vis;
+    const next = { ...benefits, [key]: cb.checked };
+    try {
+      const r = await api("/api/space/benefits", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", ...viewerHeaders() },
+        body: JSON.stringify(next),
+      });
+      benefits = r?.benefits || next;
+      toast(cb.checked ? "Section visible par tes abonné·e·s ✓" : "Section masquée aux abonné·e·s");
+    } catch (e) {
+      cb.checked = !cb.checked;
+      toast(e?.message === "premium required" ? "Réservé aux comptes Premium." : (e?.message || "Échec."));
+    }
+  }));
+}
+
+// Galerie privée (chiffrée) : même composant que la galerie publique, mais
+// déposée chiffrée dans mindlog/private/gallery/ et déchiffrée à l'affichage.
+async function mountPrivateGallery(container, handle, isSelf) {
+  const mod = await import("./premium/storage-client.js").catch(() => null);
+  if (!mod) { container.innerHTML = ""; return; }
+  let items = [];
+  try { items = await mod.listPrivate(handle, "gallery"); } catch { /* non connecté */ }
+  const ADD = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+  const tiles = items.map((it, i) =>
+    `<div class="gal-ph gal-filled pp-media-enc pp-gal-loading" data-idx="${i}" data-url="${esc(it.url)}" data-name="${esc(it.name)}" data-kind="${esc(it.kind)}" data-key="${esc(it.key || "")}">${
+      isSelf && it.key ? `<button type="button" class="gal-slot-del" title="Supprimer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>` : ""
+    }</div>`).join("");
+  const addTile = isSelf ? `<label class="gal-ph gal-slot-add" title="Ajouter (chiffré)"><input type="file" accept="image/*,video/*" multiple style="display:none">${ADD}</label>` : "";
+  container.innerHTML = (items.length || isSelf) ? `<div class="gal-ph-grid">${tiles}${addTile}</div>` : `<p class="pub-empty">Aucun média.</p>`;
+
+  // Suppression (propriétaire) — sur chaque vignette.
+  container.querySelectorAll(".gal-slot-del").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const tile = btn.closest(".gal-ph");
+      const key = tile?.dataset.key;
+      if (!key || !(await confirmDialog("Supprimer ce média de ton stockage ?", { ok: "Supprimer", cancel: "Annuler", danger: true }))) return;
+      try { await mod.deleteObject(key); tile.remove(); toast("Média supprimé ✓"); }
+      catch (err) { toast(err?.message || "Suppression échouée."); }
+    });
+  });
+
+  let firstErr = null;
+  for (const el of container.querySelectorAll(".pp-media-enc")) {
+    try {
+      const objUrl = await mod.resolveMediaUrl(handle, { url: el.dataset.url, enc: true, kind: el.dataset.kind, name: el.dataset.name });
+      el.style.background = `url('${objUrl}') center/cover no-repeat`;
+      el.dataset.obj = objUrl;
+      el.classList.remove("pp-gal-loading");
+      el.addEventListener("click", () => openGalLightbox(app, [objUrl], 0));
+    } catch (e) { firstErr = firstErr || e; el.classList.add("pp-gal-error"); el.classList.remove("pp-gal-loading"); }
+  }
+  if (firstErr) toast(`Déchiffrement galerie impossible : ${firstErr?.message || firstErr}`);
+  if (isSelf) {
+    const add = container.querySelector(".gal-slot-add");
+    const inp = add?.querySelector("input");
+    const up = async (files) => {
+      const list = [...(files || [])].filter((f) => f.type.startsWith("image/") || f.type.startsWith("video/"));
+      if (!list.length) return;
+      toast(`Chiffrement & envoi de ${list.length} média(s)…`);
+      let ok = 0;
+      for (const f of list) { try { await mod.uploadEncrypted({ file: f, handle, scope: "private" }); ok++; } catch (e) { toast(e?.message || "Échec."); } }
+      if (ok) { toast(`${ok} média(s) ajouté(s) ✓`); mountPrivateGallery(container, handle, isSelf); }
+    };
+    inp?.addEventListener("change", () => { if (inp.files?.length) up(inp.files); inp.value = ""; });
+    add?.addEventListener("dragover", (e) => { e.preventDefault(); add.classList.add("gal-drag"); });
+    add?.addEventListener("dragleave", () => add.classList.remove("gal-drag"));
+    add?.addEventListener("drop", (e) => { e.preventDefault(); add.classList.remove("gal-drag"); if (e.dataTransfer.files.length) up(e.dataTransfer.files); });
+  }
+}
+
+// Espace fichiers (chiffré) : vue explorateur — tout type de fichier, upload
+// chiffré dans mindlog/private/files/, téléchargement déchiffré au clic.
+async function mountPrivateFiles(container, handle, isSelf) {
+  const mod = await import("./premium/storage-client.js").catch(() => null);
+  if (!mod) { container.innerHTML = ""; return; }
+  let items = [];
+  try { items = await mod.listPrivate(handle, "files"); } catch { /* non connecté */ }
+  const rows = items.map((it, i) => `<div class="fx-row" data-idx="${i}" data-url="${esc(it.url)}" data-name="${esc(it.name)}" data-key="${esc(it.key || "")}">
+      <span class="fx-ic">${icon("download", 16)}</span>
+      <span class="fx-name">${esc(mod.cleanName(it.name))}</span>
+      <span class="fx-size">${it.size ? `${(it.size / 1024).toFixed(0)} Ko` : ""}</span>
+      <button type="button" class="btn sm fx-dl">Télécharger</button>
+      ${isSelf && it.key ? `<button type="button" class="btn sm danger fx-del" title="Supprimer">✕</button>` : ""}
+    </div>`).join("");
+  const addBtn = isSelf ? `<label class="btn sm primary fx-add" style="margin-top:.5rem;cursor:pointer"><input type="file" multiple style="display:none">+ Ajouter un fichier (chiffré)</label>` : "";
+  container.innerHTML = `<div class="fx-list">${rows || `<p class="pub-empty">Aucun fichier.</p>`}</div>${addBtn}`;
+
+  container.querySelectorAll(".fx-dl").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const row = btn.closest(".fx-row");
+      btn.disabled = true; const orig = btn.textContent; btn.textContent = "Déchiffrement…";
+      try { await mod.downloadPrivateFile(handle, { url: row.dataset.url, name: row.dataset.name }); }
+      catch (e) { toast(e?.message || "Échec du téléchargement."); }
+      btn.disabled = false; btn.textContent = orig;
+    });
+  });
+  container.querySelectorAll(".fx-del").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const row = btn.closest(".fx-row");
+      const key = row?.dataset.key;
+      if (!key || !(await confirmDialog("Supprimer ce fichier de ton stockage ?", { ok: "Supprimer", cancel: "Annuler", danger: true }))) return;
+      try { await mod.deleteObject(key); row.remove(); toast("Fichier supprimé ✓"); }
+      catch (e) { toast(e?.message || "Suppression échouée."); }
+    });
+  });
+  if (isSelf) {
+    const add = container.querySelector(".fx-add");
+    const inp = add?.querySelector("input");
+    const up = async (files) => {
+      const list = [...(files || [])];
+      if (!list.length) return;
+      toast(`Chiffrement & envoi de ${list.length} fichier(s)…`);
+      let ok = 0;
+      for (const f of list) { try { await mod.uploadEncrypted({ file: f, handle, scope: "private-files" }); ok++; } catch (e) { toast(e?.message || "Échec."); } }
+      if (ok) { toast(`${ok} fichier(s) ajouté(s) ✓`); mountPrivateFiles(container, handle, isSelf); }
+    };
+    inp?.addEventListener("change", () => { if (inp.files?.length) up(inp.files); inp.value = ""; });
+  }
+}
+
 // Rend le contenu de la page premium selon son type. Le serveur a déjà
 // transformé les filenames internes en URLs servables (cf. route GET).
 //   - markdown : rendu basique avec mise en forme paragraphe + titres simples
@@ -2636,12 +2908,16 @@ function renderPaidPageContent(data) {
     let items = [];
     try { items = (JSON.parse(raw).items || []).filter((it) => it.url); } catch { /* tolère */ }
     if (!items.length) return `<p class="pp-empty">Aucun média pour l'instant.</p>`;
+    // Médias chiffrés (enc) : pas de src direct — hydratePaidMedia() déchiffre
+    // avec la clé d'espace et pose un objectURL après rendu.
     return `<div class="pp-gallery">${items.map((it, i) => {
       const isVideo = it.kind === "video";
-      return `<button type="button" class="pp-gal-item" data-i="${i}" data-url="${esc(it.url)}" data-kind="${isVideo ? "video" : "image"}">
+      const enc = it.enc === true;
+      const src = enc ? "" : ` src="${esc(it.url)}"`;
+      return `<button type="button" class="pp-gal-item${enc ? " pp-media-enc pp-gal-loading" : ""}" data-i="${i}" data-url="${esc(it.url)}" data-kind="${isVideo ? "video" : "image"}" data-enc="${enc ? "1" : ""}" data-mime="${esc(it.mime || "")}">
         ${isVideo
-          ? `<video src="${esc(it.url)}" muted playsinline preload="metadata"></video>`
-          : `<img src="${esc(it.url)}" alt="${esc(it.caption || "")}" loading="lazy" />`}
+          ? `<video${src} muted playsinline preload="metadata"></video>`
+          : `<img${src} alt="${esc(it.caption || "")}" loading="lazy" />`}
         ${it.caption ? `<span class="pp-gal-cap">${esc(it.caption)}</span>` : ""}
       </button>`;
     }).join("")}</div>`;
@@ -2652,13 +2928,18 @@ function renderPaidPageContent(data) {
     if (!o.url) return `<p class="pp-empty">Aucun fichier déposé.</p>`;
     const fname = o.name || "fichier";
     const size = o.size ? `<span class="pp-file-size">${(o.size/1024).toFixed(1)} Ko</span>` : "";
+    const enc = o.enc === true;
+    // Fichier chiffré : lien sans href (déchiffré au clic par hydratePaidMedia).
+    const dl = enc
+      ? `<a class="btn primary pp-file-dl pp-media-enc" href="#" data-url="${esc(o.url)}" data-mime="${esc(o.mime || "")}" data-name="${esc(fname)}">${icon("download", 14)} Télécharger</a>`
+      : `<a class="btn primary" href="${esc(o.url)}" download="${esc(fname)}">${icon("download", 14)} Télécharger</a>`;
     return `<div class="pp-file">
       <div class="pp-file-ic">${icon("download", 28)}</div>
       <div class="pp-file-body">
         <b>${esc(fname)}</b>
         ${size}
       </div>
-      <a class="btn primary" href="${esc(o.url)}" download="${esc(fname)}">${icon("download", 14)} Télécharger</a>
+      ${dl}
     </div>`;
   }
   // markdown : on préserve sauts de ligne, on échappe le HTML, on transforme les
@@ -2692,6 +2973,35 @@ function mdLite(src) {
   }
   if (inList) out.push("</ul>");
   return out.join("");
+}
+
+// Déchiffre les médias chiffrés d'une page premium (galerie/fichier) après
+// rendu : récupère la clé d'espace (servie aux abonnés/au propriétaire) et pose
+// un objectURL sur chaque média. Le stockage tiers ne sert que du chiffré.
+async function hydratePaidMedia(handle) {
+  const encEls = app.querySelectorAll(".pp-media-enc");
+  if (!encEls.length) return;
+  let resolveMediaUrl;
+  try {
+    ({ resolveMediaUrl } = await import("./premium/storage-client.js"));
+  } catch { return; }
+  for (const el of encEls) {
+    const item = { url: el.dataset.url, enc: true, mime: el.dataset.mime, kind: el.dataset.kind };
+    try {
+      const objUrl = await resolveMediaUrl(handle, item);
+      el.dataset.url = objUrl; // lightbox / téléchargement réutilisent dataset.url
+      const media = el.querySelector("img,video");
+      if (media) media.src = objUrl;
+      if (el.classList.contains("pp-file-dl")) {
+        el.setAttribute("href", objUrl);
+        el.setAttribute("download", el.dataset.name || "fichier");
+      }
+      el.classList.remove("pp-gal-loading");
+    } catch {
+      el.classList.add("pp-gal-error");
+      el.classList.remove("pp-gal-loading");
+    }
+  }
 }
 
 // Page payante (Premium marketplace P7) : teaser + déverrouillage. Le contenu
@@ -2730,6 +3040,7 @@ async function renderPaidPage(handle, slug) {
   footer.innerHTML = `<a class="brand" href="/" style="justify-content:center"><span class="brand-milo">${miloSvg(40)}</span> mindlog · id</a>`;
   applyTheme(storedTheme() || "dark");
   wireBackBtn(app);
+  if (data.access) void hydratePaidMedia(data.handle);
   // Lightbox sur clic d'une vignette galerie (réutilise le style .gal-lb).
   app.querySelectorAll(".pp-gal-item").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -2787,6 +3098,9 @@ async function renderPublicProfile(handle) {
   const isContact = !!data.viewer?.isContact;
   const isRelated = !!data.viewer?.isRelated;
   const isSelf = myHandle() === data.handle;
+  // Onglet « Espace privé » : toujours pour le propriétaire (même vide) ; pour un
+  // visiteur, seulement si l'espace est vendable (tarif fixé + page publiée).
+  const showSpaceTab = isSelf || !!(data.space && data.space.price_cents && (data.space.pages || []).length);
   const loggedIn = isLoggedIn();
   if (loggedIn) connectSSE(appState.auth ? null : storedKey()); // temps réel (cookie de session, ou clé héritée)
 
@@ -2908,6 +3222,7 @@ async function renderPublicProfile(handle) {
 
   wirePubTabs();
   wirePubSwipe();
+  if (showSpaceTab) { wireSpaceSubscribe(data.handle); wireSpacePrivateSections(data, data.handle, isSelf); }
 
   // Retour : history.back() si on a un historique same-origin, sinon /me pour
   // les connectés, / pour les visiteurs anonymes. Évite de bloquer dans une
@@ -2933,27 +3248,17 @@ async function renderPublicProfile(handle) {
       if (ok) {
         // Galerie uniquement dans pub-gallery-slot (pas d'inline dans pub-about)
       } else {
-        // Galerie placeholder : 9 carrés colorés (3×3) avec lightbox plein écran
-        const PH_COLORS = ["#e74c3c","#e67e22","#f1c40f","#2ecc71","#1abc9c",
-                           "#3498db","#9b59b6","#e91e63","#00bcd4"];
-        const mkGrid = () => `<div class="gal-ph-grid">${
-          PH_COLORS.map((c, i) =>
-            `<button class="gal-ph" type="button" style="--ph-c:${c}" data-idx="${i}" aria-label="Image ${i+1}"></button>`
-          ).join("")
-        }</div>`;
-        // Inline About : on supprime le titre "Galerie" (frère précédent) + le conteneur
+        // Pas d'images dans le stockage du créateur (ou stockage non connecté).
+        // Plus de faux carrés colorés : on nettoie la galerie inline et, pour un
+        // visiteur, on masque l'onglet Galerie. Le propriétaire garde l'onglet
+        // (renderGallery ci-dessous y affiche sa vitrine + l'ajout).
         const _inlineGal = app.querySelector("#pub-about-gallery");
         if (_inlineGal) {
           const prev = _inlineGal.previousElementSibling;
           if (prev?.classList.contains("pub-section-h")) prev.remove();
           _inlineGal.remove();
         }
-        const slot = app.querySelector("#pub-gallery-slot");
-        if (slot) slot.innerHTML = mkGrid();
-        // Wiring lightbox sur tous les carrés
-        app.querySelectorAll(".gal-ph").forEach(btn =>
-          btn.addEventListener("click", () => openGalLightbox(app, PH_COLORS, +btn.dataset.idx))
-        );
+        if (!isSelf) app.querySelector('[data-tab="gallery"]')?.remove();
       }
     })
     .catch(() => { app.querySelector('[data-tab="gallery"]')?.remove(); })
@@ -3245,66 +3550,65 @@ async function renderPublicProfile(handle) {
     });
   }
 
-  // ── Galerie éditable (isSelf) : re-rendu complet depuis l'API à chaque changement ──
+  // ── Galerie éditable (isSelf) : vitrine alimentée par le STOCKAGE TIERS ──────
+  // Plus de slots/placeholders : on liste les images réelles de
+  // mindlog/public/gallery/ (illimité) + une tuile d'ajout. id.mindlog n'héberge
+  // rien — les médias sont servis par l'URL publique du fournisseur.
   if (isSelf) {
-    const PH_COLORS = ["#e74c3c","#e67e22","#f1c40f","#2ecc71","#1abc9c","#3498db","#9b59b6","#e91e63","#00bcd4"];
     const ADD_SVG = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
 
     const renderGallery = async () => {
       const container = app.querySelector("#pub-gallery-slot");
       if (!container) return;
-      let existing = [];
-      try { existing = (await api(`/api/gallery/${encodeURIComponent(data.handle)}`, { headers: viewerHeaders() })).photos || []; } catch {}
+      let items = [];
+      let mod;
+      try {
+        mod = await import("./premium/storage-client.js");
+        items = await mod.listPublicGallery(data.handle);
+      } catch { /* stockage non connecté → grille vide + tuile d'ajout */ }
 
-      // 9 slots : photos réelles + cases vides
-      const html = PH_COLORS.map((c, i) => {
-        const p = existing[i];
-        return p
-          ? `<div class="gal-ph gal-filled" data-photo-id="${p.id}" style="background:url('${p.url}') center/cover no-repeat"></div>`
-          : `<div class="gal-ph" style="--ph-c:${c}"></div>`;
-      }).join("");
-      container.innerHTML = `<div class="gal-ph-grid">${html}</div>`;
-      // Ne pas toucher à hidden : le système de tabs gère la visibilité
+      const delBtn = `<button type="button" class="gal-slot-del" title="Supprimer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
+      const tiles = items.map((it, i) =>
+        it.kind === "video"
+          ? `<div class="gal-ph gal-filled" data-idx="${i}" data-key="${esc(it.key || "")}" style="background:#000"><video src="${esc(it.url)}" muted playsinline style="width:100%;height:100%;object-fit:cover"></video>${it.key ? delBtn : ""}</div>`
+          : `<div class="gal-ph gal-filled" data-idx="${i}" data-key="${esc(it.key || "")}" style="background:url('${esc(it.url)}') center/cover no-repeat">${it.key ? delBtn : ""}</div>`
+      ).join("");
+      const addTile = `<label class="gal-ph gal-slot-add" title="Ajouter des médias"><input type="file" accept="image/*,video/*" multiple style="display:none">${ADD_SVG}</label>`;
+      container.innerHTML = `<div class="gal-ph-grid">${tiles}${addTile}</div>`;
 
-      // Wiring de chaque slot
-      container.querySelectorAll(".gal-ph").forEach((slot) => {
-        if (slot.classList.contains("gal-filled")) {
-          // Bouton supprimer
-          const del = document.createElement("button");
-          del.className = "gal-slot-del"; del.type = "button"; del.title = "Supprimer";
-          del.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
-          slot.appendChild(del);
-          del.addEventListener("click", async (e) => {
-            e.stopPropagation();
-            try { await api(`/api/gallery/${slot.dataset.photoId}`, { method: "DELETE", headers: viewerHeaders() }); renderGallery(); }
-            catch (e) { toast(e.message); }
-          });
-          // Lightbox sur clic photo
-          slot.addEventListener("click", (e) => {
-            if (e.target.closest(".gal-slot-del")) return;
-            const filled = [...container.querySelectorAll(".gal-ph.gal-filled")];
-            const idx = filled.indexOf(slot);
-            const items = filled.map(s => s.style.backgroundImage.match(/url\(['"]?(.+?)['"]?\)/)?.[1] || "");
-            openGalLightbox(app, items, idx);
-          });
-        } else {
-          // Bouton upload
-          const lbl = document.createElement("label");
-          lbl.className = "gal-slot-upload"; lbl.title = "Ajouter une image";
-          lbl.innerHTML = `<input type="file" accept="image/jpeg,image/png,image/webp" style="display:none">${ADD_SVG}`;
-          slot.appendChild(lbl);
-          const inp = lbl.querySelector("input");
-          const upload = async (file) => {
-            const fd = new FormData(); fd.append("photos", file);
-            try { await api("/api/gallery", { method: "POST", headers: viewerHeaders(), body: fd }); renderGallery(); }
-            catch (e) { toast(e.message); }
-          };
-          inp.addEventListener("change", () => { if (inp.files?.[0]) upload(inp.files[0]); inp.value = ""; });
-          slot.addEventListener("dragover", (e) => { e.preventDefault(); slot.classList.add("gal-drag"); });
-          slot.addEventListener("dragleave", () => slot.classList.remove("gal-drag"));
-          slot.addEventListener("drop", (e) => { e.preventDefault(); slot.classList.remove("gal-drag"); const f = e.dataTransfer.files[0]; if (f) upload(f); });
-        }
+      const urls = items.map((it) => it.url);
+      container.querySelectorAll(".gal-ph.gal-filled").forEach((slot) => {
+        slot.addEventListener("click", (e) => { if (e.target.closest(".gal-slot-del")) return; openGalLightbox(app, urls, +slot.dataset.idx); });
       });
+      container.querySelectorAll(".gal-slot-del").forEach((btn) => {
+        btn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const tile = btn.closest(".gal-ph");
+          const key = tile?.dataset.key;
+          if (!key || !mod || !(await confirmDialog("Supprimer ce média de ton stockage ?", { ok: "Supprimer", cancel: "Annuler", danger: true }))) return;
+          try { await mod.deleteObject(key); tile.remove(); toast("Média supprimé ✓"); }
+          catch (err) { toast(err?.message || "Suppression échouée."); }
+        });
+      });
+
+      const add = container.querySelector(".gal-slot-add");
+      const inp = add?.querySelector("input");
+      const doUpload = async (files) => {
+        if (!mod) { toast("Connecte un stockage (Compte → Stockage)."); return; }
+        const list = [...(files || [])].filter((f) => f.type.startsWith("image/") || f.type.startsWith("video/"));
+        if (!list.length) return;
+        toast(`Envoi de ${list.length} média(s) vers ton stockage…`);
+        let ok = 0;
+        for (const f of list) {
+          try { await mod.uploadPublic({ file: f, handle: data.handle }); ok++; }
+          catch (e) { toast(e?.message === "premium required" ? "Stockage réservé au Premium (Compte → Stockage)." : (e?.message || "Upload échoué.")); }
+        }
+        if (ok) { toast(`${ok} média(s) ajouté(s) ✓`); renderGallery(); }
+      };
+      inp?.addEventListener("change", () => { if (inp.files?.length) doUpload(inp.files); inp.value = ""; });
+      add?.addEventListener("dragover", (e) => { e.preventDefault(); add.classList.add("gal-drag"); });
+      add?.addEventListener("dragleave", () => add.classList.remove("gal-drag"));
+      add?.addEventListener("drop", (e) => { e.preventDefault(); add.classList.remove("gal-drag"); if (e.dataTransfer.files.length) doUpload(e.dataTransfer.files); });
     };
     setTimeout(renderGallery, 100);
   }
@@ -3525,6 +3829,9 @@ function profileCardHtml(data, profileActions = {}) {
 function cardViewHtml(data, editable, profileActions = "") {
   host.calendar.setAvailability(data.availability);
   const isSelf = !!(data.viewer && data.viewer.handle === data.handle);
+  // Onglet « Espace privé » : toujours pour le propriétaire (même vide) ; pour un
+  // visiteur, seulement si l'espace est vendable (tarif fixé + page publiée).
+  const showSpaceTab = isSelf || !!(data.space && data.space.price_cents && (data.space.pages || []).length);
   const canBook = !isSelf;
   const hasEvents = data.events && data.events.length > 0;
   const hasAvailability = !!data.availability;
@@ -3682,6 +3989,7 @@ function cardViewHtml(data, editable, profileActions = "") {
           <button type="button" class="pub-hero-dot is-on" data-tab="home" aria-label="Accueil"></button>
           <button type="button" class="pub-hero-dot" data-tab="agenda" aria-label="Calendrier"></button>
           <button type="button" class="pub-hero-dot" data-tab="gallery" aria-label="Galerie"></button>
+          ${showSpaceTab ? `<button type="button" class="pub-hero-dot" data-tab="space" aria-label="Espace privé"></button>` : ""}
         </div>
         <!-- About : intro markdown + tags + socials, modèle Milo (visible sur
              toutes les tailles d'écran). Pour le propriétaire (isSelf) le bloc
@@ -3726,6 +4034,10 @@ function cardViewHtml(data, editable, profileActions = "") {
             role="tab" aria-selected="false" aria-controls="pub-gallery-slot">
             ${icon("image", 16)}<span>Galerie</span>
           </button>
+          ${showSpaceTab ? `<button type="button" class="pub-tab" data-tab="space"
+            role="tab" aria-selected="false" aria-controls="pub-space">
+            ${icon("lock", 16)}<span>Espace privé</span>
+          </button>` : ""}
         </nav>
 
         <div class="pub-tab-body" id="pub-tab-body">
@@ -3772,6 +4084,10 @@ function cardViewHtml(data, editable, profileActions = "") {
           </section>
 
           <section id="pub-gallery-slot" class="pub-tab-panel" role="tabpanel" tabindex="-1" hidden></section>
+
+          ${showSpaceTab ? `<section id="pub-space" class="pub-tab-panel" role="tabpanel" tabindex="-1" hidden>
+            ${spaceBodyHtml(data, data.handle, isSelf)}
+          </section>` : ""}
         </div>
       </div>
     </div>`;
@@ -3940,7 +4256,7 @@ function wirePubTabs() {
   const tabs = [...document.querySelectorAll("#pub-tabs .pub-tab")];
   const allPanels = [...document.querySelectorAll(".pub-tab-panel")];
   if (!tabs.length) return;
-  const tabIds = { about: "pub-about", agenda: "pub-agenda", gallery: "pub-gallery-slot" };
+  const tabIds = { about: "pub-about", agenda: "pub-agenda", gallery: "pub-gallery-slot", space: "pub-space" };
 
   function syncDots(key) {
     document.querySelectorAll(".pub-hero-dot").forEach((d) =>
@@ -4524,4 +4840,4 @@ function initGdprBanner() {
 
 
 // Builders de vue + utilitaires partagés, consommés par editor/index.js (cycle assumé).
-export { PENDING_INVITE, connectSSE, eventsHtml, footer, headerAccount, headerSearchHtml, localPrice, notifItemHtml, openMiloTourPicker, openQR, periodsListHtml, profileCardHtml, relItemHtml, relationsListHtml, tagChipsHtml, wireHeaderSearch, wireProfileMenuBtn };
+export { PENDING_INVITE, connectSSE, eventsHtml, fmtUptime, footer, headerAccount, headerSearchHtml, localPrice, notifItemHtml, openMiloTourPicker, openQR, periodsListHtml, profileCardHtml, relItemHtml, relationsListHtml, setupMiloEyes, tagChipsHtml, wireHeaderSearch, wireProfileMenuBtn };

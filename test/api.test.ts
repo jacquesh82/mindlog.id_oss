@@ -49,7 +49,11 @@ test("en-têtes de sécurité présents sur toutes les réponses", async () => {
 });
 
 test("page /privacy publique (politique de confidentialité)", async () => {
-  const res = await app.request("/privacy");
+  // /privacy est un alias 301 vers l'URL canonique française /confidentialite.
+  const redir = await app.request("/privacy");
+  assert.equal(redir.status, 301);
+  assert.equal(redir.headers.get("location"), "/confidentialite");
+  const res = await app.request("/confidentialite");
   assert.equal(res.status, 200);
   const html = await res.text();
   assert.match(html, /Politique de confidentialité/i);

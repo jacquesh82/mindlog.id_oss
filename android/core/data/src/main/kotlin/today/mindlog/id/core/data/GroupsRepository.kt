@@ -20,11 +20,13 @@ import today.mindlog.id.core.model.Group
 import today.mindlog.id.core.model.GroupConversation
 import today.mindlog.id.core.model.GroupMember
 import today.mindlog.id.core.model.GroupMessage
+import today.mindlog.id.core.model.Reaction
 import today.mindlog.id.core.network.MindlogApi
 import today.mindlog.id.core.network.dto.AddMemberBody
 import today.mindlog.id.core.network.dto.CreateGroupBody
 import today.mindlog.id.core.network.dto.GroupDto
 import today.mindlog.id.core.network.dto.GroupMessageBody
+import today.mindlog.id.core.network.dto.GroupReactBody
 import today.mindlog.id.core.network.dto.SendMessageBody
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -147,14 +149,34 @@ class GroupsRepository @Inject constructor(
     }
 
     /* ------------------------- Envoi / lecture groupe --------------------- */
-    suspend fun send(gid: String, text: String) {
+    /** Envoi groupe — [ttlSeconds] borne serveur (null = défaut), [readOnce] message à lecture unique. */
+    suspend fun send(gid: String, text: String, ttlSeconds: Int? = null, readOnce: Boolean = false) {
         val me = me() ?: return
         val st = loadState(me, gid)
         if (st.mySender == null) st.mySender = gs.init()
         val m = gs.encrypt(st.mySender!!, text)
         st.sent[m.iter.toString()] = text // relire mes propres envois (chaîne avancée, FS)
         saveState(me, gid, st)
-        api.sendGroupMessage(gid, GroupMessageBody(m.iv, pack(m)))
+        api.sendGroupMessage(
+            gid,
+            GroupMessageBody(
+                iv = m.iv,
+                ciphertext = pack(m),
+                ttl = ttlSeconds,
+                readOnce = if (readOnce) true else null,
+            ),
+        )
+    }
+
+    /** Supprime un de mes messages de groupe (expéditeur). */
+    suspend fun deleteMessage(gid: String, mid: Long) { api.deleteGroupMessage(gid, mid) }
+
+    /** Brûle un message readOnce reçu (n'importe quel membre peut le faire). */
+    suspend fun burnMessage(gid: String, mid: Long) { api.burnGroupMessage(gid, mid) }
+
+    /** Bascule une réaction emoji sur un message de groupe. */
+    suspend fun react(gid: String, mid: Long, emoji: String) {
+        api.reactGroupMessage(gid, mid, GroupReactBody(emoji))
     }
 
     suspend fun loadConversation(gid: String): GroupConversation {
@@ -176,6 +198,8 @@ class GroupsRepository @Inject constructor(
             GroupMessage(
                 id = m.id, sender = m.senderHandle, mine = mine, text = text,
                 createdAt = m.createdAt, expiresAt = m.expiresAt, pending = !mine && text == null,
+                readOnce = m.readOnce != 0,
+                reactions = m.reactions.map { Reaction(it.emoji, it.count, it.mine) },
             )
         }
         saveState(me, gid, st) // peers avancés persistés

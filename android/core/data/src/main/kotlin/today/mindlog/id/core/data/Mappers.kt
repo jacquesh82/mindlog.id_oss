@@ -72,6 +72,7 @@ internal fun PublicCardDto.toProfile(): PublicProfile = PublicProfile(
     isContact = viewer?.isContact == true,
     isRelated = viewer?.isRelated == true,
     allowRequests = options.allowRequests,
+    introMd = profileIntroMd.ifBlank { null },
 )
 
 internal fun RequestDto.toModel(): MeetingRequest = MeetingRequest(

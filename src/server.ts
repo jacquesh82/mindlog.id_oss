@@ -37,6 +37,7 @@ import groupsRoutes from "./routes/groups.js";
 import socialRoutes from "./routes/social.js";
 import bookingRoutes from "./routes/booking.js";
 import galleryRoutes from "./routes/gallery.js";
+import legalRoutes from "./routes/legal.js";
 
 const STARTED_AT = Date.now();
 const TURNSTILE_SITE_KEY = process.env.TURNSTILE_SITE_KEY ?? "";
@@ -111,6 +112,7 @@ app.route("/", groupsRoutes);
 app.route("/", socialRoutes);
 app.route("/", bookingRoutes);
 app.route("/", galleryRoutes);
+app.route("/", legalRoutes);
 
 /* ----- Santé du serveur MCP : comptage des outils cloud, en process ----- */
 // On mesure le serveur réellement servi sur `/mcp` (`buildCloudMcpServer`), pas un
@@ -237,62 +239,6 @@ app.on(["GET", "POST", "DELETE"], "/mcp", async (c) => {
   // du transport est branchée sur l'abandon de la requête pour éviter toute fuite.
   c.req.raw.signal.addEventListener("abort", () => { void transport.close(); });
   return transport.handleRequest(c.req.raw);
-});
-
-/* ------------------------- Politique de confidentialité -------------------- */
-// Page publique requise pour la soumission à l'annuaire de connecteurs Claude.
-const PRIVACY_HTML = `<!doctype html><html lang="fr"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Confidentialité · mindlog · id</title>
-<style>body{font-family:system-ui,sans-serif;max-width:46rem;margin:2.5rem auto;padding:0 1.25rem;line-height:1.6;color:#1b2030}
-h1{font-size:1.5rem}h2{font-size:1.15rem;margin-top:2rem}a{color:#2563eb}code{background:#eef1f7;padding:.1rem .3rem;border-radius:4px}
-@media(prefers-color-scheme:dark){body{background:#0f1115;color:#e7e9ee}code{background:#20242e}}</style></head>
-<body>
-<h1>🦎 Politique de confidentialité — mindlog · id</h1>
-<p><em>Dernière mise à jour : 2026-05-24.</em> Service édité par le projet open-source
-<strong>mindlog · id</strong> (AGPLv3), hébergé en France.</p>
-
-<h2>Données collectées</h2>
-<p>Pour une carte d'identité que vous créez : handle public, attributs de carte (que vous
-classez public / contacts / privé), tags, événements d'agenda, exceptions de disponibilité,
-relations entre profils, demandes de rendez-vous reçues, email de récupération (optionnel),
-photo de profil et galerie (optionnelles). Les <strong>messages</strong> sont chiffrés de
-bout en bout : le serveur ne stocke que des données chiffrées qu'il ne peut pas lire.
-Authentification : clé d'accès, sessions (cookie <code>HttpOnly</code>), passkeys et jetons
-OAuth — seules des empreintes (hachages) sont stockées, jamais les secrets en clair.</p>
-
-<h2>Utilisation et stockage</h2>
-<p>Les données servent uniquement à fournir le service (afficher/éditer votre carte, gérer
-agenda, relations et connecteur IA). Elles sont stockées dans une base PostgreSQL et des
-fichiers sur un serveur situé en France. Aucune donnée n'est utilisée à des fins
-publicitaires ; aucun traçage tiers n'est inséré.</p>
-
-<h2>Connecteur MCP / IA</h2>
-<p>Le connecteur (<code>/mcp</code>) accède uniquement aux données du compte authentifié par
-sa clé d'accès, via OAuth 2.1. L'assistant ne reçoit jamais votre clé d'accès (seulement un
-jeton temporaire révocable) et le contenu de vos conversations IA n'est pas collecté par mindlog.</p>
-
-<h2>Partage avec des tiers</h2>
-<p>Aucun partage commercial. Sous-traitants techniques activés uniquement si configurés :
-Cloudflare Turnstile (anti-robot à la création de page) et un serveur SMTP (envoi des emails
-de récupération / notifications). Aucune autre transmission à des tiers.</p>
-
-<h2>Conservation</h2>
-<p>Les données d'un compte sont conservées tant que le compte existe. Les messages éphémères
-sont supprimés après 24 h. Les sessions et jetons OAuth expirés sont purgés automatiquement.
-Vous pouvez exporter vos données (<code>GET /api/me/export</code>) et supprimer définitivement
-votre compte à tout moment (RGPD — droit à l'effacement), depuis l'éditeur ou l'outil
-<code>delete_account</code> du connecteur.</p>
-
-<h2>Contact</h2>
-<p>Questions ou demandes RGPD : <a href="mailto:milo@mindlog.today">milo@mindlog.today</a>.
-Code source et documentation technique :
-<a href="/static/api-docs.html">documentation de l'API</a>.</p>
-</body></html>`;
-
-app.get("/privacy", (c) => {
-  c.header("Cache-Control", "public, max-age=3600");
-  return c.html(PRIVACY_HTML);
 });
 
 // Les tarifs vivent désormais dans le flux de la landing (#sec-pricing) ;

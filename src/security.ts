@@ -69,10 +69,17 @@ export function securityHeaders(): MiddlewareHandler {
     // PAS eval() JS, seulement la compilation WebAssembly.
     "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdnjs.cloudflare.com https://challenges.cloudflare.com https://unpkg.com",
     "style-src 'self' 'unsafe-inline' https://unpkg.com https://fonts.googleapis.com",
-    "img-src 'self' data: blob:",
+    // Stockage tiers (BYO) : les médias (galeries/vitrine) sont servis depuis le
+    // domaine du fournisseur du créateur (R2, S3, Drive, Dropbox…), inconnu à
+    // l'avance → on autorise les images/vidéos depuis n'importe quel https.
+    "img-src 'self' data: blob: https:",
     "font-src 'self' data: https://fonts.gstatic.com",
-    "media-src 'self' blob:",
-    "connect-src 'self' https://challenges.cloudflare.com",
+    "media-src 'self' blob: https:",
+    // connect-src : upload direct navigateur→fournisseur (PUT présigné S3/R2,
+    // sessions Drive/Dropbox/OneDrive) + fetch des médias chiffrés à déchiffrer.
+    // Domaines arbitraires → https. (script-src a déjà 'unsafe-inline' : ceci ne
+    // change pas matériellement la posture XSS.)
+    "connect-src 'self' https:",
     // 'self' : pages internes embarquées (ex. /live/broadcast et /live/:id dans
     // le panneau droit de l'onglet Échanges). Cloudflare Turnstile reste autorisé.
     "frame-src 'self' https://challenges.cloudflare.com",

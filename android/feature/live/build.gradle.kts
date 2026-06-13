@@ -46,4 +46,6 @@ dependencies {
     ksp(libs.hilt.compiler)
 
     implementation(libs.stream.webrtc)
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.coroutines.android)
 }

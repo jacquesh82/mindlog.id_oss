@@ -57,6 +57,8 @@ data class PublicProfile(
     val isContact: Boolean,
     val isRelated: Boolean,
     val allowRequests: Boolean = false,
+    /** Markdown libre (intro publique) — affiché au-dessus des champs. Vide si non renseigné. */
+    val introMd: String? = null,
 )
 
 enum class RequestStatus { PENDING, ACCEPTED, DECLINED }
@@ -188,6 +190,10 @@ data class GroupMessage(
     val expiresAt: String,
     /** Vrai si reçu mais non déchiffrable (SKDM pas encore reçue). */
     val pending: Boolean,
+    /** Message à lecture unique : un membre peut le « brûler » pour le faire disparaître. */
+    val readOnce: Boolean = false,
+    /** Réactions emoji agrégées (mêmes types qu'en 1:1). */
+    val reactions: List<Reaction> = emptyList(),
 )
 
 /** Conversation de groupe chargée. */

@@ -235,16 +235,28 @@ private fun ActionRow(
     }
 }
 
-/** Slide 2 : « À propos » — bio + champs publics. */
+/** Slide 2 : « À propos » — intro markdown (si présente) puis champs publics. */
 @Composable
 private fun AboutSlide(profile: PublicProfile) {
+    val intro = profile.introMd?.takeIf { it.isNotBlank() }
+    val populated = profile.fields.filter { !it.value.isNullOrBlank() }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 56.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        val populated = profile.fields.filter { !it.value.isNullOrBlank() }
-        if (populated.isEmpty()) {
+        // Intro libre (markdown). On affiche le brut — un rendu MD complet viendra plus tard.
+        if (intro != null) {
+            item(key = "__intro") {
+                Text(
+                    intro,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+            }
+        }
+        if (populated.isEmpty() && intro == null) {
             item {
                 Text(
                     "Aucune information publique.",

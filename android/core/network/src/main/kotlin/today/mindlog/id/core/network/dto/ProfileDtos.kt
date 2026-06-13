@@ -111,6 +111,8 @@ data class PublicCardDto(
     val hasPhoto: Boolean = false,
     val viewer: ViewerDto? = null,
     val options: OptionsDto = OptionsDto(),
+    // Markdown libre rendu au-dessus de la bio (OSS depuis fb180ab).
+    @SerialName("profile_intro_md") val profileIntroMd: String = "",
 )
 
 @Serializable

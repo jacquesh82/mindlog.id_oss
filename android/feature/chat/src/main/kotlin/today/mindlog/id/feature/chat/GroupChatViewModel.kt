@@ -52,12 +52,37 @@ class GroupChatViewModel @Inject constructor(
         }
     }
 
-    fun send(text: String) {
+    fun send(text: String, ttlSeconds: Int? = null, readOnce: Boolean = false) {
         val t = text.trim(); if (t.isBlank()) return
         viewModelScope.launch {
-            runCatching { repository.send(gid, t) }
+            runCatching { repository.send(gid, t, ttlSeconds, readOnce) }
                 .onSuccess { refresh() }
                 .onFailure { e -> _uiState.update { it.copy(error = e.message ?: "Envoi impossible") } }
+        }
+    }
+
+    /** Suppression (expéditeur) ou brûlure (readOnce reçu) — l'UI choisit l'action. */
+    fun deleteMessage(mid: Long) {
+        viewModelScope.launch {
+            runCatching { repository.deleteMessage(gid, mid) }
+                .onSuccess { refresh() }
+                .onFailure { e -> _uiState.update { it.copy(error = e.message ?: "Suppression impossible") } }
+        }
+    }
+
+    fun burnMessage(mid: Long) {
+        viewModelScope.launch {
+            runCatching { repository.burnMessage(gid, mid) }
+                .onSuccess { refresh() }
+                .onFailure { e -> _uiState.update { it.copy(error = e.message ?: "Brûlure impossible") } }
+        }
+    }
+
+    fun react(mid: Long, emoji: String) {
+        viewModelScope.launch {
+            runCatching { repository.react(gid, mid, emoji) }
+                .onSuccess { refresh() }
+                .onFailure { e -> _uiState.update { it.copy(error = e.message ?: "Réaction impossible") } }
         }
     }
 

@@ -239,6 +239,20 @@
       "when": 1780900100000,
       "tag": "0033_premium_profile_intro_backfill",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1780900200000,
+      "tag": "0034_premium_storage_config",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1780900300000,
+      "tag": "0035_space_media_keys_fix",
+      "breakpoints": true
     }
   ]
 }

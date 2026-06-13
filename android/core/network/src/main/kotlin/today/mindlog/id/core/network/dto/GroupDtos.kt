@@ -29,6 +29,8 @@ data class GroupMessageDto(
     val ciphertext: String = "",
     @SerialName("created_at") val createdAt: String = "",
     @SerialName("expires_at") val expiresAt: String = "",
+    @SerialName("read_once") val readOnce: Int = 0,
+    val reactions: List<ReactionDto> = emptyList(),
 )
 
 @Serializable
@@ -41,8 +43,17 @@ data class GroupMessagesResponseDto(
 @Serializable
 data class CreateGroupBody(val name: String, val members: List<String> = emptyList())
 
+/** Envoi groupe : ttl (secondes) + readOnce alignés sur public/crypto/groups.js. */
 @Serializable
-data class GroupMessageBody(val iv: String, val ciphertext: String)
+data class GroupMessageBody(
+    val iv: String,
+    val ciphertext: String,
+    val ttl: Int? = null,
+    val readOnce: Boolean? = null,
+)
+
+@Serializable
+data class GroupReactBody(val emoji: String)
 
 @Serializable
 data class AddMemberBody(val handle: String)

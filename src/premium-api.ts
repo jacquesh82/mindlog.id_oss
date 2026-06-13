@@ -35,13 +35,16 @@ export interface SpaceBenefits {
   pages: boolean;  // affichage marketing (les pages restent toujours premium)
   rdv: boolean;    // RDV prioritaires
   lives: boolean;  // accès aux lives & annonces (à venir)
+  gallery?: boolean; // galerie privée (chiffrée) réservée aux abonnés — opt-in
+  files?: boolean;   // espace fichiers (chiffré) réservé aux abonnés — opt-in
 }
 
 // Valeurs par défaut quand le créateur n'a jamais défini ses bénéfices.
 // → tarif fixé : tout activé (la valeur ajoutée principale est le pack complet).
 // → pas de tarif : rien d'activé (pas d'espace vendable, pas de gating).
-export const DEFAULT_BENEFITS_PAID: SpaceBenefits = { chat: true, call: true, pages: true, rdv: true, lives: true };
-export const DEFAULT_BENEFITS_FREE: SpaceBenefits = { chat: false, call: false, pages: false, rdv: false, lives: false };
+// gallery/files restent opt-in (false) : activés explicitement via « Activer… ».
+export const DEFAULT_BENEFITS_PAID: SpaceBenefits = { chat: true, call: true, pages: true, rdv: true, lives: true, gallery: false, files: false };
+export const DEFAULT_BENEFITS_FREE: SpaceBenefits = { chat: false, call: false, pages: false, rdv: false, lives: false, gallery: false, files: false };
 
 // Vue publique de l'espace premium d'un créateur, calculée côté serveur
 // pour la page /@handle (liste des pages publiées + statut d'accès du viewer).
@@ -98,6 +101,8 @@ export interface MySpaceFull {
   profile_intro_md: string;
   benefits: SpaceBenefits;
   connect: { connected: boolean; chargesEnabled: boolean; payoutsEnabled: boolean };
+  // Stockage tiers (galeries/médias servis hors id.mindlog). Jamais de secrets ici.
+  storage: { kind: string | null; configured: boolean };
 }
 export interface MyOutgoingSubscription {
   owner_handle: string;
@@ -150,6 +155,7 @@ let _mcpGetSpace: McpGetSpaceFn = async () => ({
   intro_md: "", profile_intro_md: "",
   benefits: { ...DEFAULT_BENEFITS_FREE },
   connect: { connected: false, chargesEnabled: false, payoutsEnabled: false },
+  storage: { kind: null, configured: false },
 });
 let _mcpSetSpacePrice: McpSetSpacePriceFn = async () => { throw new Error(PREMIUM_ERR); };
 let _mcpSetSpaceIntro: McpSetSpaceIntroFn = async () => { throw new Error(PREMIUM_ERR); };

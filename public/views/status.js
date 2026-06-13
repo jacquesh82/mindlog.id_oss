@@ -1,8 +1,10 @@
 // views/status.js — page d'état du service (/status). Extrait verbatim.
+import { app, loadAuth } from "../core.js";
 import { CREDIT } from "../i18n.js";
 import { api } from "../net.js";
 import { esc } from "../ui/dom.js";
 import { miloSvg, siteHeader } from "../ui/icons.js";
+import { fmtUptime, footer, headerAccount, headerSearchHtml, setupMiloEyes, wireHeaderSearch } from "../app.js";
 
 export async function renderStatus() {
   app.innerHTML = `<p class="loading">Chargement…</p>`;

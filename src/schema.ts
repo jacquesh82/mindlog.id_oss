@@ -156,9 +156,34 @@ export const premiumSpace = pgTable(
     // aux abonnés du space — pour chat/call, cela impose un gating server-side :
     // les non-abonnés ne peuvent ni écrire ni appeler. Lecture via parseBenefits().
     benefits: text("benefits").notNull().default(""),
+    // JSON de la config de stockage tiers (cf. src/premium/storage). Les champs
+    // secrets (clés S3, refresh-token Drive) sont chiffrés (enc::). "" = aucun
+    // fournisseur connecté. Galeries/médias premium sont servis depuis ce stockage.
+    storage_config: text("storage_config").notNull().default(""),
     updated_at: text("updated_at").notNull().$defaultFn(nowIso),
   },
   (t) => [primaryKey({ columns: [t.identity_id] })]
+);
+
+// Clé symétrique d'espace distribuée en E2E : une enveloppe (ECDH AES-GCM) par
+// membre autorisé, chiffrée avec SA clé publique. Le serveur ne voit que des
+// enveloppes opaques — il ne peut jamais lire la clé ni les médias. Seuls le
+// créateur et ses abonnés actifs déchiffrent. Premium-only (exclu OSS).
+export const spaceMediaKeys = pgTable(
+  "space_media_keys",
+  {
+    owner_identity_id: integer("owner_identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    member_identity_id: integer("member_identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    sender_pub: text("sender_pub").notNull().default(""), // clé publique de l'enveloppeur (pour l'ECDH au déchiffrement)
+    wrap_iv: text("wrap_iv").notNull().default(""),
+    wrap_ct: text("wrap_ct").notNull().default(""),
+    updated_at: text("updated_at").notNull().$defaultFn(nowIso),
+  },
+  (t) => [primaryKey({ columns: [t.owner_identity_id, t.member_identity_id] })]
 );
 
 // Abonnement d'un visiteur à l'espace premium d'un créateur. Source de vérité =

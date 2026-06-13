@@ -31,6 +31,7 @@ import today.mindlog.id.core.network.dto.FieldUpsertResponse
 import today.mindlog.id.core.network.dto.GroupDto
 import today.mindlog.id.core.network.dto.GroupMessageBody
 import today.mindlog.id.core.network.dto.GroupMessagesResponseDto
+import today.mindlog.id.core.network.dto.GroupReactBody
 import today.mindlog.id.core.network.dto.GroupsResponseDto
 import today.mindlog.id.core.network.dto.InviteAcceptDto
 import today.mindlog.id.core.network.dto.InviteDto
@@ -271,6 +272,18 @@ interface MindlogApi {
     @POST("api/groups/{id}/messages")
     suspend fun sendGroupMessage(@Path("id") id: String, @Body body: GroupMessageBody): OkDto
 
+    /** Supprime un de mes messages de groupe (expéditeur). */
+    @DELETE("api/groups/{id}/messages/{mid}")
+    suspend fun deleteGroupMessage(@Path("id") id: String, @Path("mid") mid: Long): OkDto
+
+    /** Brûle un message readOnce de groupe (initiable par n'importe quel membre). */
+    @POST("api/groups/{id}/messages/{mid}/burn")
+    suspend fun burnGroupMessage(@Path("id") id: String, @Path("mid") mid: Long): OkDto
+
+    /** Bascule une réaction emoji sur un message de groupe. */
+    @POST("api/groups/{id}/messages/{mid}/react")
+    suspend fun reactGroupMessage(@Path("id") id: String, @Path("mid") mid: Long, @Body body: GroupReactBody): OkDto
+
     // ── E2E — Pubkey / Vault / Prekeys / Devices / Verify / Cache ─────────
 
     /** Publie ma clé publique E2E (le serveur ne voit jamais la privée). */
@@ -414,9 +427,49 @@ interface MindlogApi {
     @POST("api/space/{handle}/subscribe")
     suspend fun subscribeToSpace(@Path("handle") handle: String): today.mindlog.id.core.network.dto.SpaceSubscribeResponseDto
 
+    /** Vue côté propriétaire de mon espace : tarif, intro, bénéfices, etc. */
+    @GET("api/space")
+    suspend fun ownerSpace(): today.mindlog.id.core.network.dto.OwnerSpaceDto
+
+    /** Met à jour le tarif mensuel de mon espace. */
+    @PUT("api/space")
+    suspend fun updateSpacePrice(@Body body: today.mindlog.id.core.network.dto.SpacePriceBody): today.mindlog.id.core.network.dto.SpacePriceResponseDto
+
+    /** Met à jour l'intro markdown de mon espace payant. */
+    @PUT("api/space/intro")
+    suspend fun updateSpaceIntro(@Body body: today.mindlog.id.core.network.dto.SpaceIntroBody): today.mindlog.id.core.network.dto.SpaceIntroResponseDto
+
+    /** Met à jour l'intro markdown publique de mon profil (OSS). */
+    @PUT("api/me/profile-intro")
+    suspend fun updateProfileIntro(@Body body: today.mindlog.id.core.network.dto.ProfileIntroBody): today.mindlog.id.core.network.dto.ProfileIntroResponseDto
+
+    /** Met à jour les bénéfices opt-in (chat/call/pages/rdv/lives). */
+    @PUT("api/space/benefits")
+    suspend fun updateSpaceBenefits(@Body body: today.mindlog.id.core.network.dto.SpaceBenefitsDto): today.mindlog.id.core.network.dto.SpaceBenefitsResponseDto
+
     /** Liste de mes pages payantes. */
     @GET("api/pages")
     suspend fun myPaidPages(): today.mindlog.id.core.network.dto.PaidPagesResponseDto
+
+    /** Crée ou met à jour une page payante (par slug). */
+    @PUT("api/pages")
+    suspend fun upsertPaidPage(@Body body: today.mindlog.id.core.network.dto.UpsertPaidPageBody): today.mindlog.id.core.network.dto.UpsertPaidPageResponseDto
+
+    /** Supprime une de mes pages payantes. */
+    @DELETE("api/pages/{slug}")
+    suspend fun deletePaidPage(@Path("slug") slug: String): OkDto
+
+    /** Upload de média (gallery ou file) pour une page que je possède. */
+    @Multipart
+    @POST("api/pages/{slug}/media")
+    suspend fun uploadPageMedia(
+        @Path("slug") slug: String,
+        @Part parts: List<MultipartBody.Part>,
+    ): today.mindlog.id.core.network.dto.PageMediaUploadResponseDto
+
+    /** Supprime un média (filename) d'une page galerie ou efface une page file. */
+    @DELETE("api/pages/{slug}/media/{filename}")
+    suspend fun deletePageMedia(@Path("slug") slug: String, @Path("filename") filename: String): OkDto
 
     /** Vue d'une page payante (gating fait par le serveur). */
     @GET("api/pages/{handle}/{slug}")
@@ -446,7 +499,7 @@ interface MindlogApi {
 
     /** Détail d'un live (métadonnées, statut). */
     @GET("api/live/{id}")
-    suspend fun liveDetail(@Path("id") id: Long): today.mindlog.id.core.network.dto.LiveDto
+    suspend fun liveDetail(@Path("id") id: String): today.mindlog.id.core.network.dto.LiveDto
 
     /** Démarre un live (Premium requis). */
     @POST("api/live/start")
@@ -454,25 +507,25 @@ interface MindlogApi {
 
     /** Termine un live que j'ai lancé. */
     @POST("api/live/{id}/end")
-    suspend fun endLive(@Path("id") id: Long): OkDto
+    suspend fun endLive(@Path("id") id: String): OkDto
 
-    /** Rejoint un live en tant que viewer. */
+    /** Rejoint un live (subscribe + roster). Le client passe son device_id local. */
     @POST("api/live/{id}/join")
-    suspend fun joinLive(@Path("id") id: Long): today.mindlog.id.core.network.dto.LiveJoinDto
+    suspend fun joinLive(@Path("id") id: String, @Body body: today.mindlog.id.core.network.dto.LiveDeviceBody): today.mindlog.id.core.network.dto.LiveJoinDto
 
     /** Quitte un live. */
     @POST("api/live/{id}/leave")
-    suspend fun leaveLive(@Path("id") id: Long): OkDto
+    suspend fun leaveLive(@Path("id") id: String, @Body body: today.mindlog.id.core.network.dto.LiveDeviceBody): OkDto
 
     /** Heartbeat (toutes les 15s) pour rester compté dans le viewer count. */
     @POST("api/live/{id}/heartbeat")
-    suspend fun liveHeartbeat(@Path("id") id: Long): OkDto
+    suspend fun liveHeartbeat(@Path("id") id: String, @Body body: today.mindlog.id.core.network.dto.LiveDeviceBody): OkDto
 
-    /** Roster (compteur de viewers + leur id). */
+    /** Roster (compteur + détails des viewers). */
     @GET("api/live/{id}/roster")
-    suspend fun liveRoster(@Path("id") id: Long): today.mindlog.id.core.network.dto.LiveRosterDto
+    suspend fun liveRoster(@Path("id") id: String): today.mindlog.id.core.network.dto.LiveRosterDto
 
-    /** Envoie un paquet de signalisation WebRTC (offre, réponse, ICE). */
+    /** Envoie un paquet de signalisation WebRTC (from, to, kind, payload). */
     @POST("api/live/{id}/signal")
-    suspend fun sendLiveSignal(@Path("id") id: Long, @Body body: today.mindlog.id.core.network.dto.LiveSignalBody): OkDto
+    suspend fun sendLiveSignal(@Path("id") id: String, @Body body: today.mindlog.id.core.network.dto.LiveSignalBody): OkDto
 }
