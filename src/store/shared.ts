@@ -177,11 +177,11 @@ export async function setSettings(
     }
   }
   if (patch.availability !== undefined) next.availability = sanitizeAvailability(patch.availability);
-  if (patch.avatar_size !== undefined && (AVATAR_SIZES as readonly string[]).includes(patch.avatar_size as string)) {
-    next.avatar_size = patch.avatar_size as AvatarSize;
+  if (patch.avatar_size !== undefined && (AVATAR_SIZES as readonly string[]).includes(patch.avatar_size)) {
+    next.avatar_size = patch.avatar_size;
   }
-  if (patch.avatar_shape !== undefined && (AVATAR_SHAPES as readonly string[]).includes(patch.avatar_shape as string)) {
-    next.avatar_shape = patch.avatar_shape as AvatarShape;
+  if (patch.avatar_shape !== undefined && (AVATAR_SHAPES as readonly string[]).includes(patch.avatar_shape)) {
+    next.avatar_shape = patch.avatar_shape;
   }
   await db.update(identities).set({ settings: JSON.stringify(next) }).where(eq(identities.id, identityId));
   return next;

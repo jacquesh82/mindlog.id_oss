@@ -31,7 +31,7 @@ const ENV = {
 };
 
 const todo = (label: string) => `<mark style="background:#fff3a3;color:#5a4a00">[À COMPLÉTER : ${label}]</mark>`;
-const v = (val: string | undefined, label: string) => (val && val.trim() ? esc(val) : todo(label));
+const v = (val: string | undefined, label: string) => (val?.trim() ? esc(val) : todo(label));
 
 function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);

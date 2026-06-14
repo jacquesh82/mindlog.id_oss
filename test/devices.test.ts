@@ -123,7 +123,7 @@ test("prekeys par appareil + fan-out vers mes autres appareils", async () => {
   assert.equal(again.devices[0].opkPub, null);
 });
 
-type MsgResp = { messages: { id: number; sender_id: number; iv: string; ciphertext: string; client_msg_id: string | null; sender_device_id: string | null }[] };
+interface MsgResp { messages: { id: number; sender_id: number; iv: string; ciphertext: string; client_msg_id: string | null; sender_device_id: string | null }[] }
 
 test("fan-out : chaque appareil lit SON enveloppe ; l'émetteur voit son envoi ; non-adressé masqué", async () => {
   const aKey = await makeUser("alice");

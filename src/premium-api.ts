@@ -61,7 +61,7 @@ export interface SpaceInfo {
   benefits: SpaceBenefits;
   // `published` est inclus pour le propriétaire (vue éditeur) et permet
   // d'afficher les brouillons avec un badge dédié. Toujours `true` côté visiteur.
-  pages: Array<{ slug: string; title: string; type: string; published?: boolean }>;
+  pages: { slug: string; title: string; type: string; published?: boolean }[];
 }
 
 type IsPremiumFn = (id: number) => Promise<boolean>;
@@ -246,7 +246,7 @@ export const getContactGating = (recipientId: number, senderId: number | null): 
 // Délègue au module Premium si présent ; sinon no-op silencieux. Le caller
 // (route agenda) ne sait pas si l'implém est branchée, et n'a pas à savoir.
 export const notifyLiveScheduled: NotifyLiveScheduledFn = (ownerId, event) =>
-  _notifyLiveScheduled(ownerId, event);
+  { _notifyLiveScheduled(ownerId, event); };
 
 /* ─── Surface MCP exposée à Milo ─── */
 export const mcpPremiumAvailable = (): boolean => _mcpAvailable;

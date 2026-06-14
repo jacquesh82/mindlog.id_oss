@@ -371,7 +371,7 @@ if (_premiumEnsureMilo) {
   // avec tarif et tous bénéfices, page premium publiée, live planifié. Permet
   // d'avoir un compte de démo riche dès le premier boot.
   await _premiumEnsureMilo().catch((e) =>
-    console.warn("[premium] ensureMiloPremium:", (e as Error)?.message ?? e),
+    { console.warn("[premium] ensureMiloPremium:", (e as Error)?.message ?? e); },
   );
 }
 

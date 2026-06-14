@@ -151,7 +151,7 @@ export async function approveDevice(
   approverDeviceId: string | undefined
 ): Promise<boolean> {
   const approver = await resolveDevice(identityId, approverDeviceId);
-  if (!approver || !approver.approved) return false; // seul un appareil approuvé peut approuver
+  if (!approver?.approved) return false; // seul un appareil approuvé peut approuver
   const res = await db
     .update(devices)
     .set({ approved: 1 })

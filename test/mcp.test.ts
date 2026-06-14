@@ -286,8 +286,8 @@ test("create_invite + get_invite_preview : aperçu correct, token réutilisable 
   const me = await makeUser("inviter");
   await upsertField(me.id, { key: "display_name", value: "Inviter Display" });
   const created = await callTool(me.access_key, "create_invite", { type: "pro" });
-  assert.ok(typeof created.token === "string" && (created.token as string).length > 10);
-  assert.ok(typeof created.url === "string" && (created.url as string).includes("/i/"));
+  assert.ok(typeof created.token === "string" && (created.token).length > 10);
+  assert.ok(typeof created.url === "string" && (created.url).includes("/i/"));
 
   const preview = await callTool(me.access_key, "get_invite_preview", { token: created.token });
   assert.equal(preview.handle, "inviter");
@@ -297,7 +297,7 @@ test("create_invite + get_invite_preview : aperçu correct, token réutilisable 
 test("get_invite_preview sur token bidon renvoie null", async () => {
   const me = await makeUser("invreader");
   const preview = await callTool(me.access_key, "get_invite_preview", { token: "totalement-bidon" });
-  assert.equal(preview as unknown as null, null);
+  assert.equal(preview, null);
 });
 
 /* --------------------------------- Galerie ------------------------------ */
@@ -316,7 +316,7 @@ test("set_gallery_link refuse hors-Premium", async () => {
   const me = await makeUser("galnopremium");
   const out = await callTool(me.access_key, "set_gallery_link", { id: 1, url: "https://example.com" });
   assert.ok(typeof out.error === "string");
-  assert.ok((out.error as string).toLowerCase().includes("premium"));
+  assert.ok((out.error).toLowerCase().includes("premium"));
 });
 
 /* --------------------------- Boutons de page ---------------------------- */
@@ -344,7 +344,7 @@ test("set_page_buttons Premium-gated : sans premium → erreur, avec premium →
       { label: "Mail", url: "mailto:a@b.fr" },
     ],
   });
-  const buttons = (ok2.buttons ?? []) as Array<{ label: string; url: string; shape: string }>;
+  const buttons = (ok2.buttons ?? []) as { label: string; url: string; shape: string }[];
   assert.equal(buttons.length, 2);
   assert.equal(buttons[0].label, "Mon site");
   assert.equal(buttons[0].shape, "square");
@@ -452,7 +452,7 @@ test("export_my_data renvoie handle, fields, events, relations, requests, notifi
   assert.ok(Array.isArray(out.relations));
   assert.ok(Array.isArray(out.requests));
   assert.ok(Array.isArray(out.notifications));
-  const fields = out.fields as Array<{ key: string; value: string }>;
+  const fields = out.fields as { key: string; value: string }[];
   // Les attributs privés DOIVENT être inclus dans l'export (vue owner).
   assert.equal(fields.find((f) => f.key === "bio")?.value, "ma bio export");
 });
