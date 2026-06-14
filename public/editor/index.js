@@ -1318,7 +1318,7 @@ export async function openContactColumn(handle) {
   section.querySelector("[data-contact-close]")?.addEventListener("click", () => removeDeckColumn(section));
   section.querySelector("[data-contact-chat]")?.addEventListener("click", () => host.chat.open(data.handle, myKey(), myHandle()));
   section.querySelector("[data-contact-call]")?.addEventListener("click", () => {
-    if (data.pubkey && host.call) host.call.start(data.handle, data.pubkey, { video: data.options?.allowVideo !== false });
+    if (data.pubkey && host.call) host.call.start(data.handle, data.pubkey, { video: false });
   });
 }
 
@@ -2974,7 +2974,7 @@ export function wireEditor(data) {
         try {
           const d = await api(`/api/identities/${encodeURIComponent(h)}`, { headers: viewerHeaders() });
           if (!d.pubkey) return toast("Ce contact n'a pas encore activé les appels chiffrés.");
-          if (host.call) host.call.start(h, d.pubkey, { video: d.options?.allowVideo !== false });
+          if (host.call) host.call.start(h, d.pubkey, { video: false });
         } catch {
           toast("Impossible de joindre ce contact.");
         }
@@ -3602,18 +3602,70 @@ export function wireEditor(data) {
   // Multi-appareils : liste des appareils chiffrés, approbation des appareils en
   // attente (réservée à un appareil déjà approuvé) et révocation.
   // Expose au module pour le handler SSE "device" (hors-portée de renderPrivate).
+  // Popup d'approbation d'un nouvel appareil : affichée sur un appareil DÉJÀ
+  // approuvé dès qu'un appareil en attente apparaît (au démarrage ou en direct via
+  // SSE) → on approuve/refuse directement, sans passer par une simple notification.
+  function showDeviceApprovalModal(pending, hdr) {
+    if (!pending.length || document.querySelector("#dev-approve-overlay")) return;
+    const overlay = document.createElement("div");
+    overlay.className = "overlay";
+    overlay.id = "dev-approve-overlay";
+    overlay.innerHTML = `
+      <div class="panel" role="dialog" aria-modal="true" style="max-width:440px">
+        <button type="button" class="close" id="dev-approve-x" aria-label="Fermer">✕</button>
+        <h2>${icon("shield", 18)} Nouvel appareil</h2>
+        <p class="sub">Un nouvel appareil veut accéder à vos messages chiffrés. Approuvez-le seulement si c'est bien vous — sinon, refusez.</p>
+        <div class="dev-approve-list">
+          ${pending.map((d) => `<div class="dev-approve-row" data-pk="${d.id}">
+            <span class="dev-approve-name">${icon("user", 14)} ${esc(d.name || "Appareil")}</span>
+            <span class="dev-approve-actions">
+              <button type="button" class="btn sm primary" data-approve>Approuver</button>
+              <button type="button" class="btn sm danger" data-reject>Refuser</button>
+            </span>
+          </div>`).join("")}
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.querySelector("#dev-approve-x").onclick = close;
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+    const done = (row) => { row.remove(); if (!overlay.querySelector(".dev-approve-row")) close(); appState.refreshDevices?.(); };
+    overlay.querySelectorAll(".dev-approve-row").forEach((row) => {
+      const pk = row.dataset.pk;
+      row.querySelector("[data-approve]").addEventListener("click", async () => {
+        try { await api(`/api/devices/${encodeURIComponent(pk)}/approve`, { method: "POST", headers: hdr }); toast?.("Appareil approuvé ✅"); }
+        catch (e) { toast?.(e.message || "Échec de l'approbation"); }
+        done(row);
+      });
+      row.querySelector("[data-reject]").addEventListener("click", async () => {
+        try { await api(`/api/devices/${encodeURIComponent(pk)}`, { method: "DELETE", headers: hdr }); toast?.("Appareil refusé."); }
+        catch (e) { toast?.(e.message || "Échec"); }
+        done(row);
+      });
+    });
+  }
+
   appState.refreshDevices = async function () {
-    const box = app.querySelector("#devices-list");
-    if (!box) return;
     const myDid = mdDeviceId();
     const hdr = { ...authHeaders(), "x-device-id": myDid };
+    const box = app.querySelector("#devices-list");
+    let devices;
     try {
-      const { devices } = await api("/api/devices", { headers: hdr });
-      if (!devices || !devices.length) {
-        box.innerHTML = `<p class="lbl-sm">Aucun appareil enregistré.</p>`;
-        return;
-      }
-      const iAmApproved = devices.some((d) => d.deviceId === myDid && d.approved);
+      ({ devices } = await api("/api/devices", { headers: hdr }));
+    } catch {
+      if (box) box.innerHTML = `<p class="lbl-sm">Appareils indisponibles.</p>`;
+      return;
+    }
+    devices = devices || [];
+    const iAmApproved = devices.some((d) => d.deviceId === myDid && d.approved);
+    // Popup d'approbation (seul un appareil approuvé peut approuver les autres).
+    if (iAmApproved) {
+      const pending = devices.filter((d) => d.deviceId !== myDid && !d.approved);
+      if (pending.length) showDeviceApprovalModal(pending, hdr);
+    }
+    if (!box) return; // panneau Accès non monté : on a quand même pu lever la popup
+    if (!devices.length) { box.innerHTML = `<p class="lbl-sm">Aucun appareil enregistré.</p>`; return; }
+    {
       box.innerHTML = devices
         .map((d) => {
           const isMe = d.deviceId === myDid;
@@ -3659,10 +3711,8 @@ export function wireEditor(data) {
           appState.refreshDevices();
         })
       );
-    } catch {
-      box.innerHTML = `<p class="lbl-sm">Appareils indisponibles.</p>`;
     }
-  }
+  };
   appState.refreshDevices();
 
   app.querySelector("#rotate-key")?.addEventListener("click", async () => {

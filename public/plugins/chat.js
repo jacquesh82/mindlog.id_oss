@@ -213,7 +213,8 @@ export default function register(host) {
     // sur la rangée d'actions — disponible quel que soit le mode d'ouverture du chat.
     overlay.querySelector("#ch-call")?.addEventListener("click", () => {
       if (!peerPub) { host.toast?.("Appels non disponibles pour ce contact."); return; }
-      host.call?.start(handle, peerPub, { video: true });
+      // Appel AUDIO par défaut ; la vidéo s'active en cours d'appel (bouton caméra).
+      host.call?.start(handle, peerPub, { video: false });
     });
     overlay.querySelector("#ch-verify")?.addEventListener("click", () => {
       if (!peerPub) { host.toast?.("Ce contact n'a pas encore de clé."); return; }

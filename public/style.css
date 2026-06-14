@@ -3292,6 +3292,15 @@ select:focus { outline: none; border-color: var(--accent-ink); box-shadow: 0 0 0
 .act-log--error { background: color-mix(in srgb, var(--danger, #ef4444) 9%, transparent); }
 .act-log--error .act-log-ic, .act-log--error .act-log-text { color: var(--danger, #ef4444); }
 .act-log--warn { background: color-mix(in srgb, var(--accent, #f59e0b) 8%, transparent); }
+
+/* Popup d'approbation d'un nouvel appareil. */
+.dev-approve-list { display: flex; flex-direction: column; gap: .5rem; margin: .8rem 0 .2rem; }
+.dev-approve-row {
+  display: flex; align-items: center; justify-content: space-between; gap: .6rem;
+  padding: .55rem .7rem; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg);
+}
+.dev-approve-name { font-size: .88rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dev-approve-actions { display: flex; gap: .4rem; flex: none; }
 @media (prefers-reduced-motion: reduce) { .btn-spinner { animation-duration: 1.4s; } }
 
 .photo-wrap { display: flex; justify-content: center; margin-bottom: 1.25rem; }
@@ -4802,14 +4811,44 @@ footer a { text-decoration: none; }
   border: 1px solid var(--line); border-radius: var(--r-md); background: #05070b;
   transform: scaleX(-1); box-shadow: 0 6px 18px rgba(0,0,0,.5);
 }
-/* Carte de sonnerie / connexion : masquée une fois le média distant connecté. */
+/* Carte de sonnerie / connexion : reste affichée pendant un appel AUDIO (avatar +
+   animation), masquée seulement quand une vidéo distante arrive. */
 .call-ring {
   position: absolute; inset: 0; z-index: 2;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .6rem;
   text-align: center; color: var(--fg);
 }
-.call-stage[data-stage="connected"] .call-ring { display: none; }
-.call-ring .call-av { width: 92px; height: 92px; font-size: 2rem; }
+.call-stage.has-remote-video .call-ring { display: none; }
+.call-ring .call-av { width: 92px; height: 92px; font-size: 2rem; position: relative; z-index: 1; }
+
+/* Halo de cercles pulsés autour de l'avatar. */
+.call-orb { position: relative; display: grid; place-items: center; margin-bottom: .2rem; }
+.call-orb-ring {
+  position: absolute; width: 92px; height: 92px; border-radius: 50%;
+  border: 2px solid var(--accent, #5B5FC7);
+  animation: call-orb-pulse 2.4s cubic-bezier(.22,.61,.36,1) infinite;
+}
+.call-orb-ring:nth-child(2) { animation-delay: .8s; }
+.call-orb-ring:nth-child(3) { animation-delay: 1.6s; }
+@keyframes call-orb-pulse {
+  0%   { transform: scale(1);   opacity: .55; }
+  70%  { opacity: 0; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+/* Égaliseur animé : visible une fois en communication. */
+.call-eq { width: 40px; height: 22px; display: none; }
+.call-eq rect { fill: var(--accent, #5B5FC7); transform-box: fill-box; transform-origin: center bottom; animation: call-eq-bar 1s ease-in-out infinite; }
+.call-eq rect:nth-child(1) { animation-delay: 0s;    }
+.call-eq rect:nth-child(2) { animation-delay: .18s;  }
+.call-eq rect:nth-child(3) { animation-delay: .36s;  }
+.call-eq rect:nth-child(4) { animation-delay: .12s;  }
+.call-eq rect:nth-child(5) { animation-delay: .30s;  }
+.call-stage[data-stage="connected"] .call-eq { display: inline-block; }
+@keyframes call-eq-bar { 0%,100% { transform: scaleY(.35); } 50% { transform: scaleY(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .call-orb-ring, .call-eq rect { animation: none; }
+  .call-orb-ring { opacity: .3; }
+}
 .call-name { font-size: 1.2rem; font-weight: 600; }
 .call-status { color: var(--muted); font-size: .95rem; }
 .call-e2e { color: var(--muted); font-size: .8rem; opacity: .8; }
