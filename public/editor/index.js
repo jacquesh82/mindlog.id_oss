@@ -27,7 +27,8 @@ import { renderAgendaColumn } from "./tabs/agenda.js";
 import { renderRelationsColumn } from "./tabs/relations.js";
 import { wireRelationsGraph } from "./relations-graph.js";
 import { renderNotificationsColumn } from "./tabs/notifications.js";
-import { renderAccountColumn } from "./tabs/account.js";
+import { renderAccountColumn, activityLogInnerHtml } from "./tabs/account.js";
+import { clearActivityLog, onActivityLog } from "../activity-log.js";
 import { pbRowHtml, renderPremiumPage } from "./tabs/premium.js";
 
 export async function consumePendingInvite() {
@@ -3152,6 +3153,16 @@ export function wireEditor(data) {
   // conservé) plutôt que de naviguer vers la page plein écran /me/premium.
   app.querySelector("#opt-portal-btn")?.addEventListener("click", () => app.querySelector('.opt-tab[data-tab="espaces"]')?.click());
 
+  // Journal des actions (Compte › Activité) : rafraîchi en direct quand une
+  // entrée arrive (échec appel/chat/live…), et bouton « Vider ».
+  const refreshActLog = () => {
+    const box = app.querySelector("#act-log");
+    if (box) box.innerHTML = activityLogInnerHtml();
+  };
+  app.querySelector("#act-log-clear")?.addEventListener("click", () => { clearActivityLog(); refreshActLog(); });
+  appState._actLogUnsub?.(); // évite l'empilement d'abonnements à chaque re-rendu
+  appState._actLogUnsub = onActivityLog(refreshActLog);
+
   // (L'upload d'avatar de l'ex-en-tête Compte a été retiré : il vit désormais sur
   // l'avatar du panneau Profil — clic sur la photo → #photo-file, géré ci-dessous.)
 
@@ -3610,8 +3621,13 @@ export function wireEditor(data) {
             ? `<span class="badge-sm" style="color:var(--success)">approuvé</span>`
             : `<span class="badge-sm" style="color:var(--accent-ink)">en attente</span>`;
           let actions = "";
-          if (isMe) actions = `<strong class="lbl-sm">cet appareil</strong>`;
-          else {
+          if (isMe) {
+            // On ne peut pas auto-approuver l'appareil courant (l'approbation doit
+            // venir d'un appareil DÉJÀ actif). S'il est en attente, on l'explique.
+            actions = d.approved
+              ? `<strong class="lbl-sm">cet appareil</strong>`
+              : `<strong class="lbl-sm">cet appareil</strong> <span class="lbl-sm" style="opacity:.7">· à approuver depuis un appareil déjà actif</span>`;
+          } else {
             if (!d.approved && iAmApproved) actions += `<button class="btn sm device-approve" data-pk="${d.id}">Approuver</button>`;
             actions += `<button class="btn sm danger device-revoke" data-pk="${d.id}" title="Révoquer">✕</button>`;
           }
@@ -3770,7 +3786,12 @@ export function wireEditor(data) {
       const handle = card?.dataset.handle;
       const type = card?.querySelector(".rel-add-type")?.value || "amis";
       if (!handle) return;
+      // État d'attente : l'ajout fait un POST puis un re-rendu complet (≈ qqs
+      // centaines de ms) → spinner + libellé « Ajout… » pour un retour immédiat.
       btn.disabled = true;
+      btn.classList.add("is-loading");
+      const prevLabel = btn.innerHTML;
+      btn.innerHTML = `<span class="btn-spinner" aria-hidden="true"></span>Ajout…`;
       const q = addQ?.value || "";
       try {
         await api("/api/relations", { method: "POST", headers: jsonAuth(), body: JSON.stringify({ handle, type }) });
@@ -3788,7 +3809,10 @@ export function wireEditor(data) {
         const q2 = document.querySelector("#rel-add-q");
         if (q2 && q) { q2.value = q; q2.dispatchEvent(new Event("input")); }
       } catch (err) {
+        // Échec → on restaure le bouton (le succès, lui, re-rend tout le deck).
         btn.disabled = false;
+        btn.classList.remove("is-loading");
+        btn.innerHTML = prevLabel;
         toast(err?.message || "Échec.");
       }
     });

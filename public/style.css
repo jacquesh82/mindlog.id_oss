@@ -3268,6 +3268,32 @@ select { font: inherit; color: var(--fg); background: var(--inset); border: 1px 
 select:focus { outline: none; border-color: var(--accent-ink); box-shadow: 0 0 0 3px var(--accent-soft); }
 .loading { color: var(--muted); text-align: center; padding: 4rem 1rem; }
 
+/* Spinner d'attente réutilisable dans un bouton (ex. « Ajouter » une relation
+   pendant l'appel réseau + re-rendu). Hérite de la couleur du texte du bouton. */
+@keyframes btn-spin { to { transform: rotate(360deg); } }
+.btn-spinner {
+  display: inline-block; width: 1em; height: 1em;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+  vertical-align: -.15em; margin-right: .35em;
+  animation: btn-spin .6s linear infinite;
+}
+.btn.is-loading { pointer-events: none; opacity: .9; cursor: progress; }
+
+/* Journal des actions (Compte › Activité) — échecs appel/chat/live détaillés. */
+.act-log { display: flex; flex-direction: column; gap: .15rem; }
+.act-log-row { display: flex; gap: .55rem; padding: .45rem .55rem; border-radius: var(--r-sm); align-items: flex-start; }
+.act-log-row + .act-log-row { border-top: 1px solid var(--line); border-top-left-radius: 0; border-top-right-radius: 0; }
+.act-log-ic { flex: none; color: var(--muted); margin-top: .1rem; }
+.act-log-body { flex: 1; min-width: 0; }
+.act-log-head { display: flex; gap: .5rem; align-items: baseline; justify-content: space-between; }
+.act-log-text { font-size: .86rem; color: var(--fg); }
+.act-log-time { flex: none; font-size: .72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.act-log-detail { font-size: .78rem; color: var(--muted); line-height: 1.4; margin-top: .1rem; word-break: break-word; }
+.act-log--error { background: color-mix(in srgb, var(--danger, #ef4444) 9%, transparent); }
+.act-log--error .act-log-ic, .act-log--error .act-log-text { color: var(--danger, #ef4444); }
+.act-log--warn { background: color-mix(in srgb, var(--accent, #f59e0b) 8%, transparent); }
+@media (prefers-reduced-motion: reduce) { .btn-spinner { animation-duration: 1.4s; } }
+
 .photo-wrap { display: flex; justify-content: center; margin-bottom: 1.25rem; }
 /* En-tête Identité (grand écran) : les 4 actions sur UNE seule ligne, centrées.
    Les deux conteneurs passent en display:contents → leurs boutons deviennent

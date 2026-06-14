@@ -25,7 +25,7 @@ const ICE = {
 };
 
 export default function register(host) {
-  const { esc, api, toast, onSSE, ensureE2E, e2eEncrypt, e2eDecrypt, avatarHtml } = host;
+  const { esc, api, toast, onSSE, ensureE2E, e2eEncrypt, e2eDecrypt, avatarHtml, logFailure, logActivity } = host;
 
   // Clé d'accès / handle du compte courant (éditeur d'abord, visiteur ensuite).
   const myKey = () => host.currentKey() || host.myKey();
@@ -61,6 +61,9 @@ export default function register(host) {
   /* ----------------------- Signalisation chiffrée ------------------------ */
   async function sendSignal(handle, peerPub, obj) {
     const enc = await e2eEncrypt(peerPub, JSON.stringify(obj)); // chiffré dans le navigateur
+    // Le gating (allow_call/premium) est appliqué côté serveur à la 1re
+    // signalisation du couple (l'offre) puis un « permis d'appel » laisse passer
+    // l'answer/ICE en retour — l'appel peut donc aboutir et on décroche une fois.
     await api(`/api/signal/${encodeURIComponent(handle)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-access-key": myKey() },
@@ -69,31 +72,54 @@ export default function register(host) {
   }
 
   /* ----------------------------- Sonnerie -------------------------------- */
-  // Bip discret en boucle via WebAudio (aucun fichier à charger).
+  // Sonnerie d'appel = fichier audio bouclé. Repli sur un bip WebAudio si la
+  // lecture échoue (autoplay bloqué côté destinataire, fichier indisponible…).
+  const RINGTONE_URL = "/static/sounds/call-ring.mp3";
   function makeRinger() {
-    let ctx = null, timer = null;
+    let audio = null, ctx = null, timer = null;
+
+    const startBeepFallback = () => {
+      if (timer || ctx) return;
+      try {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+      } catch { return; }
+      const beep = () => {
+        if (!ctx) return;
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.frequency.value = 520;
+        o.connect(g);
+        g.connect(ctx.destination);
+        g.gain.setValueAtTime(0.0001, ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.15, ctx.currentTime + 0.05);
+        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.5);
+        o.start();
+        o.stop(ctx.currentTime + 0.5);
+      };
+      beep();
+      timer = setInterval(beep, 1800);
+    };
+
     return {
       start() {
         try {
-          ctx = new (window.AudioContext || window.webkitAudioContext)();
-        } catch { return; }
-        const beep = () => {
-          if (!ctx) return;
-          const o = ctx.createOscillator();
-          const g = ctx.createGain();
-          o.frequency.value = 520;
-          o.connect(g);
-          g.connect(ctx.destination);
-          g.gain.setValueAtTime(0.0001, ctx.currentTime);
-          g.gain.exponentialRampToValueAtTime(0.15, ctx.currentTime + 0.05);
-          g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.5);
-          o.start();
-          o.stop(ctx.currentTime + 0.5);
-        };
-        beep();
-        timer = setInterval(beep, 1800);
+          audio = new Audio(RINGTONE_URL);
+          audio.loop = true;
+          audio.volume = 0.8;
+          audio.preload = "auto";
+          const p = audio.play();
+          // play() peut être rejetée (autoplay bloqué) ou le fichier introuvable.
+          if (p && typeof p.catch === "function") p.catch(() => startBeepFallback());
+          audio.addEventListener("error", () => startBeepFallback(), { once: true });
+        } catch {
+          startBeepFallback();
+        }
       },
       stop() {
+        if (audio) {
+          try { audio.pause(); audio.currentTime = 0; } catch { /* ignoré */ }
+          audio = null;
+        }
         clearInterval(timer);
         timer = null;
         if (ctx) { ctx.close().catch(() => {}); ctx = null; }
@@ -123,7 +149,11 @@ export default function register(host) {
     pc.oniceconnectionstatechange = () => {
       const s = pc.iceConnectionState;
       if (s === "connected" || s === "completed") setStage("connected");
-      else if (s === "failed") { toast("Connexion P2P impossible (NAT). Appel terminé."); endCall(false); }
+      else if (s === "failed") {
+        toast("Connexion P2P impossible (NAT). Appel terminé.");
+        logFailure?.("call", `Appel avec @${call?.handle || "?"} interrompu`, "Connexion P2P impossible (NAT/pare-feu) — la liaison directe n'a pas pu s'établir.", call?.handle);
+        endCall(false);
+      }
       else if (s === "disconnected") setStage("disconnected");
     };
     return pc;
@@ -224,8 +254,12 @@ export default function register(host) {
   }
 
   /* --------------------------- Cycle de vie ------------------------------ */
+  // Délai max d'attente d'une réponse côté appelant avant d'abandonner.
+  const NO_ANSWER_MS = 35000;
+
   function endCall(notifyPeer) {
     if (!call) return;
+    clearTimeout(call.noAnswerTimer); // garde-fou « sans réponse » (appelant)
     const { pc, localStream, ringer, handle, peerPub, role, wantVideo, connectedAt, declined } = call;
     if (notifyPeer) sendSignal(handle, peerPub, { k: "hangup" }).catch(() => {});
     ringer?.stop();
@@ -259,8 +293,18 @@ export default function register(host) {
       await call.pc.setLocalDescription(offer);
       await sendSignal(handle, peerPub, { k: "offer", sdp: offer });
       call.ringer.start();
+      // Sans réponse au bout de NO_ANSWER_MS (correspondant absent ou answer
+      // jamais reçue) → on arrête au lieu de sonner indéfiniment.
+      call.noAnswerTimer = setTimeout(() => {
+        if (call && call.role === "caller" && !call.remoteDescSet && !call.connectedAt) {
+          toast(`@${handle} n'a pas répondu.`);
+          logActivity?.({ kind: "call", level: "warn", text: `Appel à @${handle} sans réponse`, detail: "Aucune réponse avant l'expiration du délai.", peer: handle });
+          endCall(false);
+        }
+      }, NO_ANSWER_MS);
     } catch (e) {
       toast("Impossible de démarrer l'appel : " + (e?.message || e));
+      logFailure?.("call", `Appel vers @${handle} non démarré`, e, handle);
       endCall(false);
     }
   }
@@ -285,6 +329,7 @@ export default function register(host) {
       if (ringEl) ringEl.remove();
     } catch (e) {
       toast("Échec de l'acceptation : " + (e?.message || e));
+      logFailure?.("call", `Acceptation de l'appel de @${call?.handle || "?"} échouée`, e, call?.handle);
       endCall(false);
     }
   }
@@ -324,6 +369,7 @@ export default function register(host) {
 
     if (msg.k === "answer" && call.role === "caller") {
       call.ringer?.stop();
+      clearTimeout(call.noAnswerTimer); // réponse reçue → on annule le garde-fou
       try {
         await call.pc.setRemoteDescription(msg.sdp);
         call.remoteDescSet = true;
@@ -341,6 +387,7 @@ export default function register(host) {
       endCall(false);
     } else if (msg.k === "decline") {
       toast(`@${call.handle} a refusé l'appel.`);
+      logActivity?.({ kind: "call", level: "warn", text: `@${call.handle} a refusé l'appel`, detail: "Le correspondant a décliné.", peer: call.handle });
       call.declined = true; // distingue « refusé » de « sans réponse » dans l'historique
       endCall(false);
     }

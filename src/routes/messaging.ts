@@ -190,17 +190,36 @@ route.get("/api/attachments/:handle/:id", async (c) => {
 // Le serveur ne stocke RIEN : il se contente de pousser au pair le blob chiffré
 // de bout en bout (il ne peut pas lire la signalisation). Le média audio/vidéo,
 // lui, circule en P2P direct entre navigateurs — il ne traverse jamais le serveur.
+//
+// Permis d'appel éphémères (mémoire process, comme le bus SSE) : la PREMIÈRE
+// signalisation d'un couple est forcément l'OFFRE (handshake WebRTC), donc on la
+// soumet au gating (allow_call + premium). Si elle passe, on ouvre un permis pour
+// le couple : la signalisation retour (answer/ice/hangup) passe alors sans
+// re-gating — sinon le destinataire légitime ne pourrait pas décrocher et
+// l'émetteur sonnerait indéfiniment. Le gating ne pouvant être contourné (le
+// serveur ne lit pas le contenu chiffré, et le 1er message est toujours gaté),
+// un non-abonné ne peut pas faire sonner un espace dont les appels sont réservés.
+const callPermits = new Map<string, number>(); // clé couple (pairKey) -> expiration (ms)
+const CALL_PERMIT_TTL = 2 * 60 * 60 * 1000; // 2 h (durée max raisonnable d'un appel)
+
 route.post("/api/signal/:handle", async (c) => {
   const peers = await chatPeers(c);
   if (!peers) return c.json({ error: "réservé aux contacts" }, 403);
-  if (!parseSettings(peers.other.settings).allow_call)
-    return c.json({ error: "Ce contact a désactivé les appels." }, 403);
-  // Gating Premium : si le destinataire a appel réservé aux abonnés.
-  const gating = await getContactGating(peers.other.id, peers.me.id);
-  if (!gating.call) return c.json({ error: "Appel réservé aux abonné·e·s de cet espace." }, 402);
   const { iv, ciphertext } = await readBody<{ iv: string; ciphertext: string }>(c);
   if (typeof iv !== "string" || typeof ciphertext !== "string" || !iv || !ciphertext || ciphertext.length > 16000)
     return c.json({ error: "signal invalide" }, 400);
+  const now = Date.now();
+  const pk = pairKey(peers.me.id, peers.other.id);
+  if ((callPermits.get(pk) ?? 0) <= now) {
+    // Aucun appel en cours pour ce couple → cette signalisation = initiation.
+    if (!parseSettings(peers.other.settings).allow_call)
+      return c.json({ error: "Ce contact a désactivé les appels." }, 403);
+    const gating = await getContactGating(peers.other.id, peers.me.id);
+    if (!gating.call) return c.json({ error: "Appel réservé aux abonné·e·s de cet espace." }, 402);
+  }
+  // Ouvre/prolonge le permis du couple (les deux sens) pour la suite du handshake.
+  callPermits.set(pk, now + CALL_PERMIT_TTL);
+  if (callPermits.size > 5000) for (const [k, exp] of callPermits) if (exp <= now) callPermits.delete(k);
   // pub : clé publique de l'émetteur (publique par nature), sert au pair à dériver
   // la clé partagée pour déchiffrer, sans aller-retour supplémentaire.
   publish(peers.other.id, "signal", { from: peers.me.handle, pub: peers.me.pubkey, iv, ciphertext });

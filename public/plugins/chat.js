@@ -68,7 +68,7 @@ export default function register(host) {
   const {
     esc, api, toast, confirmDialog,
     connectSSE, onSSE, ensureE2E, e2eEncrypt, e2eDecrypt,
-    storedKey, storedHandle,
+    storedKey, storedHandle, logFailure,
   } = host;
   // Double Ratchet (forward secrecy) : v2 si dispo, repli v1 sinon.
   const ratchet = host.ratchet;
@@ -722,6 +722,7 @@ export default function register(host) {
         await sendPlaintext(text, activeTtl, takeOnce());
       } catch (err) {
         toast(err.message);
+        logFailure?.("chat", `Message à @${handle} non envoyé`, err, handle);
         input.value = text;
       }
     });
@@ -737,7 +738,7 @@ export default function register(host) {
       try {
         const meta = await attach.upload(handle, file);
         await sendPlaintext(attach.payload(meta), activeTtl, takeOnce());
-      } catch (err) { toast(err.message || "Échec de l'envoi."); }
+      } catch (err) { toast(err.message || "Échec de l'envoi."); logFailure?.("chat", `Pièce jointe à @${handle} non envoyée`, err, handle); }
     });
 
     // Message vocal : enregistre via MediaRecorder, chiffre + uploade comme pièce
@@ -785,7 +786,7 @@ export default function register(host) {
       try {
         const meta = await attach.upload(handle, file);
         await sendPlaintext(attach.payload({ ...meta, dur }), activeTtl, takeOnce());
-      } catch (err) { toast(err.message || "Échec de l'envoi."); }
+      } catch (err) { toast(err.message || "Échec de l'envoi."); logFailure?.("chat", `Message vocal à @${handle} non envoyé`, err, handle); }
     }
     micBtn?.addEventListener("click", () => { if (rec && rec.state === "recording") rec.stop(); else startRec(); });
 

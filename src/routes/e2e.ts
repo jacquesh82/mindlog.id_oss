@@ -142,7 +142,7 @@ route.post("/api/devices", async (c) => {
     if (pending) {
       // Alerte les appareils existants : un nouvel appareil attend leur approbation.
       publish(id.id, "device", { pending: true });
-      await notify(id.id, "device", "Un nouvel appareil attend votre approbation (Options › Accès).", null);
+      await notify(id.id, "device", "Un nouvel appareil attend votre approbation — approuvez-le depuis un appareil déjà actif (Compte › Accès).", null);
     }
     return c.json({ id: device.id, deviceId: device.deviceId, approved: device.approved, pending });
   } catch (e) {

@@ -20,6 +20,7 @@ import { siteHeader } from "./ui/icons.js";
 import { renderStatus } from "./views/status.js";
 import { DEFAULT_AVAILABILITY, DEFAULT_SETTINGS, DOW_LETTERS, DOW_NAMES, SESSION_HINT, TOUR_SEEN_KEY, app, isLoggedIn, lastHandle, loadAuth, myHandle, myKey, normalizeAvailability, pick, relDate, setLastHandle, setMeProfile, setSessionHint, setStoredHandle, setStoredKey, storedHandle, storedKey, viewerHeaders } from "./core.js";
 import { openContactColumn, renderPremiumFull, renderPrivate } from "./editor/index.js";
+import { logActivity, logFailure } from "./activity-log.js";
 function setLang(code) { setLangCode(code); route(); }
 
 const footer = document.getElementById("footer");
@@ -4835,7 +4836,7 @@ onSSE("message", () => { updateChatBadge(); });
 // Appareil enrôlé / approuvé en temps réel → rafraîchit la liste des appareils.
 onSSE("device", (d) => {
   appState.refreshDevices?.();
-  if (d.pending) toast?.("Un nouvel appareil attend votre approbation — Options › Accès");
+  if (d.pending) toast?.("Un nouvel appareil attend votre approbation — Compte › Accès (depuis un appareil déjà actif)");
 });
 
 /* ----------------------------- Registre de plugins ----------------------- */
@@ -4847,6 +4848,8 @@ const _plugins = [];
 Object.assign(host, {
   // utilitaires
   esc, api, toast, confirmDialog, promptDialog, t,
+  // journal d'activité local (échecs appel/chat/live détaillés dans Compte › Activité)
+  logActivity, logFailure,
   // temps réel
   connectSSE, onSSE,
   // badge non-lus de la barre de nav (mise à jour en direct depuis le plugin chat)

@@ -3,6 +3,7 @@
 // (jours, settings par défaut, dates). Extrait verbatim. cf. docs/web-app-split-proposal.md
 import { api } from "./net.js";
 import { appState } from "./state.js";
+import { setActivityHandle } from "./activity-log.js";
 
 // Constantes de stockage / valeurs par défaut (utilisées par les helpers ci-dessous).
 export const KEY_STORE = "mindlog.key";
@@ -61,6 +62,8 @@ export const setLastHandle = (h) => {
   try {
     if (h) localStorage.setItem(LAST_HANDLE_STORE, h);
   } catch {}
+  // Le journal d'activité local est cloisonné par handle.
+  if (h) setActivityHandle(h);
 };
 
 
