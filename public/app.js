@@ -135,6 +135,9 @@ function connectSSE(key) {
   _esKey = tag;
   const url = key ? `/api/events?key=${encodeURIComponent(key)}` : "/api/events";
   _es = new EventSource(url, { withCredentials: true });
+  // (Re)connexion du flux temps réel → le serveur vient peut-être d'être redéployé :
+  // bon moment pour comparer la version client/serveur (cf. bandeau de mise à jour).
+  _es.onopen = () => { void checkAppVersion(); };
   ["notif", "message", "ack", "signal", "device", "group"].forEach((ev) =>
     _es.addEventListener(ev, (e) => {
       let d = {};
@@ -149,6 +152,91 @@ const onSSE = (type, fn) => {
   _sse[type].add(fn);
   return () => _sse[type].delete(fn);
 };
+
+/* ---------------- Bandeau de mise à jour (serveur plus récent) ------------ */
+// Compare la version CHARGÉE (figée dans index.html au build) à la version LIVE du
+// serveur (/api/status). En PROD on compare la version de release (semver) ; en DEV
+// la version package.json ne bouge pas → on compare aussi le `build` (assetVersion,
+// dérivé de l'mtime de public/) pour détecter un nouveau build après édition.
+function cmpSemver(a, b) {
+  const pa = String(a || "0").split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || "0").split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+let _updateBannerShown = false;
+function showUpdateBanner(info) {
+  // Garde au niveau du DOM (pas seulement le flag module) : app.js est chargé en
+  // deux instances de module (HTML `app.js?v=…` vs import relatif `../app.js` sans
+  // query), chacune avec son propre état → sans cette garde, chaque instance insère
+  // son bandeau (doublon). Le DOM est partagé : un seul bandeau au total.
+  if (_updateBannerShown || document.querySelector(".update-banner")) return;
+  _updateBannerShown = true;
+  const bar = document.createElement("div");
+  bar.className = "update-banner";
+  bar.setAttribute("role", "alert");
+  // En dev, on affiche le build pour aider au repérage ; en prod, la version.
+  const label = info?.dev
+    ? `nouveau build${info.build ? ` (${esc(String(info.build))})` : ""}`
+    : `nouvelle version${info?.version ? ` v${esc(String(info.version))}` : ""}`;
+  bar.innerHTML = `
+    <span class="update-banner-text">${icon("sparkles", 15)} Mise à jour disponible — ${label}. Rechargez pour l'appliquer.</span>
+    <button type="button" class="btn sm" id="update-banner-btn">Mettre à jour</button>`;
+  const app = document.getElementById("app");
+  document.body.insertBefore(bar, app || document.body.firstChild);
+  bar.querySelector("#update-banner-btn").addEventListener("click", forceAppUpdate);
+}
+
+async function forceAppUpdate() {
+  const btn = document.getElementById("update-banner-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "Mise à jour…"; }
+  // Purge des caches + désinscription du service worker pour garantir des assets
+  // frais, puis rechargement (index.html est servi en no-store → nouvelle version).
+  try {
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    }
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+  } catch { /* best-effort */ }
+  location.reload();
+}
+
+let _versionCheckBusy = false;
+async function checkAppVersion() {
+  if (_updateBannerShown || _versionCheckBusy) return;
+  const clientVer = window.__APP_VERSION__;
+  const clientBuild = window.__APP_V__;
+  _versionCheckBusy = true;
+  try {
+    const r = await fetch("/api/status", { cache: "no-store" });
+    if (!r.ok) return;
+    const s = await r.json();
+    const verOk = clientVer && !String(clientVer).includes("%%");
+    const verNewer = verOk && s.version && cmpSemver(s.version, clientVer) > 0;
+    // En dev seulement : tout changement de build (mtime de public/) → rechargement.
+    const buildNewer = !!s.dev && s.build && clientBuild
+      && !String(clientBuild).includes("__V__") && String(s.build) !== String(clientBuild);
+    if (verNewer || buildNewer) showUpdateBanner({ version: s.version, build: s.build, dev: !!s.dev });
+  } catch { /* hors-ligne : on retentera (intervalle / reprise d'onglet / reconnexion SSE) */ }
+  finally { _versionCheckBusy = false; }
+}
+
+// Déclencheurs : reprise d'onglet + sondage périodique (la (re)connexion SSE
+// appelle aussi checkAppVersion via _es.onopen — cf. connectSSE).
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") void checkAppVersion();
+  });
+  setInterval(() => void checkAppVersion(), 5 * 60 * 1000);
+}
 
 // Chiffrement E2E v1 (ECDH) déplacé dans crypto/e2e.js ; coffre de clé déplacé
 // dans crypto/vault.js — importés en tête de fichier.
@@ -326,6 +414,20 @@ function fmtRange(start, end) {
 
 function valueHtml(key, value) {
   if (!value) return '<span class="v" style="color:var(--muted)">—</span>';
+  // Date de naissance : valeur ISO « YYYY-MM-DD » formatée en français (🎂). L'année
+  // n'est affichée que si elle est plausible (> 1900) — on tolère « 0000-MM-DD » pour
+  // une date sans année (jour/mois seulement).
+  if (key === "birthday") {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (m) {
+      const [, y, mo, da] = m;
+      const d = new Date(Number(y) > 1900 ? Number(y) : 2000, Number(mo) - 1, Number(da));
+      if (!isNaN(d)) {
+        const txt = d.toLocaleDateString("fr-FR", { day: "numeric", month: "long", ...(Number(y) > 1900 ? { year: "numeric" } : {}) });
+        return `<span class="v">🎂 ${esc(txt)}</span>`;
+      }
+    }
+  }
   if (key === "email") return `<span class="v"><a href="mailto:${esc(value)}">${esc(value)}</a></span>`;
   if (key === "website" || /^https?:\/\//.test(value))
     return `<span class="v"><a href="${esc(value)}" target="_blank" rel="noopener">${esc(value)}</a></span>`;
@@ -373,19 +475,17 @@ function headerAccount(unread = 0) {
     ? `<img class="profile-chip-av" src="${esc(photoSrc)}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" /><div class="profile-chip-av profile-chip-svg" style="display:none">${genericAvatarSvg(h, initial)}</div>`
     : `<div class="profile-chip-av profile-chip-svg">${genericAvatarSvg(h, initial)}</div>`;
   return `<div class="profile-menu-wrap">
-    <button class="profile-chip" id="profile-menu-btn" type="button" aria-expanded="false" aria-haspopup="menu">
+    <button class="profile-chip profile-chip--icon" id="profile-menu-btn" type="button" aria-expanded="false" aria-haspopup="menu" aria-label="Compte @${esc(h)}" title="@${esc(h)}">
       ${avHtml}
-      <div class="profile-chip-info">
-        <span class="profile-chip-handle">@${esc(h)}</span>
-        ${appState.me.name ? `<span class="profile-chip-name">${esc(appState.me.name)}</span>` : ""}
-      </div>
       <span class="chip-notif-dot" id="chip-notif-dot" ${unread ? "" : "hidden"}>${unread || ""}</span>
     </button>
     <div class="profile-menu" id="profile-menu" role="menu">
-      <button class="pmenu-item" id="pmenu-profil" role="menuitem" type="button">${icon("user", 15)} Mon profil</button>
-      <button class="pmenu-item" id="pmenu-premium" role="menuitem" type="button">${icon("sparkles", 15)} Mes Espaces</button>
+      <div class="pmenu-header" role="presentation">
+        <span class="pmenu-handle">@${esc(h)}</span>
+        ${appState.me.name ? `<span class="pmenu-name">${esc(appState.me.name)}</span>` : ""}
+      </div>
+      <div class="pmenu-sep" role="separator"></div>
       <button class="pmenu-item" id="pmenu-theme" role="menuitem" type="button">${storedTheme() === "light" ? icon("moon", 15) + " Mode sombre" : icon("sun", 15) + " Mode clair"}</button>
-      <button class="pmenu-item" id="pmenu-notifs" role="menuitem" type="button">${icon("bell", 15)} Notifications</button>
       <button class="pmenu-item" id="pmenu-options" role="menuitem" type="button">${icon("settings", 15)} Options</button>
       <div class="pmenu-sep" role="separator"></div>
       <button class="pmenu-item pmenu-danger" data-action="logout" role="menuitem" type="button">${icon("key", 15)} ${t("nav_logout")}</button>
@@ -1851,8 +1951,17 @@ function miloTourStepHtml(body) {
 // l'animation GSAP se poser avant que Shepherd ne (re)positionne la bulle.
 function tourGoto(label) {
   return new Promise((resolve) => {
-    const i = deckState.cols.findIndex((c) => c.dataset.deckLabel === label);
-    if (i >= 0 && deckState.go) deckState.go(i);
+    // « Identité » (Mon profil) et « Notifications » sont désormais des panneaux du
+    // Compte : on ouvre la colonne Compte puis l'onglet correspondant.
+    const panelTab = label === "Identité" ? "profil" : label === "Notifications" ? "notifs" : null;
+    if (panelTab) {
+      const ci = deckState.cols.findIndex((c) => c.querySelector(".acc-rail"));
+      if (ci >= 0 && deckState.go) deckState.go(ci);
+      document.querySelector(`.opt-tab[data-tab="${panelTab}"]`)?.click();
+    } else {
+      const i = deckState.cols.findIndex((c) => c.dataset.deckLabel === label);
+      if (i >= 0 && deckState.go) deckState.go(i);
+    }
     setTimeout(resolve, 430);
   });
 }
@@ -2258,6 +2367,7 @@ function openCreate() {
         publicUrl: `/@${r.handle}`,
         privateUrl: `/k/${encodeURIComponent(r.accessKey)}`,
         accessKey: r.accessKey,
+        hasEmail: !!email.trim(),
       });
     } catch (err) {
       errEl.textContent = err.message;
@@ -2279,10 +2389,20 @@ function showCreated(overlay, r) {
       <label>Lien privé (avec la clé)</label>
       <div class="url-row"><code>${esc(origin + r.privateUrl)}</code><button class="btn copy" data-copy="${esc(origin + r.privateUrl)}">Copier</button></div>
       <p class="warn">⚠ Sauvegardez ce lien privé maintenant.</p>
+      ${r.hasEmail ? "" : `<p class="warn">⚠ Vous n'avez pas indiqué d'email de récupération : <strong>si vous perdez ce lien, il sera impossible de retrouver vos données.</strong> Vous pourrez en ajouter un plus tard dans « Compte ».</p>`}
 
-      <div class="actions">
-        ${hasPasskey ? `<button type="button" class="btn" id="cr-passkey">${icon("shield",15)} Créer une passkey</button>` : ""}
-        <a class="btn primary" href="${esc(r.privateUrl)}">Éditer ma page →</a>
+      ${hasPasskey ? `
+      <div class="cr-passkey-cta" id="cr-passkey-cta">
+        <div class="cr-passkey-head">${icon("shield", 18)} <strong>Sécurisez votre accès avec une passkey</strong></div>
+        <p class="hint">Empreinte, Face ID ou code de l'appareil — vous vous reconnecterez sans avoir à retenir le lien privé. Fortement recommandé.</p>
+        <div class="cr-passkey-actions">
+          <button type="button" class="btn primary" id="cr-passkey">${icon("shield", 15)} Créer une passkey</button>
+          <button type="button" class="btn ghost sm" id="cr-skip-passkey">Plus tard</button>
+        </div>
+      </div>` : ""}
+
+      <div class="actions cr-continue" id="cr-continue"${hasPasskey ? " hidden" : ""}>
+        <a class="btn primary" href="${esc(r.privateUrl)}">Continuer →</a>
       </div>
     </div>`;
   overlay.querySelectorAll(".copy").forEach((b) =>
@@ -2291,6 +2411,19 @@ function showCreated(overlay, r) {
       toast(t("msg_copied"));
     })
   );
+
+  // Révèle le bouton « Continuer » et lui donne le focus. Appelé une fois la passkey
+  // créée OU refusée/différée — « Éditer ma page » était trop technique pour le grand
+  // public : on guide d'abord vers la passkey, puis vers la suite.
+  const continueRow = overlay.querySelector("#cr-continue");
+  const revealContinue = () => {
+    if (!continueRow) return;
+    continueRow.hidden = false;
+    continueRow.querySelector("a")?.focus();
+  };
+
+  overlay.querySelector("#cr-skip-passkey")?.addEventListener("click", revealContinue);
+
   overlay.querySelector("#cr-passkey")?.addEventListener("click", async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true;
@@ -2308,11 +2441,19 @@ function showCreated(overlay, r) {
         headers: { "Content-Type": "application/json", "x-access-key": r.accessKey },
         body: JSON.stringify({ name: "Ma première passkey", response }),
       });
+      // Succès : le bouton passe en état « fait » (secondaire), on retire « Plus tard »
+      // et on révèle « Continuer ».
+      btn.classList.remove("primary");
+      btn.disabled = true;
       btn.innerHTML = `${icon("shield",15)} Passkey créée ✓`;
+      overlay.querySelector("#cr-skip-passkey")?.remove();
+      revealContinue();
     } catch (err) {
       if (err.name !== "NotAllowedError") toast(err.message || "Annulé");
       btn.disabled = false;
       btn.innerHTML = `${icon("shield",15)} Créer une passkey`;
+      // Refus/annulation : on n'insiste pas, on laisse continuer (et réessayer si besoin).
+      revealContinue();
     }
   });
 }
@@ -4371,19 +4512,23 @@ function eventCardHtml(e, editable, now) {
   const t0 = fmtHm(start);
   const t1 = fmtHm(end);
   const isLive = e.kind === "live";
+  // Événement reçu via invitation acceptée : lecture seule (jointure virtuelle, il
+  // appartient à l'organisateur), badgé « Invité par @x » et sans actions d'édition.
+  const invited = e.invited_by ? String(e.invited_by) : "";
   const meta = [
     isLive ? `<span class="ev-live-tag">${icon("users", 12)}Live</span>` : "",
+    invited ? `<span class="ev-invited">${icon("users", 12)}Invité par @${esc(invited)}</span>` : "",
     e.location ? `<span class="ev-loc">${icon("pin", 13)}${esc(e.location)}</span>` : "",
     e.link ? `<a class="ev-link" href="${esc(e.link)}" target="_blank" rel="noopener noreferrer" title="${esc(e.link)}">${icon("link", 13)}Lien</a>` : "",
-    editable && e.is_public === 0 ? `<span class="ev-private">${icon("lock", 12)}Privé</span>` : "",
+    editable && !invited && e.is_public === 0 ? `<span class="ev-private">${icon("lock", 12)}Privé</span>` : "",
   ].filter(Boolean).join("");
-  return `<article class="ev-card${past ? " past" : ""}${isLive ? " ev-card-live" : ""}">
+  return `<article class="ev-card${past ? " past" : ""}${isLive ? " ev-card-live" : ""}${invited ? " ev-card-invited" : ""}">
       <div class="ev-time"><span class="ev-t0">${esc(t0) || "—"}</span>${t1 ? `<span class="ev-t1">${esc(t1)}</span>` : ""}</div>
       <div class="ev-main">
         <div class="ev-title">${esc(e.title)}</div>
         ${meta ? `<div class="ev-meta">${meta}</div>` : ""}
       </div>
-      ${editable ? `<div class="ev-actions">
+      ${editable && !invited ? `<div class="ev-actions">
         <button type="button" class="ev-act" data-event-edit="${e.id}" title="Modifier" aria-label="Modifier « ${esc(e.title)} »">${icon("pencil", 15)}</button>
         <button type="button" class="ev-act danger" data-del-event="${e.id}" title="Supprimer" aria-label="Supprimer « ${esc(e.title)} »">${icon("trash", 15)}</button>
       </div>` : ""}
@@ -4847,4 +4992,4 @@ function initGdprBanner() {
 
 
 // Builders de vue + utilitaires partagés, consommés par editor/index.js (cycle assumé).
-export { PENDING_INVITE, connectSSE, eventsHtml, fmtUptime, footer, headerAccount, headerSearchHtml, localPrice, notifItemHtml, openMiloTourPicker, openQR, periodsListHtml, profileCardHtml, relItemHtml, relationsListHtml, setupMiloEyes, tagChipsHtml, wireHeaderSearch, wireProfileMenuBtn };
+export { PENDING_INVITE, avatarHtml, connectSSE, eventsHtml, fmtUptime, footer, headerAccount, headerSearchHtml, localPrice, notifItemHtml, openMiloTourPicker, openQR, periodsListHtml, profileCardHtml, relItemHtml, relationsListHtml, setupMiloEyes, tagChipsHtml, wireHeaderSearch, wireProfileMenuBtn };

@@ -8,6 +8,8 @@ import {
   getIdentityByHandle,
   searchIdentities,
   getEvents,
+  getAcceptedInviteEvents,
+  listMyInvites,
   getNotifications,
   unreadCount,
   getFields,
@@ -323,6 +325,10 @@ route.get("/api/me", async (c) => {
     },
     fields: await getFields(id.id, true),
     events: await getEvents(id.id, true),
+    // Invitations : events acceptés d'autrui (lecture seule, fusionnés à l'agenda) +
+    // invitations reçues en attente (à accepter/refuser dans l'onglet RDV).
+    invitedEvents: await getAcceptedInviteEvents(id.id),
+    myInvites: await listMyInvites(id.id),
     overrides: await getOverrides(id.id),
     relations: await getRelationsByDegree(id.id, 3),
     incoming: await getIncomingRelations(id.id),

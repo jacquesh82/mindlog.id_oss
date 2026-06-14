@@ -9,8 +9,23 @@ import { api, authHeaders } from "../net.js";
 import { esc, promptPassphrase, promptPin, toast } from "./dom.js";
 import { icon } from "./icons.js";
 
+// Garde anti-doublon : renderPrivate peut relancer la séquence E2E plusieurs fois
+// par chargement (cache PIM → /api/me → clé fraîche). Sans verrou, on empile
+// plusieurs `.overlay` plein écran ; la modale OBLIGATOIRE n'ayant ni croix ni
+// fermeture au clic extérieur, le doublon du dessous bloque TOUS les clics de
+// l'app (deck inutilisable). Le flag est synchrone : il barre la 2ᵉ entrée avant
+// même les `await` (ensureE2E / passkeys) qui précèdent l'insertion du DOM.
+let _e2eBackupOpen = false;
+
 export async function openE2eBackup(handle, accessKey, onDone, opts = {}) {
-  await ensureE2E(handle, accessKey);
+  if (_e2eBackupOpen) return; // une seule modale de coffre à la fois
+  _e2eBackupOpen = true;
+  try {
+    await ensureE2E(handle, accessKey);
+  } catch (e) {
+    _e2eBackupOpen = false;
+    throw e;
+  }
   const mandatory = !!opts.mandatory;
   // Une passkey est-elle enregistrée sur ce compte ? (chemin PRF « 1 geste »)
   let hasPasskey = false;
@@ -40,7 +55,7 @@ export async function openE2eBackup(handle, accessKey, onDone, opts = {}) {
       </div>
     </div>`;
   document.body.appendChild(overlay);
-  const close = () => overlay.remove();
+  const close = () => { overlay.remove(); _e2eBackupOpen = false; };
   if (!mandatory) {
     overlay.querySelector("#eb-x").onclick = close;
     overlay.addEventListener("click", (e) => e.target === overlay && close());

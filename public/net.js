@@ -18,6 +18,10 @@ export const jsonAuth = () => ({ "Content-Type": "application/json", ...authHead
 export async function api(path, opts = {}) {
   const res = await fetch(path, opts);
   const data = res.status === 204 ? null : await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.error || res.statusText);
+  if (!res.ok) {
+    const err = new Error(data?.error || res.statusText);
+    err.status = res.status; // permet de distinguer les cas (403 accès, 402 premium…)
+    throw err;
+  }
   return data;
 }

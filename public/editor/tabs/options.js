@@ -47,11 +47,6 @@ export function renderOptionsColumn(data) {
           ${mkToggle("allow_call",  "Appels audio", "Autoriser les appels entrants pair-à-pair.",  s.allow_call)}
           ${mkToggle("allow_video", "Vidéo",        "Autoriser les appels vidéo.",                 s.allow_video !== false)}
         </div>
-        <p class="lbl-sm" style="margin:.8rem 0 .3rem">Contacts & groupes</p>
-        <div style="display:flex;gap:.4rem;flex-wrap:wrap">
-          <button class="btn sm" id="gen-invite2">${icon("link", 13)} Inviter un contact</button>
-          <button class="btn sm" id="open-groups2">Groupes 👥</button>
-        </div>
       </div>
 
       <div class="opt-v2-block">

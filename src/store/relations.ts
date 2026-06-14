@@ -51,6 +51,21 @@ export async function getIncomingRelations(identityId: number): Promise<Relation
   }));
 }
 
+/** IDs des contacts MUTUELS de l'identité (relation réciproque dans les deux sens).
+ *  Sert au fan-out de la notif d'anniversaire (on ne prévient que les vrais contacts). */
+export async function getMutualContactIds(identityId: number): Promise<number[]> {
+  const res = await db.execute(sql`
+    SELECT r.related_id AS id
+      FROM relations r
+     WHERE r.identity_id = ${identityId}
+       AND EXISTS (
+         SELECT 1 FROM relations r2
+          WHERE r2.identity_id = r.related_id AND r2.related_id = ${identityId}
+       )
+  `);
+  return (res.rows as { id: number }[]).map((r) => r.id);
+}
+
 export async function summariesByIds(ids: number[]): Promise<Map<number, RelationSummary>> {
   const map = new Map<number, RelationSummary>();
   if (!ids.length) return map;

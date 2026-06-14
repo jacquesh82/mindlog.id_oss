@@ -3,7 +3,7 @@
 // Importe le socle (core/state/deck/host/ui/crypto) ; quelques builders de vue
 // partagés avec landing/profil viennent de ../app.js (cycle assumé, usage runtime).
 // Extrait verbatim de app.js. cf. docs/web-app-split-proposal.md
-import { PENDING_INVITE, connectSSE, eventsHtml, footer, headerAccount, headerSearchHtml, notifItemHtml, openMiloTourPicker, openQR, periodsListHtml, profileCardHtml, relItemHtml, relationsListHtml, tagChipsHtml, wireHeaderSearch, wireProfileMenuBtn } from "../app.js";
+import { PENDING_INVITE, connectSSE, eventsHtml, footer, headerAccount, notifItemHtml, openMiloTourPicker, openQR, periodsListHtml, profileCardHtml, relItemHtml, relationsListHtml, tagChipsHtml, wireProfileMenuBtn } from "../app.js";
 import { DEFAULT_SETTINGS, DOW_LETTERS, DOW_NAMES, TOUR_SEEN_KEY, app, myHandle, myKey, normalizeAvailability, pick, relDate, setLastHandle, setMeProfile, setSessionHint, setStoredHandle, setStoredKey, storedHandle, storedKey, viewerHeaders } from "../core.js";
 import { e2eDecrypt, e2eEncrypt, ensureE2E } from "../crypto/e2e.js";
 import { mdDeviceId } from "../crypto/multidevice.js";
@@ -961,12 +961,18 @@ export function renderEditor(data) {
   // Charge par jour pour la heatmap du calendrier (événements + RDV acceptés).
   const dayLoad = dayLoadMap(data);
 
+  // « Mon profil » (édition de la carte) et « Notifications » ne sont plus des
+  // colonnes du deck : leur contenu est intégré comme PANNEAUX du Compte (sous-menu
+  // conservé). On les construit ici et on les passe à renderAccountColumn.
+  const profileHtml = renderIdentityColumn(data, { photo, fieldEditHtml, socialEditHtml });
+  const notifsHtml = renderNotificationsColumn(data, { notifListHtml });
+  // « Mes espaces » (gestion premium / upsell) : même contenu que la page /me/premium,
+  // embarqué comme panneau du Compte (câblage paresseux via wirePremiumPage au 1er clic).
+  const espacesHtml = renderPremiumPage(data);
   const cols = [
-    renderAccountColumn(data, { photo }),
-    renderIdentityColumn(data, { photo, fieldEditHtml, socialEditHtml }),
+    renderAccountColumn(data, { photo, profileHtml, notifsHtml, espacesHtml }),
     renderAgendaColumn(data, { reqFilterChips, requestsHtml, dayLoad }),
     renderRelationsColumn(data, { incomingListHtml }),
-    renderNotificationsColumn(data, { notifListHtml }),
   ];
 
   // Colonnes cœur + colonnes contribuées par les plugins (registre). Le tri par
@@ -1040,6 +1046,10 @@ export function renderEditor(data) {
         <button type="button" class="comm-rail-btn" id="comm-rail-live" role="tab" aria-selected="false" aria-controls="comm-view-live" title="Live" aria-label="Live">
           ${icon("radio", 22)}<span class="comm-rail-label">Live</span>
         </button>
+        <button type="button" class="comm-rail-btn" id="comm-rail-relations" role="tab" aria-selected="false" aria-controls="comm-view-relations" title="Relations" aria-label="Demandes de relation">
+          ${icon("bell", 22)}<span class="comm-rail-label">Relations</span>
+          <span class="comm-rail-badge" id="comm-rail-relations-badge" ${data.incoming?.length ? "" : "hidden"}>${data.incoming?.length || ""}</span>
+        </button>
       </nav>
       <div class="comm-sidebar">
         <div class="comm-topbar" id="comm-topbar">
@@ -1072,6 +1082,13 @@ export function renderEditor(data) {
             <div class="comm-empty-state"><p>Chargement…</p></div>
           </div>
         </div>
+        <!-- Vue Relations : demandes entrantes à réciproquer (simplifie la réciprocité). -->
+        <div class="comm-view" id="comm-view-relations" role="tabpanel" aria-labelledby="comm-rail-relations" hidden>
+          <div class="comm-relations-host">
+            <p class="lbl-sm comm-relations-intro">Des personnes vous ont ajouté en relation. Réciproquez pour devenir contacts et pouvoir échanger.</p>
+            <ul class="rels comm-relations-list" id="comm-relations-list">${incomingListHtml(data.incoming || [])}</ul>
+          </div>
+        </div>
       </div>
       <div class="comm-right" id="comm-right">${appState.commEmptyHtml}</div>
     </div>
@@ -1079,8 +1096,10 @@ export function renderEditor(data) {
 
   // Ordre du menu (communication d'abord) : Accueil · Chat · Notifs · Réseau ·
   // Mon ID · Galerie (plugin, order 45) · Agenda · Options (réglages, en dernier).
-  const coreOrders = [5, 40, 50, 30, 20, 60, 10];
-  const coreLabels = ["Compte", "Identité", "Agenda", "Relations", "Notifications", "Options", "Chat"];
+  // cols = [Compte, Agenda, Relations] (+ optCol, commColHtml). Profil & Notifs sont
+  // désormais des panneaux DANS Compte, plus des colonnes.
+  const coreOrders = [5, 50, 30, 60, 10];
+  const coreLabels = ["Compte", "Agenda", "Relations", "Options", "Chat"];
   const allCols = (() => {
     const list = [...cols, optCol, commColHtml]
       .map((html, i) => ({ order: coreOrders[i], label: coreLabels[i], html }))
@@ -1114,8 +1133,12 @@ export function renderEditor(data) {
   app.setAttribute("data-view", "private");
   app.innerHTML = `
    ${siteHeader({
+     // Logo → accueil de l'app (vue connectée), pas la landing publique.
+     brandHref: "/me",
      left: `<a class="btn sm topbar-publink" href="/@${esc(data.handle)}" target="_blank" rel="noopener noreferrer">${icon("link", 13)} <span class="topbar-publink-label">Ouvrir ma page</span></a>`,
-     center: headerSearchHtml(),
+     // Recherche d'identités retirée du header : la découverte/ajout de contacts se
+     // fait désormais dans Réseau → Ajouter (sous-menu dédié), header allégé.
+     center: "",
      right: `<button class="btn sm notif-wrap" id="notif-bell" aria-label="Notifications" style="display:none"><span class="notif-badge" id="notif-badge" ${data.unread ? "" : "hidden"}>${data.unread || ""}</span></button>
        ${headerAccount(data.unread || 0)}`,
    })}
@@ -1127,7 +1150,9 @@ export function renderEditor(data) {
    <nav class="bottom-nav" id="bottom-nav" aria-label="Navigation principale">
      ${(() => {
        const chatUnread = (data.conversations || []).reduce((s, cv) => s + (cv.messages || []).filter(m => !m.mine && m.read === 0).length, 0);
-       const unreadFor = (label) => label === "Notifications" ? (data.unread || 0) : (label === "Chat" ? chatUnread : 0);
+       // Les notifications vivent sous « Compte » (panneau Notifs) → leur compteur
+       // non-lus s'affiche sur l'entrée Compte de la barre du bas.
+       const unreadFor = (label) => label === "Compte" ? (data.unread || 0) : (label === "Chat" ? chatUnread : 0);
        // Refonte 2026 — barre directe (sans menu « Plus ») : Accueil · Chat ·
        // Réseau · Agenda · Galerie · Options. « Mon ID » (Identité) est accessible
        // depuis l'Accueil (« Modifier ma carte ») ; les Notifications via la cloche
@@ -1160,7 +1185,6 @@ export function renderEditor(data) {
      })()}
    </nav>`;
   wireEditor(data);
-  wireHeaderSearch();
   wireProfileMenuBtn();
   applyTheme(document.documentElement.getAttribute("data-theme") || "dark"); // pose l'icône sur le bouton fraîchement rendu
   setupTabs();
@@ -1693,11 +1717,16 @@ export function fieldEditHtml(f) {
   const vis = f.visibility || (f.is_public ? "public" : "private");
   const opt = (v, label) => `<option value="${v}" ${vis === v ? "selected" : ""}>${label}</option>`;
   const isEnc = typeof f.value === "string" && f.value.startsWith("e2e:");
-  const canDelete = f.is_custom;
+  // « birthday » est un attribut permanent (date de naissance) : non supprimable.
+  const canDelete = f.is_custom && f.key !== "birthday";
+  // Date de naissance : sélecteur de date natif (clé canonique « birthday »,
+  // valeur ISO YYYY-MM-DD). Si la valeur est chiffrée E2E (champ non public), le
+  // déchiffrement à l'affichage remplit l'input dans wireFieldRow.
+  const isBirthday = f.key === "birthday";
   return `
     <div class="edit-field" data-key="${esc(f.key)}">
       <span class="lbl">${esc(f.label)}</span>
-      <input class="fv" value="${isEnc ? "" : esc(f.value)}" placeholder="${isEnc ? "Chiffré…" : "—"}" data-enc="${isEnc ? esc(f.value) : ""}" />
+      <input class="fv" ${isBirthday ? 'type="date"' : ""} value="${isEnc ? "" : esc(f.value)}" placeholder="${isEnc ? "Chiffré…" : "—"}" data-enc="${isEnc ? esc(f.value) : ""}" />
       <select class="fvis vis-${vis}" title="Visibilité" aria-label="Visibilité de ${esc(f.label)}">
         ${opt("public", "Public")}${opt("contact", "Contact")}${opt("private", "Privé")}
       </select>
@@ -1706,6 +1735,27 @@ export function fieldEditHtml(f) {
 }
 
 export function wireEditor(data) {
+  // Logo (haut-gauche) → retour à l'app (vue par défaut), en conservant l'auth
+  // (clé /k/… ou cookie) et sans rechargement complet. On intercepte l'ancre du
+  // header (href=/me) pour rester dans la SPA même en session par clé.
+  app.querySelector(".brand")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    renderPrivate(appState.key);
+  });
+
+  // Navigation deck par élément propre à une colonne (robuste au libellé/accent).
+  const goColWith = (sel) => {
+    const cols = [...document.querySelectorAll("#deck .col")];
+    const i = cols.findIndex((c) => c.querySelector(sel));
+    if (i >= 0 && deckState.go) deckState.go(i);
+  };
+  // Ouvre la colonne Compte ET active un de ses panneaux (profil / notifs / …).
+  // Profil et Notifications sont des PANNEAUX du Compte (le sous-menu reste affiché).
+  const goCompteTab = (tab) => {
+    goColWith(".acc-rail"); // la colonne Compte contient le rail .acc-rail
+    app.querySelector(`.opt-tab[data-tab="${tab}"]`)?.click();
+  };
+
   // Retaille une image pour qu'elle tienne dans 320×320 (ratio préservé, sans
   // déformation) avant l'envoi. Best-effort : en cas d'échec on garde l'original.
   const resizePhoto = async (blob, max = 320) => {
@@ -1856,6 +1906,33 @@ export function wireEditor(data) {
     app.querySelector(`.edit-field[data-key="${CSS.escape(key)}"] .fv`)?.focus();
   });
 
+  // Notif d'anniversaire — déclenchée par le POSTE DE L'OWNER (le serveur ne connaît
+  // pas la date, potentiellement chiffrée E2E). Si aujourd'hui correspond à MA date
+  // de naissance, je demande au serveur de prévenir mes contacts mutuels. Dédup
+  // serveur once/an + garde sessionStorage pour ne pas réémettre à chaque rendu.
+  void (async () => {
+    try {
+      const bf = (data.fields || []).find((f) => f.key === "birthday");
+      if (!bf || !bf.value) return;
+      let val = bf.value;
+      if (typeof val === "string" && val.startsWith("e2e:") && E2E.priv && E2E.pubStr) {
+        const [, iv, ct] = val.split(":");
+        val = (await e2eDecrypt(E2E.pubStr, iv, ct)) || "";
+      }
+      const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(val);
+      if (!m) return;
+      const now = new Date();
+      const mm = String(now.getMonth() + 1).padStart(2, "0");
+      const dd = String(now.getDate()).padStart(2, "0");
+      if (m[1] !== mm || m[2] !== dd) return;
+      const year = now.getFullYear();
+      const guard = `bday-announced-${year}`;
+      if (sessionStorage.getItem(guard)) return;
+      const r = await api("/api/birthday/announce", { method: "POST", headers: jsonAuth(), body: JSON.stringify({ year }) }).catch(() => null);
+      if (r) sessionStorage.setItem(guard, "1");
+    } catch { /* best-effort */ }
+  })();
+
   // Intro du profil (OSS, autosave) : texte Markdown au-dessus de la bio sur
   // /@handle. Stockage `identities.profile_intro_md` (migration 0032). Pré-rempli
   // côté template à partir de `data.profile_intro_md` ; sauvegarde débouncée à
@@ -1864,12 +1941,12 @@ export function wireEditor(data) {
   const introStatus = app.querySelector("#sp-profile-intro-status");
   if (introTa) {
     // Deep-link depuis /@handle (CTA « Définir mon intro ») : si l'URL arrive
-    // avec #intro, on bascule le deck sur la colonne Identité (où vit la
-    // textarea Markdown) PUIS on scroll/focus. Sans le deckGoLabel, la
-    // textarea est dans une colonne non active → focus invisible.
+    // avec #intro, on ouvre le panneau « Profil » du Compte (où vit la textarea
+    // Markdown) PUIS on scroll/focus. Sans ça, la textarea est dans un panneau
+    // masqué → focus invisible.
     if (location.hash === "#intro") {
       const focusIntro = () => {
-        try { window.__deckGoLabel?.("Identité"); } catch {}
+        try { goCompteTab("profil"); } catch {}
         // Laisse le temps à la transition de colonne avant de scroller.
         setTimeout(() => {
           introTa.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1924,11 +2001,14 @@ export function wireEditor(data) {
   // (calendrier + liste « Mes événements »), sans recharger tout l'éditeur : on
   // conserve la vue (Jour/Semaine/Mois) et le scroll courants. `data.events` est
   // la source de vérité locale, mutée par onSaved/onDeleted.
+  // Agenda affiché = mes événements + ceux d'autrui dont j'ai accepté l'invitation
+  // (lecture seule, badgés « Invité par @x » via leur champ invited_by).
+  const agendaEvents = () => [...(data.events || []), ...(data.invitedEvents || [])];
   const refreshAgenda = () => {
     const fill = app.querySelector(".calendar-fill");
-    if (fill) fill.innerHTML = host.calendar.html(data.overrides || {}, true, dayLoadMap(data), false, data.events || []);
+    if (fill) fill.innerHTML = host.calendar.html(data.overrides || {}, true, dayLoadMap(data), false, agendaEvents());
     const list = app.querySelector(".agenda-events");
-    if (list) list.innerHTML = eventsHtml(data.events, true);
+    if (list) list.innerHTML = eventsHtml(agendaEvents(), true);
     wireAgenda();
   };
   const onSaved = (saved) => {
@@ -1942,7 +2022,12 @@ export function wireEditor(data) {
     data.events = (data.events || []).filter((e) => String(e.id) !== String(eventId));
     refreshAgenda();
   };
-  const modalOpts = () => ({ liveAvailable: _liveAvailable, onSaved, onDeleted });
+  // Contacts proposés à l'invitation : relations DIRECTES (sortantes) = degré 1.
+  // getRelationsByDegree renvoie un objet { 1:[…], 2:[…], 3:[…] }, pas un tableau.
+  // Le serveur revalide la relation de toute façon.
+  const _inviteContacts = (data.relations?.[1] || [])
+    .map((r) => ({ handle: r.handle, name: r.display_name || r.handle }));
+  const modalOpts = () => ({ liveAvailable: _liveAvailable, onSaved, onDeleted, contacts: _inviteContacts });
 
   // Câblage (ré-appliqué à chaque refreshAgenda, car le DOM agenda est régénéré).
   function wireAgenda() {
@@ -1979,7 +2064,7 @@ export function wireEditor(data) {
       data.handle,
       dayLoadMap(data),
       false,
-      data.events || [],
+      agendaEvents(),
       (ev) => openEventModal(ev, modalOpts()),
     );
     calEl?.addEventListener("calendar:newAt", (e) => {
@@ -1988,6 +2073,31 @@ export function wireEditor(data) {
     });
   }
   wireAgenda();
+
+  // RSVP des invitations reçues : Accepter / Refuser. Câblé UNE fois (le bloc
+  // .invites-recv n'est pas régénéré par refreshAgenda, contrairement à la liste).
+  const respondInvite = async (eventId, accept) => {
+    try {
+      await api(`/api/agenda/invite/${encodeURIComponent(eventId)}/respond`, {
+        method: "POST", headers: jsonAuth(), body: JSON.stringify({ accept }),
+      });
+    } catch (e) { return toast(e?.message || "Échec."); }
+    // Retire l'invitation de l'état local + de l'UI.
+    const inv = (data.myInvites || []).find((iv) => String(iv.event.id) === String(eventId));
+    data.myInvites = (data.myInvites || []).filter((iv) => String(iv.event.id) !== String(eventId));
+    app.querySelector(`.invite-card[data-invite-event="${CSS.escape(String(eventId))}"]`)?.remove();
+    if (!app.querySelector(".invite-card")) app.querySelector(".invites-recv")?.remove();
+    if (accept && inv) {
+      // L'événement accepté rejoint l'agenda (lecture seule, badgé « Invité par @x »).
+      (data.invitedEvents ||= []).push({ ...inv.event, invited_by: inv.organizer_handle });
+      refreshAgenda();
+    }
+    toast(accept ? "Invitation acceptée 🦎" : "Invitation refusée");
+  };
+  app.querySelectorAll("[data-invite-accept]").forEach((b) =>
+    b.addEventListener("click", () => respondInvite(b.dataset.inviteAccept, true)));
+  app.querySelectorAll("[data-invite-decline]").forEach((b) =>
+    b.addEventListener("click", () => respondInvite(b.dataset.inviteDecline, false)));
 
   // Aperçu façon téléphone (colonne Accueil) : swipe entre Accueil / Calendrier /
   // Galerie + pastilles de pagination, et montage de la vraie galerie (plugin).
@@ -2057,26 +2167,8 @@ export function wireEditor(data) {
       host.openDeckColumn = ({ html, wire }) => {
         commRight.innerHTML = html;
         wire?.(commRight); // wireChat a besoin que #ch-close existe dans le DOM
-        // Ajouter le bouton Appel vidéo à droite du bouton Envoyer dans le formulaire
-        const form = commRight.querySelector("#ch-form");
-        if (form && !form.querySelector("#comm-call-btn")) {
-          const placeCall = async () => {
-            try {
-              const p = await api(`/api/identities/${encodeURIComponent(h)}`, { headers: authHeaders() });
-              if (!p.pubkey) return toast("Appels non disponibles pour ce contact.");
-              if (host.call) host.call.start(h, p.pubkey, { video: true });
-            } catch { toast("Impossible de joindre ce contact."); }
-          };
-          const b = document.createElement("button");
-          b.type = "button";
-          b.id = "comm-call-btn";
-          b.className = "btn";
-          b.title = "Appeler (vidéo activable pendant l'appel)";
-          b.setAttribute("aria-label", "Appeler");
-          b.innerHTML = icon("phone", 18);
-          b.addEventListener("click", placeCall);
-          form.appendChild(b);
-        }
+        // Le bouton d'appel (#ch-call) est désormais rendu et câblé par chat.js sur la
+        // rangée d'actions — présent quel que soit le mode d'ouverture (plus d'injection ici).
         return commRight;
       };
       host.closeDeckColumn = (col) => {
@@ -2103,11 +2195,13 @@ export function wireEditor(data) {
       chats: app.querySelector("#comm-rail-chats"),
       groups: app.querySelector("#comm-rail-groups"),
       live: app.querySelector("#comm-rail-live"),
+      relations: app.querySelector("#comm-rail-relations"),
     };
     const views = {
       chats: app.querySelector("#comm-view-chats"),
       groups: app.querySelector("#comm-view-groups"),
       live: app.querySelector("#comm-view-live"),
+      relations: app.querySelector("#comm-view-relations"),
     };
     const topbarTitle = app.querySelector("#comm-topbar-title");
     let activeMode = "chats";
@@ -2117,15 +2211,17 @@ export function wireEditor(data) {
       chats: "Rechercher un contact…",
       groups: "Rechercher un groupe…",
       live: "Rechercher un live…",
+      relations: "",
     };
     const titles = {
       chats: `${icon("chat", 16)} Discussions`,
       groups: `${icon("users", 16)} Groupes`,
       live: `${icon("radio", 16)} Live`,
+      relations: `${icon("bell", 16)} Relations`,
     };
-    // Live n'a pas de recherche utile (peu d'items en simultané) — on masque le champ.
-    const searchHiddenIn = new Set(["live"]);
-    // Action du bouton ＋ par mode — libellé + action effective.
+    // Live et Relations n'ont pas de recherche utile → on masque le champ.
+    const searchHiddenIn = new Set(["live", "relations"]);
+    // Action du bouton ＋ par mode — libellé + action effective (Relations : aucune).
     const newAction = {
       chats: { label: "Nouvelle discussion", run: () => openContactPicker("chat") },
       groups: { label: "Nouveau groupe", run: () => openNewGroupFormInline() },
@@ -2284,6 +2380,12 @@ export function wireEditor(data) {
         if (views[k]) views[k].hidden = k !== mode;
       }
       if (topbarTitle) topbarTitle.innerHTML = titles[mode];
+      // En mode Live, le plugin live.js fournit son propre en-tête (« Live » + intro),
+      // sa recherche et sa CTA « Démarrer un live » → le comm-topbar (titre + ＋) ferait
+      // doublon : on le masque pour ce mode.
+      // display inline (le CSS .comm-topbar { display:flex } l'emporterait sur [hidden]).
+      const topbar = app.querySelector("#comm-topbar");
+      if (topbar) topbar.style.display = mode === "live" ? "none" : "";
       const searchWrap = app.querySelector(".comm-search-wrap");
       const search = app.querySelector("#comm-search");
       if (searchWrap) searchWrap.hidden = searchHiddenIn.has(mode);
@@ -2292,6 +2394,7 @@ export function wireEditor(data) {
         const a = newAction[mode];
         commNewBtn.title = a?.label || "";
         commNewBtn.setAttribute("aria-label", a?.label || "");
+        commNewBtn.style.display = a ? "" : "none"; // pas de ＋ pour Relations (aucune action)
       }
       if (mode === "groups" && !groupsLoaded) refreshGroupsSidebar();
       if (mode === "live" && !liveLoaded) loadLiveView();
@@ -2300,6 +2403,7 @@ export function wireEditor(data) {
     railBtns.chats?.addEventListener("click", () => setMode("chats"));
     railBtns.groups?.addEventListener("click", () => setMode("groups"));
     railBtns.live?.addEventListener("click", () => setMode("live"));
+    railBtns.relations?.addEventListener("click", () => setMode("relations"));
     // ＋ contextuel : dispatch selon le mode actif (newAction).
     commNewBtn?.addEventListener("click", () => newAction[activeMode]?.run?.());
     /* Live : récupère le descripteur de colonne contribué par le plugin live.js
@@ -2636,8 +2740,6 @@ export function wireEditor(data) {
   wireAlias("#save-rec2",         "#save-rec");
   wireAlias("#logout-btn2",       "#logout-btn");
   wireAlias("#logout-all-btn2",   "#logout-all-btn");
-  wireAlias("#gen-invite2",       "#gen-invite");
-  wireAlias("#open-groups2",      "#open-groups");
   wireAlias("#e2e-passkey-save2", "#e2e-passkey-save");
   wireAlias("#e2e-pin-save2",     "#e2e-pin-save");
   wireAlias("#e2e-pass-save2",    "#e2e-pass-save");
@@ -2755,11 +2857,15 @@ export function wireEditor(data) {
     setTimeout(tryOpen, 1300);
   }
 
-  // Stats + liens "Voir tout" de la home → navigation par data-goto
+  // Stats + liens "Voir tout" du Compte → navigation par data-goto. « Notifications »
+  // est désormais un panneau du Compte (pas une colonne) → on ouvre l'onglet.
   app.querySelectorAll(".hm-stat[data-goto], .hm-section-title a[data-goto], .hm-requests-banner[data-goto]").forEach(el => {
     el.addEventListener("click", (e) => {
       e.preventDefault();
+      e.stopPropagation();
       const label = el.dataset.goto;
+      if (label === "Notifications") { goCompteTab("notifs"); return; }
+      if (label === "Identité") { goCompteTab("profil"); return; }
       const ci = deckState.cols.findIndex(c => c.dataset.deckLabel === label);
       if (ci >= 0 && deckState.go) deckState.go(ci);
     });
@@ -2777,10 +2883,9 @@ export function wireEditor(data) {
     api("/api/notifications/read", { method: "POST", headers: authHeaders() }).catch(() => {});
   };
   app.querySelector("#notif-bell")?.addEventListener("click", () => {
-    // Refonte 2026 : les Notifications ne sont plus dans la barre du bas (5
-    // entrées max) — la cloche du header est leur point d'accès. On ouvre la
-    // colonne « Notifications » par son label (robuste aux index dynamiques).
-    deckGoLabel("Notifications");
+    // La cloche du header ouvre le panneau Notifications, désormais intégré au
+    // Compte (sous-menu conservé).
+    goCompteTab("notifs");
     markRead();
   });
   app.querySelector("#notif-readall")?.addEventListener("click", markRead);
@@ -2917,14 +3022,24 @@ export function wireEditor(data) {
     });
   });
 
-  // Cliquer une relation ouvre sa page identité publique (/@handle) dans un
-  // NOUVEL onglet (target="_blank" sur l'ancre) — on laisse l'ancre agir.
+  // Clic sur une relation. Pour un CONTACT direct (degré 1) on ouvre sa page publique
+  // (/@handle, nouvel onglet — l'ancre agit). Pour une identité du réseau étendu
+  // (degré 2/3, pas encore reliée), on propose plutôt de l'AJOUTER aux contacts
+  // (choix Ami/Pro/Autre) — c'est l'action utile depuis le réseau découvert.
   // Listener posé sur la colonne Relations (recréée à chaque rendu → pas de doublon),
   // stopPropagation pour éviter le handler « sélectionner une colonne inactive ».
   app.querySelector("#rel-tabs")?.closest(".col")?.addEventListener("click", (e) => {
     const link = e.target.closest("a.rel-link");
     if (!link || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
     e.stopPropagation();
+    const li = link.closest(".rel");
+    const degree = li?.dataset.degree;
+    if (degree && degree !== "1") {
+      e.preventDefault();
+      const handle = decodeURIComponent((link.getAttribute("href") || "").replace(/^\/@/, ""));
+      const name = li.querySelector(".nm")?.textContent?.trim() || "";
+      if (handle) openAddContactChooser(handle, name);
+    }
   });
 
   // Chips degré + type de la colonne Relations
@@ -2940,28 +3055,38 @@ export function wireEditor(data) {
       filterRels();
     });
   });
-  // Bascule Liste / Graphe de la colonne Relations. Le graphe (réseau radial
-  // D1/D2/D3) est rendu d'avance, masqué ; pan/zoom câblé une seule fois au
-  // premier passage en vue graphe.
+  // Subrail Réseau : Liste · Graphe · Contacts (data-tab). Les panneaux sont rendus
+  // d'avance et masqués ; le graphe (réseau radial D1/D2/D3) câble son pan/zoom une
+  // seule fois, au premier passage en vue graphe.
   let _relGraphWired = false;
-  const relListPane = app.querySelector("#rel-list-pane");
-  const relGraphPane = app.querySelector("#rel-graph-pane");
-  app.querySelectorAll(".rel-view-tab").forEach((tab) => {
+  const relPanes = {
+    list: app.querySelector("#rel-list-pane"),
+    graph: app.querySelector("#rel-graph-pane"),
+    contacts: app.querySelector("#rel-contacts-pane"),
+    add: app.querySelector("#rel-add-pane"),
+  };
+  app.querySelectorAll(".rel-tab").forEach((tab) => {
     tab.addEventListener("click", () => {
-      const graph = tab.dataset.relview === "graph";
-      app.querySelectorAll(".rel-view-tab").forEach((t) => {
+      const view = tab.dataset.tab; // "list" | "graph" | "contacts" | "add"
+      app.querySelectorAll(".rel-tab").forEach((t) => {
         const on = t === tab;
         t.classList.toggle("active", on);
         t.setAttribute("aria-selected", on ? "true" : "false");
       });
-      if (relListPane) relListPane.hidden = graph;
-      if (relGraphPane) relGraphPane.hidden = !graph;
-      if (graph && !_relGraphWired && relGraphPane) {
-        wireRelationsGraph(relGraphPane, data);
+      for (const [k, pane] of Object.entries(relPanes)) if (pane) pane.hidden = k !== view;
+      if (view === "graph" && !_relGraphWired && relPanes.graph) {
+        wireRelationsGraph(relPanes.graph, data);
         _relGraphWired = true;
       }
+      if (view === "add") app.querySelector("#rel-add-q")?.focus();
     });
   });
+  // Carnet « Contacts » : bouton Discuter → ouvre la conversation 1:1 (le lien
+  // « Voir la carte » est une ancre native). Attribut distinct (data-cbook-chat)
+  // pour ne pas entrer en collision avec le data-contact-chat de la colonne profil.
+  app.querySelectorAll("[data-cbook-chat]").forEach((b) =>
+    b.addEventListener("click", () => host.chat.open(b.dataset.cbookChat, appState.key, data.handle))
+  );
   // Bannière demandes en attente
   app.querySelector("#rel-pending-toggle")?.addEventListener("click", () => {
     const panel = app.querySelector("#rel-pending-panel");
@@ -3005,6 +3130,15 @@ export function wireEditor(data) {
           void loadStorageConfig(app);
         }
       }
+      // « Mes espaces » : la page premium embarquée est câblée paresseusement au
+      // premier affichage (cover, boutons, pages payantes, facturation…).
+      if (id === "espaces") {
+        const panel = app.querySelector("#opt-espaces");
+        if (panel && !panel.dataset.wired) {
+          panel.dataset.wired = "1";
+          wirePremiumPage(panel, data);
+        }
+      }
     });
   });
 
@@ -3014,13 +3148,15 @@ export function wireEditor(data) {
   // Abonnement (Mon compte) : « 1 €/mois » démarre l'abonnement ; « Gérer » ouvre
   // la page dédiée « Espace Premium » (facturation + toutes les fonctions premium).
   app.querySelector("#opt-upgrade-btn")?.addEventListener("click", startCheckout);
-  app.querySelector("#opt-portal-btn")?.addEventListener("click", () => location.assign("/me/premium"));
+  // « Gérer » (bandeau premium) → ouvre le panneau « Espaces » du Compte (sous-menu
+  // conservé) plutôt que de naviguer vers la page plein écran /me/premium.
+  app.querySelector("#opt-portal-btn")?.addEventListener("click", () => app.querySelector('.opt-tab[data-tab="espaces"]')?.click());
 
-  // Avatar upload depuis l'onglet Compte.
-  app.querySelector("#acc-av-upload")?.addEventListener("change", async (ev) => {
-    const file = ev.target.files?.[0];
-    if (file) await uploadPhotoBlob(file);
-  });
+  // (L'upload d'avatar de l'ex-en-tête Compte a été retiré : il vit désormais sur
+  // l'avatar du panneau Profil — clic sur la photo → #photo-file, géré ci-dessous.)
+
+  // Profil, Notifs et Espaces sont désormais tous des panneaux (.opt-tab) du Compte,
+  // gérés par le handler d'onglets ci-dessus — plus aucune navigation à part.
 
   // Personnalisation Premium : couverture, boutons, pages payantes et facturation
   // vivent désormais sur la page dédiée « Espace Premium » (route /me/premium →
@@ -3571,81 +3707,92 @@ export function wireEditor(data) {
     }
   });
 
-  // Relations : ajouter (avec type) / retirer
-  // Autocomplete sur le champ @handle à relier
+  // Réseau → « Ajouter » : recherche annuaire (/api/search) → cartes résultat avec
+  // choix du type (Ami/Pro/Autre) + bouton Relier par personne. Remplace l'ancien
+  // champ « + Relier » étriqué et la recherche du header (retirée).
   {
-    const relHandle = app.querySelector("#rel-handle");
-    const relHandleResults = app.querySelector("#rel-handle-results");
-    let relHandleTimer;
-    const hideRelResults = () => { if (relHandleResults) relHandleResults.hidden = true; };
+    const addQ = app.querySelector("#rel-add-q");
+    const addResults = app.querySelector("#rel-add-results");
+    // Handles déjà reliés (degré 1) + soi-même → on n'affiche pas de bouton Relier.
+    const linked = new Set([data.handle, ...((data.relations?.[1] || []).map((r) => r.handle))]);
+    let addTimer;
 
-    relHandle?.addEventListener("input", () => {
-      clearTimeout(relHandleTimer);
-      const q = relHandle.value.trim();
-      if (!q) { hideRelResults(); return; }
-      relHandleTimer = setTimeout(async () => {
-        try {
-          const { results: list } = await api(`/api/search?q=${encodeURIComponent(q)}`);
-          if (!list?.length) { hideRelResults(); return; }
-          relHandleResults.innerHTML = list.map((r) => {
-            const initials = (r.name || r.handle).slice(0, 2).toUpperCase();
-            const avatar = r.photo
-              ? `<img class="rhr-av" src="${esc(r.photo)}" alt="" loading="lazy" />`
-              : `<span class="rhr-av">${esc(initials)}</span>`;
-            return `<button class="rel-handle-result" data-handle="${esc(r.handle)}" type="button">
-              ${avatar}
-              <span class="rhr-info">
-                <span class="nm">${esc(r.name || r.handle)}</span>
-                <span class="hd">@${esc(r.handle)}</span>
-              </span>
-            </button>`;
-          }).join("");
-          relHandleResults.hidden = false;
-        } catch { /* silencieux */ }
-      }, 200);
-    });
+    const renderAddResults = (list) => {
+      if (!addResults) return;
+      if (!list || !list.length) {
+        addResults.innerHTML = `<p class="empty" style="text-align:center;padding:1rem 0;opacity:.7">Aucun résultat.</p>`;
+        return;
+      }
+      addResults.innerHTML = list.map((r) => {
+        const initials = (r.name || r.handle).slice(0, 2).toUpperCase();
+        const av = r.photo
+          ? `<img class="av" src="${esc(r.photo)}" alt="" loading="lazy" />`
+          : `<span class="av">${esc(initials)}</span>`;
+        const isSelf = r.handle === data.handle;
+        const already = linked.has(r.handle);
+        return `<div class="rel-add-card" data-handle="${esc(r.handle)}">
+          <a class="contact-av-link" href="/@${encodeURIComponent(r.handle)}" target="_blank" rel="noopener noreferrer">${av}</a>
+          <div class="contact-info">
+            <div class="contact-name">${esc(r.name || r.handle)}</div>
+            <div class="contact-handle">@${esc(r.handle)}</div>
+          </div>
+          <div class="rel-add-actions">
+            ${isSelf ? `<span class="rel-add-done">Vous</span>`
+              : already ? `<span class="rel-add-done">✓ Ajouté</span>`
+              : `<select class="rel-add-type" aria-label="Type de lien">
+                   <option value="amis">Ami</option><option value="pro">Pro</option><option value="autre">Autre</option>
+                 </select>
+                 <button type="button" class="btn sm primary rel-add-btn">Ajouter</button>`}
+          </div>
+        </div>`;
+      }).join("");
+    };
 
-    relHandle?.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") hideRelResults();
-      if (e.key === "ArrowDown") {
-        const first = relHandleResults?.querySelector(".rel-handle-result");
-        first?.focus();
-        e.preventDefault();
+    const search = async () => {
+      const q = addQ.value.trim();
+      if (!q) {
+        addResults.innerHTML = `<p class="empty" style="text-align:center;padding:1rem 0;opacity:.7">Tapez un nom ou un @handle pour rechercher.</p>`;
+        return;
+      }
+      try {
+        const { results: list } = await api(`/api/search?q=${encodeURIComponent(q)}`);
+        renderAddResults(list);
+      } catch { /* silencieux */ }
+    };
+
+    addQ?.addEventListener("input", () => { clearTimeout(addTimer); addTimer = setTimeout(search, 200); });
+    addQ?.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); clearTimeout(addTimer); search(); } });
+
+    addResults?.addEventListener("click", async (e) => {
+      const btn = e.target.closest(".rel-add-btn");
+      if (!btn) return;
+      const card = btn.closest(".rel-add-card");
+      const handle = card?.dataset.handle;
+      const type = card?.querySelector(".rel-add-type")?.value || "amis";
+      if (!handle) return;
+      btn.disabled = true;
+      const q = addQ?.value || "";
+      try {
+        await api("/api/relations", { method: "POST", headers: jsonAuth(), body: JSON.stringify({ handle, type }) });
+        toast("Contact ajouté 🦎");
+        // Re-render complet depuis le serveur → le nouveau contact apparaît aussitôt
+        // dans Contacts/Liste/Graphe (plus besoin de recharger la page). renderEditor
+        // (et non renderPrivate) évite le flash « Chargement… ». On restaure ensuite la
+        // vue Réseau → Ajouter et on relance la recherche (le contact ajouté s'y affiche
+        // alors « ✓ Ajouté »), pour pouvoir enchaîner les ajouts sans perdre sa place.
+        const fresh = await api("/api/me", { headers: authHeaders() });
+        appState.myRelations = fresh?.relations?.[1] || [];
+        renderEditor(fresh);
+        window.__deckGoLabel?.("Relations");
+        document.querySelector('.rel-tab[data-tab="add"]')?.click();
+        const q2 = document.querySelector("#rel-add-q");
+        if (q2 && q) { q2.value = q; q2.dispatchEvent(new Event("input")); }
+      } catch (err) {
+        btn.disabled = false;
+        toast(err?.message || "Échec.");
       }
     });
-
-    relHandleResults?.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") { hideRelResults(); relHandle?.focus(); }
-    });
-
-    relHandleResults?.addEventListener("click", (e) => {
-      const btn = e.target.closest("[data-handle]");
-      if (!btn) return;
-      relHandle.value = btn.dataset.handle;
-      hideRelResults();
-      relHandle.focus();
-    });
-
-    document.addEventListener("click", (e) => {
-      if (!relHandle?.closest(".handle-input")?.contains(e.target)) hideRelResults();
-    }, { capture: true });
   }
-
-  app.querySelector("#add-rel")?.addEventListener("click", async () => {
-    const handle = app.querySelector("#rel-handle").value.trim();
-    const type = app.querySelector("#rel-type").value;
-    if (!handle) return toast(t("msg_handle_required"));
-    try {
-      await api("/api/relations", {
-        method: "POST",
-        headers: jsonAuth(),
-        body: JSON.stringify({ handle, type }),
-      });
-      renderPrivate(appState.key);
-    } catch (e) {
-      toast(e.message);
-    }
-  });
   app.querySelectorAll("[data-del-rel]").forEach((b) =>
     b.addEventListener("click", async () => {
       await api(`/api/relations/${encodeURIComponent(b.dataset.delRel)}`, {
@@ -3786,7 +3933,87 @@ function toLocalInput(iso) {
 // opts.liveAvailable : affiche le sélecteur « Événement / Live » (créateur premium
 // avec bénéfice lives activé). Un live planifié est visible par tous mais
 // joignable uniquement par les abonné·e·s de l'espace premium.
+// Sélecteur d'ajout de contact depuis le réseau étendu (degré 2/3). Modale stylée
+// (pas de popup navigateur) : choix du type de lien (Ami/Pro/Autre) puis POST, et
+// rafraîchissement complet pour que le contact apparaisse aussitôt dans tous les onglets.
+function openAddContactChooser(handle, name) {
+  const overlay = document.createElement("div");
+  overlay.className = "overlay open";
+  overlay.innerHTML = `
+    <div class="panel" role="dialog" aria-modal="true" aria-label="Ajouter un contact" style="max-width:380px">
+      <button type="button" class="close" id="ac-close" aria-label="Fermer">✕</button>
+      <h2 style="margin:0 0 .15rem">Ajouter en contact</h2>
+      <p class="sub" style="margin:0 0 1rem">${esc(name || ("@" + handle))} <span class="lbl-sm" style="opacity:.7">@${esc(handle)}</span></p>
+      <p class="lbl-sm" style="margin:0 0 .5rem">Type de lien :</p>
+      <div class="ac-types" style="display:flex;gap:.5rem;margin-bottom:1rem">
+        <button type="button" class="btn" data-actype="amis" style="flex:1">Ami</button>
+        <button type="button" class="btn" data-actype="pro" style="flex:1">Pro</button>
+        <button type="button" class="btn" data-actype="autre" style="flex:1">Autre</button>
+      </div>
+      <div class="err" id="ac-err"></div>
+      <div class="actions">
+        <a class="btn sm" href="/@${encodeURIComponent(handle)}" target="_blank" rel="noopener noreferrer">${icon("link", 13)} Voir la page</a>
+        <button type="button" class="btn" id="ac-cancel">Annuler</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener("click", (e) => e.target === overlay && close());
+  overlay.querySelector("#ac-close").addEventListener("click", close);
+  overlay.querySelector("#ac-cancel").addEventListener("click", close);
+  overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } });
+  overlay.querySelectorAll("[data-actype]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      overlay.querySelectorAll("[data-actype]").forEach((x) => (x.disabled = true));
+      try {
+        await api("/api/relations", { method: "POST", headers: jsonAuth(), body: JSON.stringify({ handle, type: b.dataset.actype }) });
+        close();
+        toast("Contact ajouté 🦎");
+        // Re-render depuis le serveur → le contact passe en degré 1 et apparaît dans
+        // Contacts/Liste/Graphe sans recharger. On revient sur Réseau → Liste.
+        const fresh = await api("/api/me", { headers: authHeaders() });
+        appState.myRelations = fresh?.relations?.[1] || [];
+        renderEditor(fresh);
+        window.__deckGoLabel?.("Relations");
+        document.querySelector('.rel-tab[data-tab="list"]')?.click();
+      } catch (err) {
+        overlay.querySelectorAll("[data-actype]").forEach((x) => (x.disabled = false));
+        const el = overlay.querySelector("#ac-err");
+        if (el) el.textContent = err?.message || "Échec de l'ajout.";
+      }
+    }));
+}
+
+// Vue LECTURE SEULE d'un événement reçu par invitation (jointure virtuelle : il
+// appartient à l'organisateur, on n'autorise ni édition ni suppression chez l'invité).
+function openInvitedEventView(event) {
+  const overlay = document.createElement("div");
+  overlay.className = "overlay open";
+  const fmt = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleString("fr-FR", { dateStyle: "full", timeStyle: "short" }); };
+  const row = (label, val) => (val ? `<div class="group"><label>${label}</label><div>${esc(val)}</div></div>` : "");
+  overlay.innerHTML = `
+    <div class="panel ev-modal" role="dialog" aria-modal="true" aria-label="Événement">
+      <button type="button" class="close" id="ive-close" aria-label="Fermer">✕</button>
+      <div class="ev-header"><h2>${esc(event.title || "Événement")}</h2></div>
+      <p class="lbl-sm" style="margin:.1rem 0 1rem">${icon("users", 13)} Invité par @${esc(event.invited_by)}</p>
+      ${row("Début", fmt(event.starts_at))}
+      ${event.ends_at ? row("Fin", fmt(event.ends_at)) : ""}
+      ${row("Lieu", event.location)}
+      ${event.link ? `<div class="group"><label>Lien</label><div><a href="${esc(event.link)}" target="_blank" rel="noopener noreferrer">${esc(event.link)}</a></div></div>` : ""}
+      ${row("Notes", event.notes)}
+      <div class="actions"><button type="button" class="btn" id="ive-ok">Fermer</button></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener("click", (e) => e.target === overlay && close());
+  overlay.querySelector("#ive-close").addEventListener("click", close);
+  overlay.querySelector("#ive-ok").addEventListener("click", close);
+  overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } });
+}
+
 export function openEventModal(event, opts = {}) {
+  // Événement reçu par invitation → vue lecture seule (pas le formulaire d'édition).
+  if (event?.invited_by) return openInvitedEventView(event);
   const editing = !!event;
   const initialKind = editing && event.kind === "live" ? "live" : "event";
   // Préfill création depuis un clic sur une case horaire de la vue Jour/Semaine :
@@ -3877,6 +4104,16 @@ export function openEventModal(event, opts = {}) {
             <small data-when="live">Le créneau est annoncé ; l'accès au flux reste réservé aux abonné·e·s.</small>
           </div>
         </label>
+        ${editing && initialKind === "event" ? `
+        <div class="group ev-invites" data-only="event">
+          <label>${icon("users", 14)} Invités</label>
+          <div class="ev-invite-list" id="ev-invite-list"><p class="lbl-sm" style="margin:.2rem 0">Chargement…</p></div>
+          <div class="add-row" style="grid-template-columns:1fr auto;margin-top:.4rem">
+            <input id="ev-invite-handle" list="ev-invite-cands" placeholder="@handle d'un contact" autocomplete="off" />
+            <button type="button" class="btn sm" id="ev-invite-add">Inviter</button>
+          </div>
+          <datalist id="ev-invite-cands">${(opts.contacts || []).map((cc) => `<option value="${esc(cc.handle)}">${esc(cc.name || cc.handle)}</option>`).join("")}</datalist>
+        </div>` : ""}
         <div class="err" id="ev-err"></div>
         <div class="actions">
           ${editing ? `<button type="button" class="btn danger ghost" id="ev-delete">${icon("trash", 15)} Supprimer</button>` : ""}
@@ -3978,5 +4215,49 @@ export function openEventModal(event, opts = {}) {
       errEl.textContent = "Échec de l'enregistrement. Réessayez.";
     }
   });
+
+  // ----- Invités (organisateur, événements existants uniquement) -----
+  if (editing && initialKind === "event") {
+    const listBox = overlay.querySelector("#ev-invite-list");
+    const statusLabel = (s) =>
+      s === "accepted" ? "✓ Accepté" : s === "declined" ? "✗ Refusé" : "⏳ En attente";
+    const renderInvites = (invites) => {
+      if (!listBox) return;
+      if (!invites.length) { listBox.innerHTML = `<p class="lbl-sm" style="margin:.2rem 0">Aucun invité pour l'instant.</p>`; return; }
+      listBox.innerHTML = invites.map((iv) => `
+        <div class="ev-invite-row">
+          <span class="ev-invite-h">@${esc(iv.handle)}</span>
+          <span class="ev-invite-status st-${esc(iv.status)}">${statusLabel(iv.status)}</span>
+          <button type="button" class="btn-field-del" data-invite-remove="${esc(iv.handle)}" title="Retirer" aria-label="Retirer @${esc(iv.handle)}">✕</button>
+        </div>`).join("");
+      listBox.querySelectorAll("[data-invite-remove]").forEach((b) =>
+        b.addEventListener("click", async () => {
+          try { await api(`/api/agenda/${event.id}/invites/${encodeURIComponent(b.dataset.inviteRemove)}`, { method: "DELETE", headers: authHeaders() }); }
+          catch (e) { return toast(e?.message || "Échec."); }
+          loadInvites();
+        }));
+    };
+    const loadInvites = async () => {
+      try { const r = await api(`/api/agenda/${event.id}/invites`, { headers: authHeaders() }); renderInvites(r.invites || []); }
+      catch { if (listBox) listBox.innerHTML = `<p class="lbl-sm" style="margin:.2rem 0">Impossible de charger les invités.</p>`; }
+    };
+    const addInvite = async () => {
+      const inp = overlay.querySelector("#ev-invite-handle");
+      const h = (inp?.value || "").trim().replace(/^@/, "");
+      if (!h) return;
+      try {
+        const r = await api(`/api/agenda/${event.id}/invites`, { method: "POST", headers: jsonAuth(), body: JSON.stringify({ handles: [h] }) });
+        const res = (r.results || [])[0];
+        if (res && res.ok === false) toast(res.error || "Invitation impossible.");
+        else { inp.value = ""; toast("Invitation envoyée 🦎"); }
+        renderInvites(r.invites || []);
+      } catch (e) { toast(e?.message || "Échec."); }
+    };
+    overlay.querySelector("#ev-invite-add")?.addEventListener("click", addInvite);
+    overlay.querySelector("#ev-invite-handle")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); addInvite(); }
+    });
+    loadInvites();
+  }
 }
 

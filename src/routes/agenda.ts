@@ -1,7 +1,18 @@
 import { Hono } from "hono";
-import { StoreError, addEvent, deleteEvent, updateEvent, setDayStatus } from "../store.js";
+import {
+  StoreError,
+  addEvent,
+  deleteEvent,
+  updateEvent,
+  setDayStatus,
+  inviteToEvent,
+  removeEventInvite,
+  listEventInvites,
+  listMyInvites,
+  respondEventInvite,
+} from "../store.js";
 import { notifyLiveScheduled } from "../premium-api.js";
-import { currentIdentity, readBody, exceeds } from "./_ctx.js";
+import { currentIdentity, readBody, exceeds, notify } from "./_ctx.js";
 
 const route = new Hono();
 
@@ -78,6 +89,92 @@ route.delete("/api/agenda/:id", async (c) => {
   return (await deleteEvent(id.id, Number(c.req.param("id"))))
     ? c.json({ ok: true })
     : c.json({ error: "not found" }, 404);
+});
+
+/* --------------------------- Invitations (RSVP) -------------------------- */
+// Helper de formatage court d'une date d'événement pour les textes de notification.
+function fmtEventDate(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  return ` le ${d.toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}`;
+}
+
+// Liste des invités d'un événement + leur statut (vue organisateur).
+route.get("/api/agenda/:id/invites", async (c) => {
+  const id = await currentIdentity(c);
+  if (!id) return c.json({ error: "unauthorized" }, 401);
+  try {
+    return c.json({ invites: await listEventInvites(Number(c.req.param("id")), id.id) });
+  } catch (e) {
+    if (e instanceof StoreError) return c.json({ error: e.message }, e.status as 400);
+    throw e;
+  }
+});
+
+// Inviter un ou plusieurs contacts (relations sortantes) à un événement.
+route.post("/api/agenda/:id/invites", async (c) => {
+  const id = await currentIdentity(c);
+  if (!id) return c.json({ error: "unauthorized" }, 401);
+  const eventId = Number(c.req.param("id"));
+  const { handles } = await readBody<{ handles: string[] }>(c);
+  if (!Array.isArray(handles) || !handles.length) return c.json({ error: "handles requis" }, 400);
+  const results: { handle: string; ok: boolean; error?: string }[] = [];
+  for (const h of handles.slice(0, 50)) {
+    if (typeof h !== "string" || !h.trim()) continue;
+    try {
+      const { invitee, created, event } = await inviteToEvent(eventId, id.id, h);
+      // On ne (re)notifie qu'à la création de l'invitation (pas si elle existait déjà).
+      if (created)
+        await notify(
+          invitee.id,
+          "invite",
+          `📅 @${id.handle} t'invite à « ${event.title} »${fmtEventDate(event.starts_at)}`,
+          `/@${id.handle}`
+        );
+      results.push({ handle: invitee.handle, ok: true });
+    } catch (e) {
+      results.push({ handle: h, ok: false, error: e instanceof StoreError ? e.message : "erreur" });
+    }
+  }
+  // Renvoie la liste à jour pour rafraîchir l'UI organisateur.
+  try {
+    return c.json({ ok: true, results, invites: await listEventInvites(eventId, id.id) });
+  } catch (e) {
+    if (e instanceof StoreError) return c.json({ error: e.message }, e.status as 400);
+    throw e;
+  }
+});
+
+// Retirer une invitation (organisateur).
+route.delete("/api/agenda/:id/invites/:handle", async (c) => {
+  const id = await currentIdentity(c);
+  if (!id) return c.json({ error: "unauthorized" }, 401);
+  const ok = await removeEventInvite(Number(c.req.param("id")), id.id, c.req.param("handle"));
+  return ok ? c.json({ ok: true }) : c.json({ error: "not found" }, 404);
+});
+
+// Invitations EN ATTENTE reçues par l'utilisateur courant.
+route.get("/api/my/invites", async (c) => {
+  const id = await currentIdentity(c);
+  if (!id) return c.json({ error: "unauthorized" }, 401);
+  return c.json({ invites: await listMyInvites(id.id) });
+});
+
+// RSVP : l'invité accepte (accept=true) ou refuse une invitation en attente.
+route.post("/api/agenda/invite/:eventId/respond", async (c) => {
+  const id = await currentIdentity(c);
+  if (!id) return c.json({ error: "unauthorized" }, 401);
+  const { accept } = await readBody<{ accept: boolean }>(c);
+  const r = await respondEventInvite(id.id, Number(c.req.param("eventId")), accept === true);
+  if (!r) return c.json({ error: "aucune invitation en attente" }, 404);
+  const verb = accept === true ? "a accepté" : "a décliné";
+  await notify(
+    r.organizerId,
+    "invite",
+    `@${id.handle} ${verb} ton invitation à « ${r.event.title} »`,
+    `/@${id.handle}`
+  );
+  return c.json({ ok: true, status: accept === true ? "accepted" : "declined" });
 });
 
 /* --------------------- Disponibilité par jour (calendrier) --------------- */

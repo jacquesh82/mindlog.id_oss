@@ -6,19 +6,26 @@ import { esc } from "../../ui/dom.js";
 import { appState } from "../../state.js";
 
 export function renderIdentityColumn(data, { photo, fieldEditHtml, socialEditHtml }) {
+  // « Date de naissance » est un attribut PERMANENT : toujours présent dans la liste
+  // (champ date), synthétisé s'il n'existe pas encore côté serveur (sauvegardé au
+  // premier remplissage). Plus de bouton preset à cliquer.
+  const nonSocial = data.fields.filter((f) => !isSocialKey(f.key));
+  const attrFields = nonSocial.some((f) => f.key === "birthday")
+    ? nonSocial
+    : [...nonSocial, { key: "birthday", label: "Date de naissance", value: "", is_custom: 0, is_public: 1, visibility: "public" }];
   return `<div class="card">
       <div class="id-head">
-        <div class="photo-wrap"><span class="photo-frame">${photo}${
+        <label class="photo-wrap" for="photo-file" title="Changer la photo"><span class="photo-frame">${photo}${
           data.hasVault
             ? `<span class="vault-badge" title="Vos clés E2E sont sauvegardées dans le coffre" aria-label="Clés sauvegardées dans le coffre">${icon("key", 13)}</span>`
             : ""
-        }</span></div>
+        }<span class="photo-edit" aria-hidden="true">${icon("camera", 18)}</span></span></label>
         <div class="id-head-body">
           <p class="handle">@${esc(data.handle)}</p>
           <div class="id-actions">
             <form id="photo-form" class="id-photo-form">
               <label class="btn" style="cursor:pointer" title="Changer la photo" aria-label="Changer la photo">${icon("user", 16)}<span class="btn-label"> Changer la photo</span>
-                <input type="file" name="photo" accept="image/*" hidden />
+                <input type="file" id="photo-file" name="photo" accept="image/*" hidden />
               </label>
               <button type="button" class="btn" id="take-photo-btn" title="Prendre une photo" aria-label="Prendre une photo">${icon("camera", 16)}<span class="btn-label"> Prendre une photo</span></button>
             </form>
@@ -47,7 +54,7 @@ export function renderIdentityColumn(data, { photo, fieldEditHtml, socialEditHtm
             <span id="sp-profile-intro-status" class="lbl-sm" style="opacity:.7" aria-live="polite"></span>
           </div>
           <div class="section-title">Attributs</div>
-          <div id="fields-edit">${data.fields.filter((f) => !isSocialKey(f.key)).map(fieldEditHtml).join("")}</div>
+          <div id="fields-edit">${attrFields.map(fieldEditHtml).join("")}</div>
           <div class="add-row" style="margin-top:.5rem;padding-bottom:.6rem">
             <input id="nf-label" placeholder="Libellé (ex. Skype)" />
             <input id="nf-value" placeholder="Valeur" />
@@ -141,5 +148,6 @@ export function renderIdentityColumn(data, { photo, fieldEditHtml, socialEditHtm
           </div>
         </div>
       </div>
-    </div>`;
+    </div>
+  </div>`;
 }

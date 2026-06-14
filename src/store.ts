@@ -8,6 +8,7 @@ export * from "./store/identities.js";
 export * from "./store/notifications.js";
 export * from "./store/cardFields.js";
 export * from "./store/events.js";
+export * from "./store/eventInvites.js";
 export * from "./store/dayOverrides.js";
 export * from "./store/tags.js";
 export * from "./store/requests.js";

@@ -74,16 +74,32 @@ function nodeFill(n) {
 // vide est géré ici pour éviter de charger D3 inutilement.
 export function relationsGraphHtml(data) {
   if (!totalRelations(data)) {
-    return `<div class="rg-empty">Aucune relation à représenter pour l'instant.<br>Reliez-vous à un contact pour voir votre réseau apparaître ici 🕸️</div>`;
+    return `<div class="rg-empty">Aucune relation à représenter pour l'instant.<br>Ajoutez un contact pour voir votre réseau apparaître ici 🕸️</div>`;
   }
+  const rel = data.relations || {};
+  const has2 = (rel[2] || []).length > 0;
+  const has3 = (rel[3] || []).length > 0;
+  // Légende = filtres de type (cliquables). Chips de degré affichés seulement si des
+  // degrés étendus existent. Contrôles de zoom (+/−/recentrer) en superposition.
   return `<div class="rel-graph-wrap">
     <svg class="rel-graph-svg" role="img" aria-label="Graphe de votre réseau de relations"></svg>
-    <div class="rg-legend" aria-hidden="true">
-      <span><i style="background:${REL_COLOR.amis}"></i>Ami</span>
-      <span><i style="background:${REL_COLOR.pro}"></i>Pro</span>
-      <span><i style="background:${REL_COLOR.autre}"></i>Autre</span>
+
+    <div class="rg-zoomctl" role="group" aria-label="Zoom">
+      <button type="button" class="rg-zoom" data-z="in" title="Zoomer" aria-label="Zoomer">＋</button>
+      <button type="button" class="rg-zoom" data-z="out" title="Dézoomer" aria-label="Dézoomer">－</button>
+      <button type="button" class="rg-reset" title="Recentrer" aria-label="Recentrer le graphe">⟲</button>
     </div>
-    <button type="button" class="rg-reset" title="Recentrer" aria-label="Recentrer le graphe">⟲</button>
+
+    <div class="rg-filters" role="group" aria-label="Filtrer le graphe">
+      <button type="button" class="rg-fchip active" data-ftype="amis" aria-pressed="true"><i style="background:${REL_COLOR.amis}"></i>Ami</button>
+      <button type="button" class="rg-fchip active" data-ftype="pro" aria-pressed="true"><i style="background:${REL_COLOR.pro}"></i>Pro</button>
+      <button type="button" class="rg-fchip active" data-ftype="autre" aria-pressed="true"><i style="background:${REL_COLOR.autre}"></i>Autre</button>
+      ${has2 || has3 ? `<span class="rg-fsep" aria-hidden="true"></span>
+      <button type="button" class="rg-fchip active" data-fdeg="1" aria-pressed="true">D1</button>
+      ${has2 ? `<button type="button" class="rg-fchip active" data-fdeg="2" aria-pressed="true">D2</button>` : ""}
+      ${has3 ? `<button type="button" class="rg-fchip active" data-fdeg="3" aria-pressed="true">D3</button>` : ""}` : ""}
+    </div>
+
     <div class="rg-loading">Chargement du graphe…</div>
   </div>`;
 }
@@ -170,4 +186,30 @@ export async function wireRelationsGraph(scope, data) {
 
   wrap.querySelector(".rg-reset")?.addEventListener("click", () =>
     svgSel.transition().duration(300).call(zoom.transform, d3.zoomIdentity));
+
+  // Boutons zoom +/− (en plus de la molette).
+  wrap.querySelectorAll(".rg-zoom").forEach((b) =>
+    b.addEventListener("click", () =>
+      svgSel.transition().duration(200).call(zoom.scaleBy, b.dataset.z === "in" ? 1.4 : 1 / 1.4)));
+
+  // Filtres : type (s'applique au degré 1) + degré. Un nœud est visible si son degré
+  // est actif ET (degré ≠ 1 OU son type est actif). « Moi » toujours visible. Un lien
+  // n'est visible que si ses deux extrémités le sont.
+  const activeType = new Set(["amis", "pro", "autre"]);
+  const activeDeg = new Set([1, 2, 3]);
+  const isVisible = (d) =>
+    d.me || (activeDeg.has(d.depth) && (d.depth !== 1 || activeType.has(d.type || "autre")));
+  const applyFilters = () => {
+    node.style("display", (d) => (isVisible(d) ? null : "none"));
+    link.style("display", (d) => (isVisible(d.source) && isVisible(d.target) ? null : "none"));
+  };
+  wrap.querySelectorAll(".rg-fchip").forEach((chip) =>
+    chip.addEventListener("click", () => {
+      const on = !chip.classList.contains("active");
+      chip.classList.toggle("active", on);
+      chip.setAttribute("aria-pressed", String(on));
+      if (chip.dataset.ftype) { if (on) activeType.add(chip.dataset.ftype); else activeType.delete(chip.dataset.ftype); }
+      else if (chip.dataset.fdeg) { const n = Number(chip.dataset.fdeg); if (on) activeDeg.add(n); else activeDeg.delete(n); }
+      applyFilters();
+    }));
 }

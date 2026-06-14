@@ -6,30 +6,33 @@ import { host } from "../../host.js";
 import { icon } from "../../ui/icons.js";
 import { esc } from "../../ui/dom.js";
 
-export function renderAgendaColumn(data, { reqFilterChips, requestsHtml, dayLoad }) {
-  const now = new Date().toISOString();
-  const upcoming = (data.events || [])
-    .filter(e => (e.starts_at || "") >= now)
-    .sort((a, b) => (a.starts_at || "").localeCompare(b.starts_at || ""))
-    .slice(0, 6);
-
-  function fmtDate(iso) {
+// Invitations reçues EN ATTENTE (RSVP) — bloc « Accepter / Refuser » en tête du
+// panneau Événements. data.myInvites : [{ event, organizer_handle, organizer_name }].
+function invitesReceivedHtml(invites) {
+  if (!invites || !invites.length) return "";
+  const fmt = (iso) => {
     const d = new Date(iso);
     if (isNaN(d)) return "";
     return d.toLocaleDateString("fr-FR", { day: "numeric", month: "short" }) +
       " " + d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-  }
+  };
+  return `<div class="invites-recv">
+    <div class="ev-toolbar-title" style="margin-bottom:.5rem">${icon("users", 15)} Invitations reçues</div>
+    ${invites.map((iv) => `
+      <div class="invite-card" data-invite-event="${iv.event.id}">
+        <div class="invite-main">
+          <div class="invite-title">${esc(iv.event.title || "")}</div>
+          <div class="invite-sub">${icon("clock", 12)} ${esc(fmt(iv.event.starts_at))} · ${esc(iv.organizer_name || ("@" + iv.organizer_handle))}</div>
+        </div>
+        <div class="invite-actions">
+          <button type="button" class="btn sm primary" data-invite-accept="${iv.event.id}">Accepter</button>
+          <button type="button" class="btn sm" data-invite-decline="${iv.event.id}">Refuser</button>
+        </div>
+      </div>`).join("")}
+  </div>`;
+}
 
-  const upcomingHtml = upcoming.length
-    ? `<div class="agenda-upcoming">
-        <div class="agenda-upcoming-title">${icon("clock", 12)} Prochains</div>
-        ${upcoming.map(e => `<div class="agenda-upcoming-item${e.kind === "live" ? " is-live" : ""}">
-          <span class="agenda-upcoming-time">${fmtDate(e.starts_at)}</span>
-          <span class="agenda-upcoming-name">${e.kind === "live" ? `${icon("users", 11)} ` : ""}${esc(e.title || "")}</span>
-        </div>`).join("")}
-      </div>`
-    : `<div class="agenda-upcoming"><p class="empty" style="text-align:center;padding:.6rem 0;font-size:.82rem">Aucun événement à venir</p></div>`;
-
+export function renderAgendaColumn(data, { reqFilterChips, requestsHtml, dayLoad }) {
   // Layout rail : rail vertical (sous-modes) + scroll de panel à droite, même
   // pattern que les Échanges. Les class .agenda-tab restent inchangées pour que
   // le wiring (app.querySelectorAll('.agenda-tab')…) marche tel quel.
@@ -49,16 +52,16 @@ export function renderAgendaColumn(data, { reqFilterChips, requestsHtml, dayLoad
       <div class="col-scroll subrail-body">
         <div class="agenda-panel" id="agenda-dispo" role="tabpanel" style="padding:10px">
           <div class="calendar-fill">
-            ${host.calendar.html(data.overrides, true, dayLoad, true, data.events || [])}
+            ${host.calendar.html(data.overrides, true, dayLoad, true, [...(data.events || []), ...(data.invitedEvents || [])])}
           </div>
-          ${upcomingHtml}
         </div>
         <div class="agenda-panel" id="agenda-events" role="tabpanel" hidden style="padding:10px">
+          ${invitesReceivedHtml(data.myInvites || [])}
           <div class="ev-toolbar">
             <span class="ev-toolbar-title">${icon("calendar", 15)} Mes événements</span>
-            <button type="button" class="btn primary sm" data-event-new>${icon("plus", 15)} Nouvel événement</button>
+            <button type="button" class="comm-topbar-btn" data-event-new title="Nouvel événement" aria-label="Nouvel événement">${icon("plus", 16)}</button>
           </div>
-          <div class="agenda-events">${eventsHtml(data.events, true)}</div>
+          <div class="agenda-events">${eventsHtml([...(data.events || []), ...(data.invitedEvents || [])], true)}</div>
         </div>
         <div class="agenda-panel" id="agenda-rdv" role="tabpanel" hidden style="padding:10px">
           <div class="ev-toolbar">

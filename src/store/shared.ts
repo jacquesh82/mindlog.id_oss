@@ -84,6 +84,10 @@ export interface Settings {
   availability: Availability; // règle de dispo par défaut (jours/week-end/périodes)
   avatar_size: AvatarSize; // taille d'affichage de l'avatar sur la page publique
   avatar_shape: AvatarShape; // forme : carré (default) ou cercle
+  // Année de la dernière annonce d'anniversaire diffusée aux contacts (dédup once/an).
+  // Écrite par markBirthdayAnnouncedIfNew (pas via setSettings, qui ignore les clés
+  // hors SETTINGS_BOOLS) ; préservée en lecture par le spread de parseSettings.
+  birthday_announced_year?: number;
 }
 
 const SETTINGS_BOOLS = [
@@ -181,6 +185,25 @@ export async function setSettings(
   }
   await db.update(identities).set({ settings: JSON.stringify(next) }).where(eq(identities.id, identityId));
   return next;
+}
+
+/**
+ * Marque l'identité comme ayant déjà diffusé son annonce d'anniversaire pour l'année
+ * `year`, de façon atomique-idempotente : renvoie `true` une seule fois par année
+ * (la première), `false` ensuite. Sert de garde anti-doublon/anti-abus pour la notif
+ * d'anniversaire, déclenchée depuis le poste de l'owner (cf. POST /api/birthday/announce).
+ * Écrit le JSON settings complet (préserve les autres préférences).
+ */
+export async function markBirthdayAnnouncedIfNew(identityId: number, year: number): Promise<boolean> {
+  const id = await getIdentityById(identityId);
+  if (!id) return false;
+  const cur = parseSettings(id.settings);
+  if ((cur.birthday_announced_year ?? 0) >= year) return false;
+  await db
+    .update(identities)
+    .set({ settings: JSON.stringify({ ...cur, birthday_announced_year: year }) })
+    .where(eq(identities.id, identityId));
+  return true;
 }
 
 /** Statut par défaut d'un jour selon une règle de dispo (périodes > jour de semaine). */

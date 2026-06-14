@@ -42,6 +42,17 @@ import legalRoutes from "./routes/legal.js";
 const STARTED_AT = Date.now();
 const TURNSTILE_SITE_KEY = process.env.TURNSTILE_SITE_KEY ?? "";
 
+// Version applicative — source de vérité unique = package.json. Exposée dans
+// /api/status, injectée dans la page (window.__APP_VERSION__) et affichée dans
+// Compte › À propos. Lue une fois au démarrage.
+const APP_VERSION: string = (() => {
+  try {
+    return JSON.parse(readFileSync(resolve(process.cwd(), "package.json"), "utf8")).version || "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+})();
+
 // Version des assets pour le cache-busting (`?v=` des balises + service worker).
 //  - PROD : figée au démarrage (STARTED_AT) → invalidée à chaque déploiement.
 //  - DEV  : dérivée de l'mtime des fichiers public/ → TOUTE édition de public/
@@ -85,7 +96,14 @@ app.use("*", securityHeaders());
 app.use("/api/*", requestBodyLimit());
 
 // Garde-fou global anti-abus, puis limiteurs ciblés sur les routes sensibles.
-app.use("/api/*", rateLimit({ windowMs: 60_000, max: 300 }));
+// max volontairement large (≈ 20 req/s par IP) : l'app est temps réel et certaines
+// actions légitimes émettent des rafales — le chat refetch sur chaque événement SSE
+// + lit/écrit le cache de ratchet e2e, et SURTOUT un appel WebRTC déclenche une
+// rafale de POST /api/signal (un par candidat ICE en trickle). À 300/min un simple
+// appel ou quelques échanges suffisaient à déclencher un 429 (« trop de messages »).
+// Ce seau n'est qu'un backstop anti-flood : les routes sensibles (création
+// d'identité, recover, auth passkey/PIN, OAuth) ont leurs propres limiteurs stricts.
+app.use("/api/*", rateLimit({ windowMs: 60_000, max: 1200 }));
 const SENSITIVE = "Trop de tentatives. Réessayez dans quelques minutes.";
 app.use("/api/identities", rateLimit({ windowMs: 60 * 60_000, max: 10, message: SENSITIVE }));
 app.use("/api/recover", rateLimit({ windowMs: 15 * 60_000, max: 5, message: SENSITIVE }));
@@ -138,7 +156,13 @@ app.get("/api/status", async (c) => {
   const mcp = mcpHealth();
   return c.json({
     ok: dbStatus === "ok" && mcp.ok,
-    version: "0.6.1",
+    version: APP_VERSION,
+    // `build` = version des assets (cf. assetVersion). En PROD elle est figée au
+    // démarrage (change à chaque déploiement) ; en DEV elle suit l'mtime de public/
+    // (change à chaque édition). Le client compare la version (release) ET, en dev,
+    // le build, pour proposer un rechargement quand le serveur est plus récent.
+    build: assetVersion(),
+    dev: !IS_PROD,
     services: { web: "ok", api: "ok", db: dbStatus, mcp: mcp.ok ? "ok" : "down" },
     mcpTools: mcp.tools,
     counts,
@@ -252,6 +276,7 @@ app.get("/pricing", (c) => c.redirect("/#sec-pricing", 301));
 const PUBLIC_DIR = resolve(process.cwd(), "public");
 const shell = () =>
   readFileSync(resolve(PUBLIC_DIR, "index.html"), "utf8")
+    .replace(/%%APP_VERSION%%/g, APP_VERSION)
     .replace(/__V__/g, assetVersion())
     .replace(/%%TURNSTILE_SITE_KEY%%/g, TURNSTILE_SITE_KEY);
 

@@ -111,7 +111,13 @@ export default function register(host) {
       if (!call) return;
       call.remoteStream = e.streams[0];
       const v = call.overlay?.querySelector("#call-remote");
-      if (v && v.srcObject !== call.remoteStream) v.srcObject = call.remoteStream;
+      if (v && v.srcObject !== call.remoteStream) {
+        v.srcObject = call.remoteStream;
+        // Brave (Shields) et Chromium bloquent l'autoplay du flux distant (audio+vidéo) :
+        // sans appel explicite à play(), on n'a NI son NI image. play() est lancé dans la
+        // continuité du geste utilisateur (clic Appeler/Accepter) → autorisé.
+        v.play?.().catch(() => {});
+      }
       setStage("connected");
     };
     pc.oniceconnectionstatechange = () => {
@@ -214,7 +220,7 @@ export default function register(host) {
 
   function attachLocal() {
     const v = call.overlay?.querySelector("#call-self");
-    if (v) v.srcObject = call.localStream;
+    if (v) { v.srcObject = call.localStream; v.play?.().catch(() => {}); }
   }
 
   /* --------------------------- Cycle de vie ------------------------------ */

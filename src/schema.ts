@@ -426,6 +426,34 @@ export const events = pgTable(
   (t) => [index("idx_events_identity").on(t.identity_id, t.starts_at)]
 );
 
+// Invitations à un événement (RSVP). L'événement reste celui de l'organisateur
+// (jointure virtuelle : pas de copie) ; l'invité le voit en lecture seule dans son
+// agenda une fois `accepted`. Le ON DELETE cascade nettoie les invitations si
+// l'événement ou l'une des deux identités disparaît.
+export const eventInvites = pgTable(
+  "event_invites",
+  {
+    id: serial("id").primaryKey(),
+    event_id: integer("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    inviter_id: integer("inviter_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    invitee_id: integer("invitee_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    status: text("status").notNull().default("pending"), // pending | accepted | declined
+    created_at: text("created_at").notNull(),
+    responded_at: text("responded_at"),
+  },
+  (t) => [
+    unique("uq_event_invite").on(t.event_id, t.invitee_id),
+    index("idx_event_invites_invitee").on(t.invitee_id, t.status),
+    index("idx_event_invites_event").on(t.event_id),
+  ]
+);
+
 export const dayOverrides = pgTable(
   "day_overrides",
   {

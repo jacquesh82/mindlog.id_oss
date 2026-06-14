@@ -164,9 +164,9 @@ export const avatarHtml = (handle, hasPhoto, cls) =>
     : `<span class="${cls}">${esc((handle[0] || "·").toUpperCase())}</span>`;
 
 // Header commun : brand gauche (+ actions accolées à la marque) · centre · actions droite.
-export function siteHeader({ center = "", right = "", left = "" } = {}) {
+export function siteHeader({ center = "", right = "", left = "", brandHref = "/" } = {}) {
   return `<header class="topbar site-header">
-    <a class="brand" href="/"><span class="brand-milo">${miloSvg(40)}</span><span class="brand-text"> mindlog · id</span></a>
+    <a class="brand" href="${brandHref}"><span class="brand-milo">${miloSvg(40)}</span><span class="brand-text"> mindlog · id</span></a>
     ${left ? `<div class="site-header-left">${left}</div>` : ""}
     <div class="site-header-center">${center}</div>
     <div class="editor-head-right">${right}</div>

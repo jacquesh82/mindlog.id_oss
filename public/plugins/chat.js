@@ -46,6 +46,24 @@ function callLabel(c, mine, time) {
   return `${icon} ${kind} ${dir} · ${detail}${time ? " · " + time : ""}`;
 }
 
+// État « échange impossible » : illustration (deux profils dont le lien est rompu)
+// + explication de la raison. `reasonHtml` est du HTML déjà échappé.
+function chatBlockedHtml(reasonHtml) {
+  return `<div class="chat-blocked">
+    <svg viewBox="0 0 120 64" width="124" height="66" fill="none" aria-hidden="true" class="chat-blocked-svg">
+      <circle cx="28" cy="34" r="13" stroke="currentColor" stroke-width="2"/>
+      <circle cx="28" cy="29" r="4.5" stroke="currentColor" stroke-width="2"/>
+      <path d="M19 43c1.6-4 5-6 9-6s7.4 2 9 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="92" cy="34" r="13" stroke="currentColor" stroke-width="2"/>
+      <circle cx="92" cy="29" r="4.5" stroke="currentColor" stroke-width="2"/>
+      <path d="M83 43c1.6-4 5-6 9-6s7.4 2 9 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      <path d="M46 34h9M65 34h9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="1 5"/>
+      <path d="M54 27l12 14M66 27l-12 14" stroke="var(--danger)" stroke-width="2.2" stroke-linecap="round"/>
+    </svg>
+    <p class="chat-blocked-text">${reasonHtml}</p>
+  </div>`;
+}
+
 export default function register(host) {
   const {
     esc, api, toast, confirmDialog,
@@ -83,16 +101,21 @@ export default function register(host) {
     const colHtml = `
       <div class="card chat-card" role="region" aria-label="Conversation avec @${esc(handle)}">
         <button type="button" class="close" id="ch-close" aria-label="Fermer la conversation">✕</button>
-        <div class="section-title chat-head" style="border-top:none;padding-top:0;margin-top:0">@${esc(handle)} <button type="button" class="btn sm" id="ch-page" title="Voir la page publique" aria-label="Voir la page publique">${svgIcon("user", 15)}</button> <button type="button" class="btn sm" id="ch-verify" title="Vérifier l'identité du contact" aria-label="Vérifier l'identité">${svgIcon("shield", 15)}</button> <button type="button" class="btn sm" id="ch-timer" title="Minuterie de disparition" aria-label="Minuterie de disparition" style="gap:.2rem">${svgIcon("clock", 15)}<span id="ch-timer-label" style="font-size:.6rem;font-weight:700;line-height:1;display:none"></span></button> <button type="button" class="btn sm" id="ch-archive" title="Archiver la conversation (lecture seule, copie locale)" aria-label="Archiver la conversation" aria-pressed="false">${svgIcon("archive", 15)}</button> <span id="ch-vbadge" class="deg"></span></div>
+        <div class="section-title chat-head" style="border-top:none;padding-top:0;margin-top:0"><span class="chat-head-name">@${esc(handle)}</span> <button type="button" class="btn sm" id="ch-page" title="Voir la page publique" aria-label="Voir la page publique">${svgIcon("user", 15)}</button> <button type="button" class="btn sm" id="ch-verify" title="Vérifier l'identité du contact" aria-label="Vérifier l'identité">${svgIcon("shield", 15)}</button> <button type="button" class="btn sm" id="ch-timer" title="Minuterie de disparition" aria-label="Minuterie de disparition" style="gap:.2rem">${svgIcon("clock", 15)}<span id="ch-timer-label" style="font-size:.6rem;font-weight:700;line-height:1;display:none"></span></button> <button type="button" class="btn sm" id="ch-archive" title="Archiver la conversation (lecture seule, copie locale)" aria-label="Archiver la conversation" aria-pressed="false">${svgIcon("archive", 15)}</button> <span id="ch-vbadge" class="deg"></span></div>
         <p class="sub" id="ch-note">Conversation éphémère, chiffrée de bout en bout 🔒.</p>
         <div class="chat-log" id="ch-log"><p class="empty">Chargement…</p></div>
         <form id="ch-form" class="chat-form">
-          <button type="button" class="btn" id="ch-attach" title="Joindre un fichier" aria-label="Joindre un fichier">📎</button>
-          <button type="button" class="btn" id="ch-mic" title="Enregistrer un message vocal" aria-label="Message vocal">🎤</button>
-          <button type="button" class="btn" id="ch-once" title="Message à lecture unique" aria-label="Lecture unique" aria-pressed="false">👁</button>
-          <input type="file" id="ch-file" hidden />
-          <input id="ch-input" placeholder="Votre message…" autocomplete="off" maxlength="1000" />
-          <button class="btn primary" type="submit" title="Envoyer" aria-label="Envoyer" style="padding:.3rem .55rem;flex:none">${svgIcon("send", 18)}</button>
+          <div class="chat-actions">
+            <button type="button" class="btn" id="ch-attach" title="Joindre un fichier" aria-label="Joindre un fichier">📎</button>
+            <button type="button" class="btn" id="ch-mic" title="Enregistrer un message vocal" aria-label="Message vocal">🎤</button>
+            <button type="button" class="btn" id="ch-once" title="Message à lecture unique" aria-label="Lecture unique" aria-pressed="false">👁</button>
+            <input type="file" id="ch-file" hidden />
+            <button type="button" class="btn chat-call-btn" id="ch-call" title="Appeler (vidéo activable pendant l'appel)" aria-label="Appeler">${svgIcon("phone", 16)}</button>
+          </div>
+          <div class="chat-input-row">
+            <input id="ch-input" placeholder="Votre message…" autocomplete="off" maxlength="1000" />
+            <button class="btn primary" type="submit" title="Envoyer" aria-label="Envoyer">${svgIcon("send", 18)}</button>
+          </div>
         </form>
       </div>`;
 
@@ -186,6 +209,12 @@ export default function register(host) {
     overlay.querySelector("#ch-page")?.addEventListener("click", () => {
       window.open(`/@${encodeURIComponent(handle)}`, "_blank", "noopener");
     });
+    // Appel P2P : utilise la clé publique du pair déjà chargée (peerPub). Bouton vert
+    // sur la rangée d'actions — disponible quel que soit le mode d'ouverture du chat.
+    overlay.querySelector("#ch-call")?.addEventListener("click", () => {
+      if (!peerPub) { host.toast?.("Appels non disponibles pour ce contact."); return; }
+      host.call?.start(handle, peerPub, { video: true });
+    });
     overlay.querySelector("#ch-verify")?.addEventListener("click", () => {
       if (!peerPub) { host.toast?.("Ce contact n'a pas encore de clé."); return; }
       verify?.open(myHandle, handle, peerPub, refreshVerifyBadge);
@@ -220,6 +249,7 @@ export default function register(host) {
         const d = await api(`/api/messages/${encodeURIComponent(handle)}`, { headers: authH });
         peerPub = d.peerPubkey;
         const form = overlay.querySelector("#ch-form");
+        if (form) form.style.display = ""; // ré-affiche le composer si un refresh précédent l'avait masqué
         if (!peerPub) {
           // Le correspondant n'a pas encore de clé publique (jamais connecté).
           overlay.querySelector("#ch-note").textContent = "Messagerie chiffrée indisponible : ce contact ne s'est pas encore connecté (pas de clé).";
@@ -455,7 +485,21 @@ export default function register(host) {
             .catch(() => {});
         }
       } catch (e) {
-        log.innerHTML = `<p class="empty">${esc(e.message)}</p>`;
+        const form = overlay.querySelector("#ch-form");
+        // Échange impossible (403 accès / 402 premium) : on explique POURQUOI, avec une
+        // illustration, et on masque le composer (impossible d'écrire de toute façon).
+        if (e?.status === 403 || e?.status === 402) {
+          const reason = /contact/i.test(e.message)
+            ? `Vous n'êtes pas encore en relation réciproque avec <b>@${esc(handle)}</b>. Pour discuter, il faut que vous soyez <b>connectés des deux côtés</b> : ajoutez @${esc(handle)} en contact et demandez-lui de vous ajouter en retour.`
+            : /abonn/i.test(e.message)
+              ? `La messagerie avec <b>@${esc(handle)}</b> est réservée à ses abonné·e·s premium.`
+              : `<b>@${esc(handle)}</b> a désactivé la messagerie.`;
+          log.innerHTML = chatBlockedHtml(reason);
+          if (form) form.style.display = "none";
+        } else {
+          if (form) form.style.display = "";
+          log.innerHTML = `<p class="empty">${esc(e.message)}</p>`;
+        }
       }
     }
 
@@ -821,12 +865,16 @@ export default function register(host) {
         <p class="sub" id="gc-note"></p>
         <div class="chat-log" id="gc-log"><p class="empty">Chargement…</p></div>
         <form id="gc-form" class="chat-form">
-          <button type="button" class="btn" id="gc-attach" title="Joindre un fichier" aria-label="Joindre un fichier">📎</button>
-          <button type="button" class="btn" id="gc-mic" title="Enregistrer un message vocal" aria-label="Message vocal">🎤</button>
-          <button type="button" class="btn" id="gc-once" title="Message à lecture unique" aria-label="Lecture unique" aria-pressed="false">👁</button>
-          <input type="file" id="gc-file" hidden />
-          <input id="gc-input" placeholder="Message au groupe…" autocomplete="off" maxlength="1000" />
-          <button class="btn primary" type="submit" title="Envoyer" aria-label="Envoyer" style="padding:.3rem .55rem;flex:none">${svgIcon("send", 18)}</button>
+          <div class="chat-actions">
+            <button type="button" class="btn" id="gc-attach" title="Joindre un fichier" aria-label="Joindre un fichier">📎</button>
+            <button type="button" class="btn" id="gc-mic" title="Enregistrer un message vocal" aria-label="Message vocal">🎤</button>
+            <button type="button" class="btn" id="gc-once" title="Message à lecture unique" aria-label="Lecture unique" aria-pressed="false">👁</button>
+            <input type="file" id="gc-file" hidden />
+          </div>
+          <div class="chat-input-row">
+            <input id="gc-input" placeholder="Message au groupe…" autocomplete="off" maxlength="1000" />
+            <button class="btn primary" type="submit" title="Envoyer" aria-label="Envoyer">${svgIcon("send", 18)}</button>
+          </div>
         </form>
       </div>`;
     host.openDeckColumn({ key: `group:${gid}`, label: "Groupe", html, wire });

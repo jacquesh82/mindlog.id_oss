@@ -50,6 +50,12 @@ import {
   availabilityStatus,
   bookedSlots,
   DEFAULT_AVAILABILITY,
+  inviteToEvent,
+  removeEventInvite,
+  listEventInvites,
+  listMyInvites,
+  getAcceptedInviteEvents,
+  respondEventInvite,
 } from "../src/store.js";
 
 // Migrations appliquées une fois sur la base PGlite (en mémoire).
@@ -506,4 +512,65 @@ test("addTag : tag vide rejeté, plafond à 20", async () => {
   for (let i = 0; i < 20; i++) await addTag(a.id, `t${i}`);
   await assert.rejects(() => addTag(a.id, "t20"), /Maximum/);
   assert.equal((await getTags(a.id)).length, 20);
+});
+
+/* ----------------------------- Invitations RSVP -------------------------- */
+
+test("inviteToEvent → respond : flux complet RSVP + jointure virtuelle", async () => {
+  const org = await createIdentity("orga");
+  const guest = await createIdentity("invite");
+  // « Toute relation » : une relation sortante de l'organisateur suffit.
+  await addRelation(org.id, "invite", "amis");
+  const ev = await addEvent(org.id, { title: "Apéro", starts_at: "2030-01-02T18:00:00.000Z" });
+
+  const r = await inviteToEvent(ev.id, org.id, "invite");
+  assert.equal(r.created, true);
+  assert.equal(r.status, "pending");
+  // Ré-invitation idempotente (pas de doublon, pas de nouvelle notif).
+  assert.equal((await inviteToEvent(ev.id, org.id, "invite")).created, false);
+
+  // Vue organisateur : un invité en attente.
+  const list = await listEventInvites(ev.id, org.id);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].handle, "invite");
+  assert.equal(list[0].status, "pending");
+
+  // Vue invité : une invitation en attente, aucun event accepté pour l'instant.
+  assert.equal((await listMyInvites(guest.id)).length, 1);
+  assert.equal((await getAcceptedInviteEvents(guest.id)).length, 0);
+
+  // Acceptation → l'event apparaît (lecture seule) dans l'agenda de l'invité.
+  const resp = await respondEventInvite(guest.id, ev.id, true);
+  assert.equal(resp?.organizerId, org.id);
+  const accepted = await getAcceptedInviteEvents(guest.id);
+  assert.equal(accepted.length, 1);
+  assert.equal(accepted[0].title, "Apéro");
+  assert.equal(accepted[0].invited_by, "orga");
+  assert.equal((await listMyInvites(guest.id)).length, 0); // plus en attente
+
+  // Re-répondre à une invitation déjà traitée → rien à faire.
+  assert.equal(await respondEventInvite(guest.id, ev.id, false), null);
+});
+
+test("inviteToEvent : refuse soi-même, non-relation et event d'autrui", async () => {
+  const org = await createIdentity("orga2");
+  const stranger = await createIdentity("etranger");
+  const ev = await addEvent(org.id, { title: "Réu", starts_at: "2030-02-02T10:00:00.000Z" });
+  // Soi-même.
+  await assert.rejects(() => inviteToEvent(ev.id, org.id, "orga2"), (e) => e instanceof StoreError && e.status === 400);
+  // Pas de relation sortante vers l'étranger.
+  await assert.rejects(() => inviteToEvent(ev.id, org.id, "etranger"), (e) => e instanceof StoreError && e.status === 403);
+  // Inviter sur l'event d'un autre (stranger n'en est pas propriétaire).
+  await assert.rejects(() => inviteToEvent(ev.id, stranger.id, "orga2"), (e) => e instanceof StoreError && e.status === 404);
+});
+
+test("removeEventInvite : l'organisateur retire une invitation", async () => {
+  const org = await createIdentity("orga3");
+  await createIdentity("invite3");
+  await addRelation(org.id, "invite3", "pro");
+  const ev = await addEvent(org.id, { title: "Sortie", starts_at: "2030-03-03T12:00:00.000Z" });
+  await inviteToEvent(ev.id, org.id, "invite3");
+  assert.equal((await listEventInvites(ev.id, org.id)).length, 1);
+  assert.equal(await removeEventInvite(ev.id, org.id, "invite3"), true);
+  assert.equal((await listEventInvites(ev.id, org.id)).length, 0);
 });

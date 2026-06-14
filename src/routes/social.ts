@@ -9,6 +9,8 @@ import {
   acceptInvite,
   hasRelation,
   getIdentityByHandle,
+  getMutualContactIds,
+  markBirthdayAnnouncedIfNew,
 } from "../store.js";
 import { pushConfigured, vapidPublicKey, addPushSubscription, removePushSubscription } from "../push.js";
 import { isMailConfigured, sendMail } from "../mailer.js";
@@ -23,6 +25,33 @@ route.post("/api/notifications/read", async (c) => {
   if (!id) return c.json({ error: "unauthorized" }, 401);
   await markNotificationsRead(id.id);
   return c.json({ ok: true });
+});
+
+/* ----------------------- Annonce d'anniversaire -------------------------- */
+// Le serveur ne connaît PAS la date de naissance (champ de carte, potentiellement
+// chiffré E2E) : c'est le poste de l'OWNER — seul à pouvoir lire sa propre date —
+// qui déclenche le fan-out le jour J. Le serveur se contente de notifier les
+// contacts mutuels, avec une dédup once/an (anti-doublon multi-appareils + anti-abus).
+route.post("/api/birthday/announce", async (c) => {
+  const id = await currentIdentity(c);
+  if (!id) return c.json({ error: "unauthorized" }, 401);
+  // Année de référence : l'owner peut l'envoyer (son heure locale), bornée à ±1 an
+  // autour de l'année serveur pour qu'un client ne « consomme » pas une année future.
+  const { year } = await readBody<{ year?: number }>(c);
+  const serverYear = new Date().getUTCFullYear();
+  const y =
+    typeof year === "number" && year >= serverYear - 1 && year <= serverYear + 1
+      ? Math.floor(year)
+      : serverYear;
+  // Dédup atomique : un seul fan-out par année, quel que soit le nombre d'appareils
+  // ou de rechargements. Renvoie false si déjà annoncé cette année.
+  if (!(await markBirthdayAnnouncedIfNew(id.id, y)))
+    return c.json({ ok: true, announced: 0, already: true });
+  const contactIds = await getMutualContactIds(id.id);
+  for (const cid of contactIds) {
+    await notify(cid, "birthday", `🎂 C'est l'anniversaire de @${id.handle} aujourd'hui !`, `/@${id.handle}`);
+  }
+  return c.json({ ok: true, announced: contactIds.length });
 });
 
 /* ------------------------------- Web Push (PWA) -------------------------- */

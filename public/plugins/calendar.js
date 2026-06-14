@@ -257,13 +257,15 @@ export default function register(host) {
     const rowH = 40; // px par heure (cf. .cal-time-row)
     const now = new Date();
     const todayIso = isoDayOf(now);
-    const nowTopPx =
-      (now.getHours() - startHour + now.getMinutes() / 60) * rowH;
+    // Position de la ligne « maintenant » en FRACTION d'heures depuis startHour ;
+    // convertie en px via var(--cal-row-h) au rendu (la hauteur de ligne est
+    // ajustée par fitTimeGrid pour remplir l'espace).
+    const nowTopH = now.getHours() - startHour + now.getMinutes() / 60;
 
     // Rail des heures à gauche
     const hourLabels = Array.from({ length: nbHours }, (_, i) => {
       const h = startHour + i;
-      return `<div class="cal-time-row" style="height:${rowH}px"><span class="cal-time-lbl">${pad2(h)}:00</span></div>`;
+      return `<div class="cal-time-row"><span class="cal-time-lbl">${pad2(h)}:00</span></div>`;
     }).join("");
 
     // Colonnes-jours
@@ -281,8 +283,9 @@ export default function register(host) {
       const blocks = dayEvents.map((ev) => {
         const s = new Date(ev.starts_at);
         const end = ev.ends_at ? new Date(ev.ends_at) : new Date(s.getTime() + 60 * 60_000);
-        const top = Math.max(0, ((s.getHours() + s.getMinutes() / 60) - startHour) * rowH);
-        const height = Math.max(20, ((end - s) / 3_600_000) * rowH - 2);
+        // top/hauteur exprimés en heures (fraction) → px via var(--cal-row-h).
+        const topH = Math.max(0, (s.getHours() + s.getMinutes() / 60) - startHour);
+        const durH = Math.max(0, (end - s) / 3_600_000);
         const t = fmtHourMin(s);
         const tEnd = fmtHourMin(end);
         const tooltipBase = `${t} — ${tEnd} · ${ev.title || ""}`;
@@ -291,7 +294,7 @@ export default function register(host) {
         const notesHtml = ev.notes ? `<div class="cal-block-notes">${esc(ev.notes)}</div>` : "";
         return `<button type="button" class="cal-time-block ${ev.kind === "live" ? "is-live" : "is-event"}"
           data-event-id="${ev.id}"
-          style="top:${top}px;height:${height}px"
+          style="top:calc(var(--cal-row-h) * ${topH});height:calc(var(--cal-row-h) * ${durH} - 2px)"
           title="${esc(tooltip)}">
           <div class="cal-block-row cal-block-head">
             <span class="cal-block-time">${t}</span>
@@ -319,7 +322,7 @@ export default function register(host) {
               ? `data-slot-new="${slotIso}"`
               : `data-slot-book="${iso}|${pad2(hour)}:00"`)
           : "";
-        return `<button type="button" class="cal-time-slot" ${attr} ${clickable ? "" : "disabled"} style="height:${rowH}px"></button>`;
+        return `<button type="button" class="cal-time-slot" ${attr} ${clickable ? "" : "disabled"}></button>`;
       }).join("");
 
       // Header de colonne : jour + dot d'état (free/busy). En éditeur, le dot
@@ -344,7 +347,7 @@ export default function register(host) {
 
       return `<div class="cal-day-col ${past ? "past" : ""} ${isToday ? "is-today" : ""} ${statusCls}" data-iso="${iso}">
         ${colHeader}
-        <div class="cal-day-body ${statusCls}" data-day="${iso}" style="height:${nbHours * rowH}px">
+        <div class="cal-day-body ${statusCls}" data-day="${iso}" style="height:calc(var(--cal-row-h) * ${nbHours})">
           ${slots}
           ${blocks}
         </div>
@@ -357,13 +360,13 @@ export default function register(host) {
     const todayInRange = days.some((d) => isoDayOf(d) === todayIso);
     const headerH = 64; // doit matcher .cal-day-header height
     const nowLineGlobal =
-      todayInRange && nowTopPx >= 0 && nowTopPx <= nbHours * rowH
-        ? `<div class="cal-now-line" style="top:${headerH + nowTopPx}px" aria-hidden="true">
+      todayInRange && nowTopH >= 0 && nowTopH <= nbHours
+        ? `<div class="cal-now-line" style="top:calc(${headerH}px + var(--cal-row-h) * ${nowTopH})" aria-hidden="true">
             <span class="cal-now-label">${pad2(now.getHours())}:${pad2(now.getMinutes())}</span>
           </div>`
         : "";
 
-    return `<div class="cal-time-grid" style="--cal-row-h:${rowH}px">
+    return `<div class="cal-time-grid" data-rows="${nbHours}" style="--cal-row-h:${rowH}px">
       <div class="cal-time-rail">
         <div class="cal-day-header is-spacer"></div>
         ${hourLabels}
@@ -414,6 +417,36 @@ export default function register(host) {
   function calendarHtml(overrides, editable, counts, canBook = true, events = []) {
     const { html } = renderInner(overrides || {}, editable, counts, canBook, events);
     return `<div class="calendar view-${view}">${html}</div>`;
+  }
+
+  // Étire la grille Jour/Semaine pour remplir la hauteur disponible : on calcule
+  // la hauteur de ligne (var --cal-row-h) à partir de l'espace réel, de sorte que
+  // header + nbHours lignes occupent toute la grille (plus de grand vide sous le
+  // calendrier). Plancher à 40px → si l'espace manque, la grille défile
+  // (overflow:auto) au lieu de tasser les lignes. Un seul ResizeObserver vivant à
+  // la fois (réattaché à chaque (re)rendu).
+  const TIME_HEADER_H = 64; // doit matcher .cal-day-header height
+  const MIN_ROW_H = 40;
+  let _calResizeObs = null;
+  function fitTimeGrid(container) {
+    const grid = container?.querySelector(".cal-time-grid");
+    if (_calResizeObs) { _calResizeObs.disconnect(); _calResizeObs = null; }
+    if (!grid) return; // vue Mois : rien à étirer
+    const apply = () => {
+      const rows = Number(grid.dataset.rows) || 0;
+      if (!rows) return;
+      const avail = grid.clientHeight - TIME_HEADER_H;
+      if (avail <= 0) return;
+      const rowH = Math.max(MIN_ROW_H, avail / rows);
+      grid.style.setProperty("--cal-row-h", `${rowH}px`);
+    };
+    apply();
+    if (typeof ResizeObserver !== "undefined") {
+      // Observe la grille (hauteur pilotée par le parent flex, pas par son
+      // contenu) → modifier --cal-row-h ne reboucle pas.
+      _calResizeObs = new ResizeObserver(apply);
+      _calResizeObs.observe(grid);
+    }
   }
 
   // Câblage : navigation, switcher de vue, clics jours/slots/chips.
@@ -477,9 +510,12 @@ export default function register(host) {
     // via PUT /api/agenda/:id, snap au pas slot_minutes. Drag horizontal entre
     // colonnes en vue Semaine (l'event change de jour).
     if (editable && (view === "week" || view === "day")) {
-      const ROW_H = 40; // doit matcher --cal-row-h
+      // Hauteur de ligne RÉELLE (étirée par fitTimeGrid) plutôt que la constante :
+      // sinon le drag/redimensionnement calcule des heures fausses dès que la
+      // grille remplit l'espace.
+      const gridEl = container.querySelector(".cal-time-grid");
+      const rowHpx = () => parseFloat(gridEl && getComputedStyle(gridEl).getPropertyValue("--cal-row-h")) || 40;
       const snapMin = currentAvail.slot_minutes || 30;
-      const snapPx = (snapMin / 60) * ROW_H;
       const { startHour } = hourRange();
 
       container.querySelectorAll(".cal-time-block[data-event-id]").forEach((block) => {
@@ -495,12 +531,15 @@ export default function register(host) {
           // Ignore les clics sur le bouton de fermeture/contenu interactif éventuel.
           const rect = block.getBoundingClientRect();
           const onResizeEdge = (e.clientY - rect.top) > rect.height - 8;
+          // offsetTop/offsetHeight (et non parseFloat(style)) car top/height sont
+          // exprimés en calc(var(--cal-row-h)…) → non parsables en px.
           session = {
             mode: onResizeEdge ? "resize" : "move",
             startY: e.clientY,
             startX: e.clientX,
-            startTop: parseFloat(block.style.top) || 0,
-            startHeight: parseFloat(block.style.height) || ROW_H,
+            startTop: block.offsetTop || 0,
+            startHeight: block.offsetHeight || rowHpx(),
+            snapPx: (snapMin / 60) * rowHpx(),
             startColIso: block.closest(".cal-day-body")?.dataset.day || null,
             moved: false,
           };
@@ -517,6 +556,7 @@ export default function register(host) {
           }
           if (!session.moved) return;
           // Snap au plus proche multiple de snapPx
+          const snapPx = session.snapPx;
           const snappedDy = Math.round(dy / snapPx) * snapPx;
 
           if (session.mode === "resize") {
@@ -557,16 +597,17 @@ export default function register(host) {
           const swallow = (ce) => { ce.stopPropagation(); ce.preventDefault(); block.removeEventListener("click", swallow, true); };
           block.addEventListener("click", swallow, true);
 
-          // Recalcule starts_at/ends_at
-          const newTopPx = parseFloat(block.style.top) || 0;
-          const newHeightPx = parseFloat(block.style.height) || ROW_H;
+          // Recalcule starts_at/ends_at (offset* car style en calc()).
+          const rowPx = rowHpx();
+          const newTopPx = block.offsetTop || 0;
+          const newHeightPx = block.offsetHeight || rowPx;
           const destIso = block.closest(".cal-day-body")?.dataset.day;
           if (!destIso) { rerender(); return; }
           const [yyyy, mm, dd] = destIso.split("-").map(Number);
-          const startMinutes = startHour * 60 + (newTopPx / ROW_H) * 60;
+          const startMinutes = startHour * 60 + (newTopPx / rowPx) * 60;
           const startDate = new Date(yyyy, mm - 1, dd, 0, 0, 0);
           startDate.setMinutes(Math.round(startMinutes));
-          const durationMin = Math.max(snapMin, Math.round((newHeightPx / ROW_H) * 60));
+          const durationMin = Math.max(snapMin, Math.round((newHeightPx / rowPx) * 60));
           const endDate = new Date(startDate.getTime() + durationMin * 60_000);
           const payload = {
             starts_at: startDate.toISOString(),
@@ -678,6 +719,9 @@ export default function register(host) {
         );
       }
     }
+
+    // Étire la grille horaire pour remplir l'espace dispo (vues Jour/Semaine).
+    fitTimeGrid(container);
   }
 
   /* --------------------------- Modale RDV (visiteur) ---------------------- */
