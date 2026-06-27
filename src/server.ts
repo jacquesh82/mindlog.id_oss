@@ -37,7 +37,6 @@ import groupsRoutes from "./routes/groups.js";
 import socialRoutes from "./routes/social.js";
 import bookingRoutes from "./routes/booking.js";
 import galleryRoutes from "./routes/gallery.js";
-import legalRoutes from "./routes/legal.js";
 
 const STARTED_AT = Date.now();
 const TURNSTILE_SITE_KEY = process.env.TURNSTILE_SITE_KEY ?? "";
@@ -130,7 +129,7 @@ app.route("/", groupsRoutes);
 app.route("/", socialRoutes);
 app.route("/", bookingRoutes);
 app.route("/", galleryRoutes);
-app.route("/", legalRoutes);
+// Les pages légales sont maintenant servies par le site vitrine (VITRINE_URL).
 
 /* ----- Santé du serveur MCP : comptage des outils cloud, en process ----- */
 // On mesure le serveur réellement servi sur `/mcp` (`buildCloudMcpServer`), pas un
@@ -269,6 +268,21 @@ app.on(["GET", "POST", "DELETE"], "/mcp", async (c) => {
 // on garde l'ancienne URL pour compat en redirigeant vers l'ancre.
 app.get("/pricing", (c) => c.redirect("/#sec-pricing", 301));
 
+/* --------------------------------- Vitrine -------------------------------- */
+// La landing et les pages légales vivent dans le site vitrine statique séparé
+// (mindlog.id.web — https://mindlog.id en prod).
+// En dev, on sert directement le shell SPA : son routeur JS gère / comme
+// la landing page, ce qui évite un aller-retour vers la prod.
+const VITRINE = (process.env.VITRINE_URL ?? "https://mindlog.id").replace(/\/$/, "");
+
+app.get("/", (c) => c.redirect(VITRINE, 302));
+app.get("/mentions-legales", (c) => c.redirect(`${VITRINE}/fr/mentions-legales/`, 301));
+app.get("/cgu", (c) => c.redirect(`${VITRINE}/fr/cgu/`, 301));
+app.get("/confidentialite", (c) => c.redirect(`${VITRINE}/fr/confidentialite/`, 301));
+app.get("/cgv", (c) => c.redirect(`${VITRINE}/fr/cgv/`, 301));
+app.get("/privacy", (c) => c.redirect(`${VITRINE}/fr/confidentialite/`, 301));
+app.get("/legal", (c) => c.redirect(`${VITRINE}/fr/mentions-legales/`, 301));
+
 /* ----------------------------------- Pages -------------------------------- */
 // SPA mono-page : le routeur JS distingue landing (/), profil public (/@handle)
 // et éditeur privé (/k/:key) à partir de l'URL.
@@ -338,7 +352,7 @@ app.get("/live/:streamId{[A-Za-z0-9-]+}", (c) => {
   return c.html(readFileSync(resolve(PUBLIC_DIR, "live", "watch.html"), "utf8"));
 });
 
-app.get("/", page);
+app.get("/app", page); // point d'entrée d'authentification (vue login du SPA)
 app.get("/me", page);
 app.get("/me/premium", page); // page « Espace Premium » plein écran (SPA)
 app.get("/status", page);

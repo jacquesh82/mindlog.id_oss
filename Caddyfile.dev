@@ -14,3 +14,15 @@ id.mindlog.localhost {
 	tls /certs/id.mindlog.localhost.pem /certs/id.mindlog.localhost-key.pem
 	reverse_proxy host.docker.internal:8787
 }
+
+# Authentik SSO — proxifie vers le port exposé de Docker
+auth.mindlog.localhost {
+	tls /certs/auth.mindlog.localhost.pem /certs/auth.mindlog.localhost-key.pem
+	reverse_proxy host.docker.internal:9100
+}
+
+# mindlog.todo — proxifie vers le nginx HTTP du compose (port 8081 sur l'hôte)
+todo.mindlog.localhost {
+	tls /certs/todo.mindlog.localhost.pem /certs/todo.mindlog.localhost-key.pem
+	reverse_proxy host.docker.internal:8081
+}

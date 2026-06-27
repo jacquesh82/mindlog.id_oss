@@ -195,7 +195,7 @@ export async function ensureMilo(): Promise<void> {
   await upsertField(id.id, { key: "title", label: "Rôle", value: "Mascotte officielle" });
   await upsertField(id.id, miloBio);
   await upsertField(id.id, { key: "email", value: MILO_EMAIL });
-  await upsertField(id.id, { key: "website", label: "Site", value: "https://id.mindlog.today" });
+  await upsertField(id.id, { key: "website", label: "Site", value: process.env.APP_URL ?? "https://id.mindlog.today" });
   await upsertField(id.id, { key: "location", label: "Lieu", value: "Forêt tropicale, Madagascar" });
   await upsertField(id.id, { key: "company", label: "Projet", value: "mindlog · id" });
   for (const tag of ["caméléon", "nature", "photographie", "open-source", "mindlog"]) {

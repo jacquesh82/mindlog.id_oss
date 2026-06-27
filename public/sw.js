@@ -14,7 +14,9 @@ const VERSION = "__V__";
 const CACHE = "mindlog-shell-" + VERSION;
 
 // Précache atomique (doit exister) + best-effort (icônes, non bloquant).
-const CORE = ["/", "/manifest.webmanifest", "/static/milo.svg"];
+// NB : on précache « /app » (shell SPA, 200) et non « / » qui redirige désormais
+// vers la vitrine (302) — un précache d'URL redirigée fait échouer addAll().
+const CORE = ["/app", "/manifest.webmanifest", "/static/milo.svg"];
 const EXTRA = ["/static/icon-192.png", "/static/icon-512.png", "/static/maskable-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -66,10 +68,16 @@ self.addEventListener("fetch", (event) => {
     return;
 
   // Navigations : réseau d'abord, repli sur le shell en cache (app-shell offline).
+  // `redirect: "manual"` est CRUCIAL : « / » et les pages légales renvoient une
+  // redirection (302/301) vers la vitrine. Sans ça, fetch() suivrait la redirection
+  // et renverrait une réponse `redirected:true` — que Chrome REFUSE pour une
+  // navigation (« a redirected response was used… ») → page qui ne répond plus.
+  // En mode manuel, le SW relaie la réponse opaqueredirect et le navigateur suit
+  // lui-même la redirection.
   if (req.mode === "navigate") {
     event.respondWith(
-      fetch(req).catch(() =>
-        caches.match("/", { ignoreSearch: true }).then((r) => r || Response.error())
+      fetch(req, { redirect: "manual" }).catch(() =>
+        caches.match("/app", { ignoreSearch: true }).then((r) => r || Response.error())
       )
     );
     return;

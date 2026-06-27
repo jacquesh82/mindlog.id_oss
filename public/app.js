@@ -190,6 +190,14 @@ function showUpdateBanner(info) {
   const app = document.getElementById("app");
   document.body.insertBefore(bar, app || document.body.firstChild);
   bar.querySelector("#update-banner-btn").addEventListener("click", forceAppUpdate);
+  // Le bandeau est un frère en flux : il décale #app vers le bas, mais les chromes
+  // en position:fixed (header, rail latéral) et les hauteurs en 100dvh restent calés
+  // sur le viewport → on publie sa hauteur réelle dans --banner-h pour les compenser.
+  // La hauteur varie selon le retour à la ligne (mobile) → ResizeObserver.
+  const syncBannerH = () =>
+    document.documentElement.style.setProperty("--banner-h", `${bar.offsetHeight}px`);
+  syncBannerH();
+  try { new ResizeObserver(syncBannerH).observe(bar); } catch { /* pas de RO : valeur figée OK */ }
 }
 
 async function forceAppUpdate() {
@@ -436,8 +444,8 @@ function valueHtml(key, value) {
 }
 
 
-// URL de production.
-const PROD_URL = "id.mindlog.today";
+// Hostname courant (id.mindlog.today en prod, id.mindlog.localhost en dev).
+const PROD_URL = location.hostname;
 const GITHUB_URL = "https://github.com/jacquesh82/mindlog.id";
 
 // Configurations MCP pour un client (Claude Desktop/Code, ChatGPT, Cursor…).
@@ -478,7 +486,6 @@ function headerAccount(unread = 0) {
   return `<div class="profile-menu-wrap">
     <button class="profile-chip profile-chip--icon" id="profile-menu-btn" type="button" aria-expanded="false" aria-haspopup="menu" aria-label="Compte @${esc(h)}" title="@${esc(h)}">
       ${avHtml}
-      <span class="chip-notif-dot" id="chip-notif-dot" ${unread ? "" : "hidden"}>${unread || ""}</span>
     </button>
     <div class="profile-menu" id="profile-menu" role="menu">
       <div class="pmenu-header" role="presentation">
@@ -682,6 +689,10 @@ function route() {
   if (path === "/status") {
     app.dataset.view = "status";
     return renderStatus();
+  }
+  if (path === "/app") {
+    // Point d'entrée d'authentification (la vitrine « / » est un site séparé).
+    return renderAuth();
   }
   if (path === "/me/premium") {
     // Page « Espace Premium » plein écran (vraie page, back natif).
@@ -1059,6 +1070,34 @@ function sovereignColHtml() {
     <p class="sov-legend">${t("sov_legend")}</p>
     <p class="sov-cmp-note">${t("sov_cmp_note")}</p>
   </section>`;
+}
+
+// Vue « /app » : point d'entrée d'authentification, découplé de la vitrine
+// (servie à « / » par un site statique séparé). Affiche directement la fenêtre
+// de connexion — évite l'ancienne boucle /app → /me → /.
+function renderAuth() {
+  // Déjà connecté (cookie de session) ou ancienne clé mémorisée → espace privé.
+  if (!_autoReconnectTried && (sessionHint() || storedKey())) {
+    _autoReconnectTried = true;
+    app.innerHTML = `<p class="loading">Reconnexion…</p>`;
+    tryAutoReconnect().then((done) => { if (!done) renderAuth(); });
+    return;
+  }
+  app.dataset.view = "auth";
+  app.style.cssText = "display:flex;align-items:center;justify-content:center;min-height:100dvh";
+  app.innerHTML = `
+    <div class="card" style="text-align:center;max-width:360px;padding:2rem 1.6rem">
+      <div class="empty-milo">${miloSvg(96)}</div>
+      <h1 style="margin:.5rem 0 1.3rem">mindlog · id</h1>
+      <div style="display:flex;flex-direction:column;gap:.6rem">
+        <button class="btn primary" id="auth-login">${icon("key", 16)} ${t("login")}</button>
+        <button class="btn" id="auth-create">${icon("user", 16)} ${t("create")}</button>
+      </div>
+      <p style="margin-top:1.4rem;font-size:.9rem"><a href="/">← Accueil</a></p>
+    </div>`;
+  app.querySelector("#auth-login").addEventListener("click", openRecover);
+  app.querySelector("#auth-create").addEventListener("click", openCreate);
+  openRecover(); // la fenêtre de login s'affiche d'emblée
 }
 
 function renderLanding() {
@@ -2164,6 +2203,10 @@ function openRecover() {
           </div>
         </form>
       </div>
+
+      <p class="sub" style="margin-top:1.2rem;text-align:center">
+        Pas encore de compte ? <a href="#" id="rc-create">${icon("user", 14)} Créer ma page</a>
+      </p>
     </div>`;
   document.body.appendChild(overlay);
   const close = () => overlay.remove();
@@ -2171,6 +2214,12 @@ function openRecover() {
   overlay.querySelectorAll("#rc-close, #rc-cancel, #rc-pk-cancel").forEach((b) =>
     b.addEventListener("click", close)
   );
+  // Pas encore de compte → bascule vers la création de page.
+  overlay.querySelector("#rc-create")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    close();
+    openCreate();
+  });
 
   // Onglets
   overlay.querySelectorAll(".rc-tab").forEach((tab) =>
@@ -4804,7 +4853,14 @@ onSSE("notif", (d) => {
   } else if (d?.text) {
     toast("🔔 " + d.text);
   }
-  [document.getElementById("notif-badge"), document.getElementById("chip-notif-dot")].forEach((badge) => {
+  // Le compteur non-lus vit sur l'entrée « Compte » de la nav (les notifications
+  // sont sous Compte), sur la cloche du header et sur la pastille du sous-menu
+  // « Notifs ». On incrémente en direct ceux qui sont présents dans le DOM.
+  [
+    document.getElementById("notif-badge"),
+    document.querySelector("[data-notif-badge]"),
+    document.querySelector('.opt-tab[data-tab="notifs"] .subrail-badge'),
+  ].forEach((badge) => {
     if (!badge) return;
     badge.hidden = false;
     badge.textContent = String((parseInt(badge.textContent || "0", 10) || 0) + 1);

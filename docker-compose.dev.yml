@@ -1,21 +1,25 @@
-# Environnement de DÉVELOPPEMENT en HTTPS.
+# Proxy TLS de DÉVELOPPEMENT partagé — gère tous les sous-domaines *.mindlog.localhost.
 #
-# Ce compose ne lance QUE le reverse proxy TLS. Le serveur applicatif tourne sur
-# l'hôte via `npm run dev` (HTTP, port 8787) et Postgres via le `docker-compose.yml`
-# principal. Caddy termine le TLS pour https://id.mindlog.localhost avec un cert
-# mkcert (CA locale de confiance) et proxifie vers l'hôte.
+# Ce Caddy est le point d'entrée HTTPS unique pour le dev local :
+#   • https://id.mindlog.localhost   → npm run dev (port 8787 sur l'hôte)
+#   • https://auth.mindlog.localhost → Authentik (port 9100 sur l'hôte)
+#   • https://todo.mindlog.localhost → mindlog.todo nginx HTTP (port 8081 sur l'hôte)
 #
-# Pré-requis :
-#   1. /etc/hosts (Linux) :  192.168.1.170 id.mindlog.localhost
-#   2. certs/ généré :  mkcert -cert-file certs/id.mindlog.localhost.pem \
-#                              -key-file  certs/id.mindlog.localhost-key.pem \
-#                              id.mindlog.localhost localhost 192.168.1.170 127.0.0.1 10.0.2.2
-#   3. APP_URL=https://id.mindlog.localhost dans .env
+# Pré-requis /etc/hosts (une ligne par domaine) :
+#   127.0.0.1 id.mindlog.localhost
+#   127.0.0.1 auth.mindlog.localhost
+#   127.0.0.1 todo.mindlog.localhost
 #
-# Lancer :
-#   docker compose up -d db                       # Postgres
-#   npm run dev                                   # app HTTP 8787
-#   docker compose -f docker-compose.dev.yml up   # TLS 443 → 8787
+# Certs à générer dans certs/ (mkcert) :
+#   mkcert -cert-file certs/id.mindlog.localhost.pem   -key-file certs/id.mindlog.localhost-key.pem   id.mindlog.localhost   localhost 192.168.1.170 127.0.0.1 10.0.2.2
+#   mkcert -cert-file certs/auth.mindlog.localhost.pem -key-file certs/auth.mindlog.localhost-key.pem auth.mindlog.localhost localhost 192.168.1.170 127.0.0.1 10.0.2.2
+#   mkcert -cert-file certs/todo.mindlog.localhost.pem -key-file certs/todo.mindlog.localhost-key.pem todo.mindlog.localhost localhost 192.168.1.170 127.0.0.1 10.0.2.2
+#
+# Lancer (dans l'ordre) :
+#   docker compose up -d db                            # Postgres mindlog.id
+#   npm run dev                                        # app mindlog.id HTTP 8787
+#   cd ../mindlog.todo && docker compose up -d         # mindlog.todo (api + nginx sur 8081)
+#   docker compose -f docker-compose.dev.yml up        # Caddy TLS 443
 services:
   caddy-dev:
     image: caddy:2-alpine
