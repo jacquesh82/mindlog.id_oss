@@ -24,7 +24,7 @@ import { bookingReminderEmail } from "./emails.js";
 import { rateLimit, securityHeaders, requestBodyLimit } from "./security.js";
 import { buildCloudMcpServer, cloudMcpToolCount } from "./mcp-cloud.js";
 import { mountOAuth } from "./oauth-routes.js";
-import { verifyAccessToken, protectedResourceMetadata, pruneOAuth } from "./oauth.js";
+import { verifyAccessToken, protectedResourceMetadata, pruneOAuth, seedFirstPartyClients } from "./oauth.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { initDb } from "./db.js";
 import { currentIdentity, notify } from "./routes/_ctx.js";
@@ -379,6 +379,7 @@ try {
 } catch { /* édition communautaire : Premium non disponible */ }
 
 await initDb(); // applique les migrations Drizzle
+await seedFirstPartyClients(); // enregistre les clients OAuth first-party (mindlog.todo…) depuis l'env
 await ensureMilo(); // crée/maj le profil mascotte @milo
 if (_premiumEnsureMilo) {
   // En édition Premium, on enrichit @milo : abonnement actif, espace privé

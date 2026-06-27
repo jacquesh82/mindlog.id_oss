@@ -152,6 +152,66 @@ export async function getClient(clientId: string): Promise<ClientRecord | null> 
   };
 }
 
+/* --------------------- Clients « first-party » (seed) -------------------- */
+
+/**
+ * Enregistre (ou met à jour) un client confidentiel « first-party » — les apps
+ * mindlog officielles comme mindlog.todo. Contrairement au DCR (RFC 7591) qui
+ * génère un client_id aléatoire, l'id et le secret sont FIXES et partagés via
+ * l'environnement entre l'IdP et l'app cliente : la config est donc reproductible
+ * en dev comme en prod, sans étape manuelle d'enregistrement.
+ *
+ * Idempotent : upsert sur client_id (met à jour secret/redirect_uris/nom si la
+ * config change). Ne fait rien si client_id, secret ou redirect_uris manquent.
+ */
+export async function seedFirstPartyClient(input: {
+  client_id: string;
+  client_secret: string;
+  redirect_uris: string[];
+  client_name?: string;
+}): Promise<void> {
+  if (!input.client_id || !input.client_secret || !input.redirect_uris.length) return;
+  const secret_hash = sha256(input.client_secret);
+  const redirect_json = JSON.stringify(input.redirect_uris);
+  const client_name = input.client_name ?? input.client_id;
+  await db
+    .insert(oauthClients)
+    .values({
+      client_id: input.client_id,
+      client_secret_hash: secret_hash,
+      client_name,
+      redirect_uris: redirect_json,
+      token_endpoint_auth_method: "client_secret_post",
+    })
+    .onConflictDoUpdate({
+      target: oauthClients.client_id,
+      set: { client_secret_hash: secret_hash, client_name, redirect_uris: redirect_json, token_endpoint_auth_method: "client_secret_post" },
+    });
+}
+
+/**
+ * Charge au démarrage les clients first-party déclarés en environnement (un par
+ * app). Aujourd'hui : mindlog.todo via MINDLOG_TODO_CLIENT_ID / _SECRET /
+ * _REDIRECT_URIS (URIs séparées par des virgules). À appeler une fois après initDb().
+ */
+export async function seedFirstPartyClients(): Promise<void> {
+  const redirects = (process.env.MINDLOG_TODO_REDIRECT_URIS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const clientId = process.env.MINDLOG_TODO_CLIENT_ID;
+  const secret = process.env.MINDLOG_TODO_CLIENT_SECRET;
+  if (clientId && secret && redirects.length) {
+    await seedFirstPartyClient({
+      client_id: clientId,
+      client_secret: secret,
+      redirect_uris: redirects,
+      client_name: process.env.MINDLOG_TODO_CLIENT_NAME ?? "mindlog.todo",
+    });
+    console.log(`[oauth] client first-party « ${clientId} » prêt (${redirects.length} redirect_uri).`);
+  }
+}
+
 /** Vérifie le secret d'un client confidentiel (constant-ish via hash). */
 export function clientSecretValid(client: ClientRecord, secret: string | undefined): boolean {
   if (!client.client_secret_hash) return true; // client public : pas de secret

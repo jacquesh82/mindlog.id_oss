@@ -10,7 +10,7 @@ import type { Context, Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { randomBytes } from "node:crypto";
 import { getIdentityBySession, SESSION_COOKIE } from "./session.js";
-import { getIdentityByKey, type Identity } from "./store.js";
+import { getIdentityByKey, setRecoveryEmail, type Identity } from "./store.js";
 import {
   OAUTH_SCOPE,
   authServerMetadata,
@@ -215,6 +215,33 @@ export function mountOAuth(app: Hono): void {
       picture: `${new URL(c.req.url).origin}/api/photo/${identity.id}`,
       ...(identity.recovery_email ? { email: identity.recovery_email, email_verified: false } : {}),
     });
+  });
+
+  /* ----------------- Recovery email (écriture via token OAuth) ----------- */
+  // Permet à une app cliente (ex. mindlog.todo) d'enregistrer, pour le compte de
+  // l'utilisateur authentifié, l'email qu'il a saisi — de sorte que l'identité
+  // mindlog devienne la source unique (userinfo le renverra ensuite). On ne
+  // remplace JAMAIS un email déjà présent : le compte garde la main.
+  const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+  app.post("/oauth/recovery-email", async (c) => {
+    corsJson(c);
+    const auth = c.req.header("Authorization") ?? "";
+    const rawToken = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    if (!rawToken) return c.json({ error: "invalid_token" }, 401);
+    const info = await verifyAccessToken(rawToken);
+    if (!info) return c.json({ error: "invalid_token" }, 401);
+    let body: { email?: unknown };
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid_request" }, 400);
+    }
+    const email = typeof body.email === "string" ? body.email.trim() : "";
+    if (!email || email.length > 200 || !EMAIL_RE.test(email))
+      return c.json({ error: "invalid_email" }, 400);
+    if (info.identity.recovery_email) return c.json({ ok: true, updated: false });
+    await setRecoveryEmail(info.identity.id, email);
+    return c.json({ ok: true, updated: true });
   });
 
   /* ------------------ Dynamic Client Registration -------------------- */
