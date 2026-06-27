@@ -6540,6 +6540,12 @@ body:has(.overlay.open) .bottom-nav { transform: translateY(100%); }
 .acc-layout {
   display: grid;
   grid-template-columns: 56px 1fr;
+  /* Borne la ligne à la hauteur du conteneur : sans ça la ligne implicite est en
+     `auto` et grandit avec le contenu — un onglet plus haut que --col-h (ex. Profil :
+     intro + 9 attributs) débordait, était coupé par overflow:hidden, et .acc-scroll
+     ne scrollait pas (il faisait déjà la hauteur du contenu). minmax(0,1fr) force la
+     ligne à remplir le conteneur sans le dépasser → .acc-main borné → .acc-scroll scrolle. */
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
   background: var(--card);
   overflow: hidden;
