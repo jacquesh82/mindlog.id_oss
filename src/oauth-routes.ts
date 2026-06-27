@@ -18,11 +18,13 @@ import {
   consumeAuthCode,
   createAuthCode,
   getClient,
+  getJwks,
   issueTokens,
   protectedResourceMetadata,
   registerClient,
   revokeToken,
   rotateRefreshToken,
+  verifyAccessToken,
   verifyPkce,
 } from "./oauth.js";
 
@@ -52,6 +54,7 @@ interface AuthzParams {
   scope: string;
   state: string;
   resource: string;
+  nonce: string;
 }
 
 function readAuthzQuery(c: Context): AuthzParams {
@@ -65,6 +68,7 @@ function readAuthzQuery(c: Context): AuthzParams {
     scope: q("scope") || OAUTH_SCOPE,
     state: q("state"),
     resource: q("resource"),
+    nonce: q("nonce"),
   };
 }
 
@@ -182,11 +186,35 @@ export function mountOAuth(app: Hono): void {
     return c.json(fn());
   };
   app.get("/.well-known/oauth-authorization-server", meta(authServerMetadata));
+  app.get("/.well-known/openid-configuration", meta(authServerMetadata));
   app.get("/.well-known/oauth-protected-resource", meta(protectedResourceMetadata));
   app.get("/.well-known/oauth-protected-resource/mcp", meta(protectedResourceMetadata));
   app.options("/oauth/*", (c) => {
     corsJson(c);
     return c.body(null, 204);
+  });
+
+  /* ------------------------------ JWKS ------------------------------- */
+  app.get("/oauth/jwks", (c) => {
+    corsJson(c);
+    return c.json(getJwks());
+  });
+
+  /* --------------------------- UserInfo ------------------------------ */
+  app.get("/oauth/userinfo", async (c) => {
+    corsJson(c);
+    const auth = c.req.header("Authorization") ?? "";
+    const rawToken = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    if (!rawToken) return c.json({ error: "invalid_token" }, 401);
+    const info = await verifyAccessToken(rawToken);
+    if (!info) return c.json({ error: "invalid_token" }, 401);
+    const { identity } = info;
+    return c.json({
+      sub: identity.id.toString(),
+      name: identity.handle,
+      picture: `${new URL(c.req.url).origin}/api/photo/${identity.id}`,
+      ...(identity.recovery_email ? { email: identity.recovery_email, email_verified: false } : {}),
+    });
   });
 
   /* ------------------ Dynamic Client Registration -------------------- */
@@ -233,7 +261,10 @@ export function mountOAuth(app: Hono): void {
     // À partir d'ici, redirect_uri est sûre : les erreurs repartent vers le client.
     if (p.response_type !== "code")
       return redirectError(p.redirect_uri, p.state, "unsupported_response_type");
-    if (p.code_challenge_method !== "S256" || !p.code_challenge)
+    // PKCE obligatoire pour les clients publics ; optionnel pour les clients confidentiels
+    // (ex. Authentik qui s'authentifie via client_secret_post)
+    const isConfidential = !!client.client_secret_hash;
+    if (!isConfidential && (p.code_challenge_method !== "S256" || !p.code_challenge))
       return redirectError(p.redirect_uri, p.state, "invalid_request", "PKCE S256 requis");
 
     const csrf = randomBytes(16).toString("base64url");
@@ -253,6 +284,7 @@ export function mountOAuth(app: Hono): void {
       scope: s("scope") || OAUTH_SCOPE,
       state: s("state"),
       resource: s("resource"),
+      nonce: s("nonce"),
     };
     const client = await getClient(p.client_id);
     if (!client?.redirect_uris.includes(p.redirect_uri))
@@ -281,6 +313,7 @@ export function mountOAuth(app: Hono): void {
       code_challenge: p.code_challenge,
       scope: p.scope,
       resource: p.resource || undefined,
+      nonce: p.nonce || undefined,
     });
     const u = new URL(p.redirect_uri);
     u.searchParams.set("code", code);
@@ -305,9 +338,10 @@ export function mountOAuth(app: Hono): void {
       const rec = await consumeAuthCode(g("code"));
       if (rec?.client_id !== clientId) return c.json({ error: "invalid_grant" }, 400);
       if (rec.redirect_uri !== g("redirect_uri")) return c.json({ error: "invalid_grant", error_description: "redirect_uri" }, 400);
-      if (!verifyPkce(g("code_verifier"), rec.code_challenge))
+      // Skip PKCE if code_challenge was not set (confidential client without PKCE)
+      if (rec.code_challenge && !verifyPkce(g("code_verifier"), rec.code_challenge))
         return c.json({ error: "invalid_grant", error_description: "PKCE" }, 400);
-      return c.json(await issueTokens({ client_id: clientId, identity_id: rec.identity_id, scope: rec.scope, resource: rec.resource }));
+      return c.json(await issueTokens({ client_id: clientId, identity_id: rec.identity_id, scope: rec.scope, resource: rec.resource, nonce: rec.nonce }));
     }
 
     if (grant === "refresh_token") {

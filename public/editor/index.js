@@ -1164,11 +1164,13 @@ export function renderEditor(data) {
        const navBtn = ({ i, label }) => {
          const cfg = BNAV[label] || { label, ic: "circle" };
          const isChat = label === "Chat";
+         const isCompte = label === "Compte";
          const hasUnread = unreadFor(label);
-         // Le badge Chat est TOUJOURS présent (masqué si 0) avec un sélecteur
-         // stable : la mise à jour temps réel (SSE) le retrouve sans re-rendu.
-         const badge = isChat
-           ? `<span class="bnav-badge" data-chat-badge ${hasUnread ? "" : "hidden"}>${hasUnread ? (hasUnread > 99 ? "99+" : hasUnread) : ""}</span>`
+         // Les badges Chat (messages) et Compte (notifications non-lues) sont
+         // TOUJOURS présents (masqués si 0) avec un sélecteur stable : la mise à
+         // jour temps réel (SSE) les retrouve sans re-rendu.
+         const badge = (isChat || isCompte)
+           ? `<span class="bnav-badge" ${isChat ? "data-chat-badge" : "data-notif-badge"} ${hasUnread ? "" : "hidden"}>${hasUnread ? (hasUnread > 99 ? "99+" : hasUnread) : ""}</span>`
            : (hasUnread ? `<span class="bnav-badge">${hasUnread > 99 ? "99+" : hasUnread}</span>` : "");
          return `<button class="bnav-item" data-col="${i}" type="button" aria-label="${esc(cfg.label)}" title="${esc(cfg.label)}">
            <span class="bnav-pip" aria-hidden="true"></span>
@@ -2874,8 +2876,11 @@ export function wireEditor(data) {
 
   // Notifications : la cloche mène à la colonne Notifications + marque lues
   const markRead = () => {
-    ["#notif-badge", "#chip-notif-dot"].forEach((sel) => {
-      const badge = app.querySelector(sel);
+    // Tous les compteurs « non lus » : cloche du header, entrée Compte de la nav,
+    // ET la pastille du sous-menu « Notifs » (rendue depuis data.unread au montage,
+    // sinon elle reste figée sur l'ancien total après « Tout marquer lu »).
+    ["#notif-badge", "[data-notif-badge]", '.opt-tab[data-tab="notifs"] .subrail-badge'].forEach((sel) => {
+      const badge = app.querySelector(sel) || document.querySelector(sel);
       if (badge) { badge.hidden = true; badge.textContent = ""; }
     });
     const count = app.querySelector("#notif-count");
@@ -3140,6 +3145,21 @@ export function wireEditor(data) {
           wirePremiumPage(panel, data);
         }
       }
+    });
+  });
+
+  // Onglets internes du panneau « Activité » du Compte : « Activité récente » /
+  // « Journal des actions » (data-acttab → panneau #act-pane-<id>).
+  app.querySelectorAll(".act-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      app.querySelectorAll(".act-tab").forEach((t) => {
+        t.classList.toggle("active", t === tab);
+        t.setAttribute("aria-selected", String(t === tab));
+      });
+      const id = tab.dataset.acttab;
+      app.querySelectorAll(".act-tabpanel").forEach((p) => {
+        p.hidden = p.id !== `act-pane-${id}`;
+      });
     });
   });
 

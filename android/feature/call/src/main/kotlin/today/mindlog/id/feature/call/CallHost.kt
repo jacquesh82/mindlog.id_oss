@@ -3,6 +3,13 @@ package today.mindlog.id.feature.call
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,10 +28,8 @@ import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -36,11 +41,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.LaunchedEffect
+
+private val Accent = Color(0xFF5B5FC7)
 
 /**
  * Hôte d'appel global : monté une fois au niveau de l'app (au-dessus de la
@@ -88,12 +98,14 @@ fun CallHost(viewModel: CallViewModel = hiltViewModel()) {
 
     if (state.stage == CallStage.IDLE) return
 
+    val hasRemoteVideo = state.remoteTrack != null
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = Color(0xFF101418),
     ) {
         Box(Modifier.fillMaxSize()) {
-            // Vidéo distante en plein écran (si présente).
+            // Vidéo distante en plein écran (si le pair a activé sa caméra).
             state.remoteTrack?.let { track ->
                 VideoRenderer(
                     track = track,
@@ -101,7 +113,7 @@ fun CallHost(viewModel: CallViewModel = hiltViewModel()) {
                     modifier = Modifier.fillMaxSize(),
                 )
             }
-            // Aperçu local en médaillon.
+            // Aperçu local en médaillon (si notre caméra est active).
             state.localTrack?.let { track ->
                 VideoRenderer(
                     track = track,
@@ -131,8 +143,85 @@ fun CallHost(viewModel: CallViewModel = hiltViewModel()) {
                     Text("🔒 pair-à-pair chiffré", color = Color(0xFF80CBC4), textAlign = TextAlign.Center)
                 }
 
+                // En audio (pas de vidéo distante) : avatar + halo animé + égaliseur.
+                if (!hasRemoteVideo) {
+                    CallOrb(
+                        handle = state.handle,
+                        connected = state.stage == CallStage.CONNECTED,
+                    )
+                }
+
                 Controls(viewModel, state)
             }
+        }
+    }
+}
+
+/** Avatar central avec halo pulsé (anneaux concentriques) + égaliseur quand connecté. */
+@Composable
+private fun CallOrb(handle: String, connected: Boolean) {
+    val transition = rememberInfiniteTransition(label = "orb")
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(180.dp)) {
+            // 3 anneaux décalés (0, 0.8s, 1.6s) — scale 1→2.4, opacité 0.55→0.
+            repeat(3) { i ->
+                val p by transition.animateFloat(
+                    initialValue = 0f,
+                    targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(2400, delayMillis = i * 800, easing = FastOutSlowInEasing),
+                        repeatMode = RepeatMode.Restart,
+                    ),
+                    label = "ring$i",
+                )
+                Surface(
+                    color = Color.Transparent,
+                    border = androidx.compose.foundation.BorderStroke(2.dp, Accent.copy(alpha = (0.55f * (1f - p)).coerceIn(0f, 0.55f))),
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .size(92.dp)
+                        .graphicsLayer {
+                            val s = 1f + p * 1.4f
+                            scaleX = s; scaleY = s
+                        },
+                ) {}
+            }
+            // Pastille avatar (initiale du handle).
+            Surface(color = Accent, shape = CircleShape, modifier = Modifier.size(84.dp)) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        handle.firstOrNull()?.uppercase() ?: "?",
+                        color = Color.White,
+                        fontSize = 34.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+        }
+        if (connected) Equalizer(transition)
+    }
+}
+
+/** Égaliseur 5 barres animées (visible uniquement en communication). */
+@Composable
+private fun Equalizer(transition: androidx.compose.animation.core.InfiniteTransition) {
+    val delays = listOf(0, 180, 360, 120, 300)
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.height(24.dp).padding(top = 10.dp),
+    ) {
+        delays.forEach { d ->
+            val h by transition.animateFloat(
+                initialValue = 0.35f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(1000, delayMillis = d, easing = LinearEasing),
+                    repeatMode = RepeatMode.Reverse,
+                ),
+                label = "eq$d",
+            )
+            Surface(color = Accent, shape = CircleShape, modifier = Modifier.width(4.dp).height((22 * h).dp)) {}
         }
     }
 }
@@ -152,9 +241,13 @@ private fun Controls(viewModel: CallViewModel, state: CallState) {
     }
     Row(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
         ToggleButton(state.micOn, Icons.Default.Mic, Icons.Default.MicOff, "Micro") { viewModel.toggleMic() }
-        if (state.video) {
-            ToggleButton(state.camOn, Icons.Default.Videocam, Icons.Default.VideocamOff, "Caméra") { viewModel.toggleCam() }
-        }
+        // Caméra toujours disponible : en audio, l'appuyer active la vidéo en cours d'appel.
+        ToggleButton(
+            on = state.video && state.camOn,
+            onIcon = Icons.Default.Videocam,
+            offIcon = Icons.Default.VideocamOff,
+            label = "Caméra",
+        ) { viewModel.toggleCam() }
         RoundButton(Icons.Default.CallEnd, "Raccrocher", Color(0xFFE53935)) { viewModel.hangup() }
     }
 }

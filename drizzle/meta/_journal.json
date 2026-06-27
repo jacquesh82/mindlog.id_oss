@@ -260,6 +260,13 @@
       "when": 1780900400000,
       "tag": "0036_event_invites",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1782548179096,
+      "tag": "0037_moaning_gargoyle",
+      "breakpoints": true
     }
   ]
 }

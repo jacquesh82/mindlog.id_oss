@@ -182,13 +182,9 @@ internal fun SettingsScreen(
 
     Scaffold(
         topBar = {
+            // Onglet racine du deck : pas de flèche retour (elle ne menait nulle part).
             TopAppBar(
-                title = { Text("Paramètres") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Retour")
-                    }
-                },
+                title = { Text("Compte") },
             )
         },
     ) { padding ->
@@ -233,6 +229,10 @@ internal fun SettingsScreen(
 
             /* ===== Compte ===== */
             if (show("compte", "qr", "code", "export", "rgpd", "données")) AccountSection(state = state, onShowQr = { showQr = true }, onExportData = onExportData)
+
+            /* ===== À propos / Légal ===== */
+            if (show("à propos", "légal", "mentions", "cgu", "cgv", "confidentialité", "rgpd", "licence", "agpl", "version", "github", "api", "statut", "source"))
+                AboutSection(state = state)
 
             if (show("zone de danger", "déconnecter", "supprimer", "compte", "suppression")) DangerZoneSection(onSignOut = onSignOut, onDelete = { confirmDelete = true })
 

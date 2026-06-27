@@ -5,7 +5,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -34,19 +36,19 @@ private data class TourStep(val title: String, val body: String)
 private val STEPS = listOf(
     TourStep(
         title = "Bienvenue ! 🦎",
-        body = "Tu viens d'entrer dans ton espace mindlog · id. Je suis Milo, et je vais te montrer la maison en trois clics.",
+        body = "Tu viens d'entrer dans ton espace mindlog · id. Je suis Milo, et je te montre la maison en quelques secondes.",
     ),
     TourStep(
-        title = "Le deck",
-        body = "Glisse de gauche à droite pour passer d'un onglet à l'autre : Accueil, Identité, Agenda, Réseau, Notifs, Options, Premium, Chat, Live et Galerie.",
+        title = "Les 4 onglets",
+        body = "En bas, quatre onglets : Échanges (tes discussions, groupes et lives), Réseau (tes relations), Agenda (tes rendez-vous) et Compte. Glisse de gauche à droite pour passer de l'un à l'autre.",
     ),
     TourStep(
-        title = "Tes options sont sous Apparence",
-        body = "Le mode clair/sombre/système, ta couleur d'accentuation, et tes règles de confidentialité vivent dans l'onglet Options.",
+        title = "En haut : alertes & menu",
+        body = "La cloche 🔔 affiche tes alertes et le journal d'activité. Le menu ⋮ ouvre ton ID, ton espace Premium et ta galerie.",
     ),
     TourStep(
-        title = "C'est parti",
-        body = "Si tu veux revoir cette visite plus tard, elle est rangée dans Options. À tout de suite ! 🦎",
+        title = "Tes réglages sont dans Compte",
+        body = "Thème clair/sombre, couleur d'accentuation, confidentialité, sécurité de ta clé chiffrée et déconnexion : tout est dans l'onglet Compte. À tout de suite ! 🦎",
     ),
 )
 
@@ -95,15 +97,33 @@ fun MiloTour(onDismiss: () -> Unit) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Box(modifier = Modifier.fillMaxSize().padding(top = 8.dp)) {
-                    TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.CenterStart)) {
-                        Text("Passer")
+                // Indicateur d'étape (points).
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    STEPS.indices.forEach { i ->
+                        Box(
+                            modifier = Modifier
+                                .size(if (i == step) 8.dp else 6.dp)
+                                .background(
+                                    if (i == step) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
+                                    RoundedCornerShape(50),
+                                ),
+                        )
                     }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = onDismiss) { Text("Passer") }
                     Button(
                         onClick = {
                             if (step + 1 < STEPS.size) step += 1 else onDismiss()
                         },
-                        modifier = Modifier.align(Alignment.CenterEnd),
                     ) {
                         Text(if (step + 1 < STEPS.size) "Suivant" else "C'est parti")
                     }

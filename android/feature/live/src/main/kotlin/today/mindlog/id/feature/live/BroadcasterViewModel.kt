@@ -29,6 +29,8 @@ data class BroadcasterUiState(
     val processing: Boolean = false,
     val error: String? = null,
     val message: String? = null,
+    // RBAC : le serveur a refusé le démarrage faute d'abonnement Premium.
+    val needsPremium: Boolean = false,
 )
 
 @HiltViewModel
@@ -91,7 +93,16 @@ class BroadcasterViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(processing = true) }
             val dto = runCatching { live.start(title, broadcasterPubPlaceholder) }.getOrElse { e ->
-                _state.update { it.copy(processing = false, error = e.message ?: "Démarrage refusé.") }
+                // RBAC : 402 « premium required » → on ouvre l'upsell plutôt qu'une erreur brute.
+                val msg = e.message ?: ""
+                val premiumGate = msg.contains("402") || msg.contains("premium", ignoreCase = true)
+                _state.update {
+                    it.copy(
+                        processing = false,
+                        needsPremium = premiumGate,
+                        error = if (premiumGate) null else (msg.ifBlank { "Démarrage refusé." }),
+                    )
+                }
                 return@launch
             }
             // Enregistre le broadcaster dans le roster (sinon les signaux entrants sont refusés).
@@ -136,6 +147,21 @@ class BroadcasterViewModel @Inject constructor(
         stopHeartbeat()
         engine.stopAll()
     }
+
+    /** Lien public partageable du live en cours (null si pas en live). */
+    fun shareUrl(): String? = _state.value.live?.let { live.shareUrl(it.id) }
+
+    /** Renotifie manuellement les abonné·e·s du live en cours. */
+    fun notifySubscribers() {
+        val l = _state.value.live ?: return
+        viewModelScope.launch {
+            runCatching { live.notify(l.id) }
+                .onSuccess { _state.update { it.copy(message = "Abonné·e·s notifié·e·s 🦎") } }
+                .onFailure { e -> _state.update { it.copy(error = e.message ?: "Notification impossible.") } }
+        }
+    }
+
+    fun dismissPremiumGate() = _state.update { it.copy(needsPremium = false) }
 
     fun clearMessage() = _state.update { it.copy(message = null) }
     fun clearError() = _state.update { it.copy(error = null) }

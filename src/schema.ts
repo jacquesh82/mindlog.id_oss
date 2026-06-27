@@ -827,6 +827,7 @@ export const oauthCodes = pgTable("oauth_codes", {
   code_challenge: text("code_challenge").notNull(), // PKCE S256
   scope: text("scope").notNull().default(""),
   resource: text("resource"),
+  nonce: text("nonce"), // OIDC nonce (replay protection)
   expires_at: text("expires_at").notNull(),
   created_at: text("created_at").notNull().$defaultFn(nowIso),
 });

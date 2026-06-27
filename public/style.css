@@ -899,7 +899,10 @@ body:has(#app[data-view="profile"] .pub-hero-page) .pub-cover-top { display: non
 /* ── Upsell Premium (pane Personnalisation, compte non-Premium) ──
    Carte unique mise en avant : titre + bénéfices + CTA essai gratuit. */
 .prem-upsell {
-  margin: 0 0 1rem;
+  /* Largeur bornée + centrée horizontalement (sur grand écran, sinon pleine
+     largeur sous 600px) pour ne pas s'étaler sur toute la zone de contenu. */
+  margin: 0 auto 1rem;
+  max-width: 600px;
   padding: 1.5rem 1.4rem 1.3rem;
   border-radius: var(--r-md, 14px);
   border: 1px solid color-mix(in srgb, var(--accent-ink) 30%, transparent);
@@ -4027,21 +4030,21 @@ select:focus { outline: none; border-color: var(--accent-ink); box-shadow: 0 0 0
 }
 
 /* ---- Onglets colonne Compte ---- */
-.acct-tabs, .agenda-tabs, .id-tabs, .rel-tabs, .opt-tabs {
+.acct-tabs, .agenda-tabs, .id-tabs, .rel-tabs, .opt-tabs, .act-tabs {
   display: flex; gap: 2px; flex: none;
   background: var(--inset); border-radius: var(--r-md); padding: 3px;
   margin-bottom: .75rem;
 }
-.acct-tab, .agenda-tab, .id-tab, .rel-tab, .opt-tab {
+.acct-tab, .agenda-tab, .id-tab, .rel-tab, .opt-tab, .act-tab {
   flex: 1; min-height: 36px; padding: .38rem .5rem; border: none; border-radius: var(--r-sm);
   background: none; color: var(--muted); font-size: .8rem; font-weight: 500;
   cursor: pointer; transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
   white-space: nowrap;
   display: inline-flex; align-items: center; justify-content: center; gap: .3rem;
 }
-.acct-tab:hover, .agenda-tab:hover, .id-tab:hover, .rel-tab:hover, .opt-tab:hover { color: var(--fg); }
-.acct-tab.active, .agenda-tab.active, .id-tab.active, .rel-tab.active, .opt-tab.active { background: var(--card); color: var(--fg); box-shadow: var(--elev-1), var(--highlight); }
-.acct-tab:focus-visible, .agenda-tab:focus-visible, .id-tab:focus-visible, .rel-tab:focus-visible, .opt-tab:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
+.acct-tab:hover, .agenda-tab:hover, .id-tab:hover, .rel-tab:hover, .opt-tab:hover, .act-tab:hover { color: var(--fg); }
+.acct-tab.active, .agenda-tab.active, .id-tab.active, .rel-tab.active, .opt-tab.active, .act-tab.active { background: var(--card); color: var(--fg); box-shadow: var(--elev-1), var(--highlight); }
+.acct-tab:focus-visible, .agenda-tab:focus-visible, .id-tab:focus-visible, .rel-tab:focus-visible, .opt-tab:focus-visible, .act-tab:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
 .acct-tab-danger, .opt-tab-danger { color: var(--danger); opacity: .75; }
 .acct-tab-danger.active, .opt-tab-danger.active { color: var(--danger); opacity: 1; }
 .acct-panel[hidden], .agenda-panel[hidden], .id-panel[hidden], .rel-panel[hidden] { display: none; }
@@ -4268,6 +4271,14 @@ label.row input { width: auto; }
    automatiquement sur la ligne du dessous. */
 .edit-field { display: grid; grid-template-columns: 1fr auto auto; gap: .3rem .4rem; align-items: center; margin-bottom: .65rem; }
 .edit-field .lbl { grid-column: 1 / -1; }
+/* Sur écran large, les attributs et les réseaux s'affichent sur 2 colonnes
+   (chaque champ reste une sous-grille interne libellé/valeur/visibilité). */
+@media (min-width: 700px) {
+  #fields-edit { display: grid; grid-template-columns: 1fr 1fr; column-gap: 1.4rem; row-gap: .65rem; align-items: start; }
+  #fields-edit .edit-field { margin-bottom: 0; }
+  #socials-edit { display: grid; grid-template-columns: 1fr 1fr; column-gap: 1.4rem; row-gap: .5rem; align-items: start; }
+  #socials-edit .social-edit { margin-bottom: 0; }
+}
 .btn-field-del { background: none; border: none; color: var(--muted); cursor: pointer; padding: .2rem .3rem; border-radius: var(--r-xs); line-height: 1; font-size: .9rem; }
 .btn-field-del:hover { color: var(--danger); background: rgba(240,113,122,.1); }
 .fvis { font-size: .72rem; padding: .3rem .25rem; max-width: 86px; }
@@ -4988,6 +4999,12 @@ footer a { text-decoration: none; }
   --topbar-h: 56px;
   --bnav-h: 62px;
   --bnav-safe: env(safe-area-inset-bottom, 0px);
+  /* Hauteur réelle du bandeau « Mise à jour disponible » quand il est affiché
+     (sinon 0px). Posée par JS (showUpdateBanner) car la hauteur varie selon le
+     retour à la ligne. Le bandeau est un frère EN FLUX avant #app : il décale
+     #app vers le bas, mais PAS les chromes en position:fixed (header + rail) ni
+     les hauteurs calculées en 100dvh → on les compense via cette variable. */
+  --banner-h: 0px;
   --font: "Inter", ui-sans-serif, system-ui, sans-serif;
   /* Échelle de rayons (langage de formes) — un seul vocabulaire au lieu de ~19
      valeurs ad-hoc. Inspirée de Fluent 2 (Teams) : paliers nets, ramp régulière.
@@ -5033,7 +5050,7 @@ body { font-family: var(--font); }
 #app[data-view="private"] {
   padding-bottom: calc(var(--bnav-h) + var(--bnav-safe));
   /* Hauteur disponible pour chaque carte d'onglet */
-  --col-h: calc(100dvh - var(--topbar-h) - var(--bnav-h) - var(--bnav-safe));
+  --col-h: calc(100dvh - var(--banner-h) - var(--topbar-h) - var(--bnav-h) - var(--bnav-safe));
 }
 
 /* — Deck → panneaux verticaux — */
@@ -5283,7 +5300,7 @@ body:has(.overlay.open) .bottom-nav { transform: translateY(100%); }
   /* Header: fixé en haut, pleine largeur viewport, z-index max */
   #app[data-view="private"] .topbar.site-header {
     position: fixed !important;
-    top: 0;
+    top: var(--banner-h);
     left: 0;
     right: 0;
     width: 100% !important;
@@ -5295,14 +5312,14 @@ body:has(.overlay.open) .bottom-nav { transform: translateY(100%); }
   #app[data-view="private"] {
     padding-top: var(--topbar-h);
     padding-bottom: 0;
-    /* Desktop : pas de bnav en bas → hauteur = viewport - topbar */
-    --col-h: calc(100dvh - var(--topbar-h));
+    /* Desktop : pas de bnav en bas → hauteur = viewport - bandeau - topbar */
+    --col-h: calc(100dvh - var(--banner-h) - var(--topbar-h));
   }
   /* Sidebar: fixe à gauche, sous le header */
   .bottom-nav {
     position: fixed;
     left: 0;
-    top: var(--topbar-h);
+    top: calc(var(--banner-h) + var(--topbar-h));
     bottom: 0;
     width: 80px;
     height: auto;
@@ -6538,7 +6555,9 @@ body:has(.overlay.open) .bottom-nav { transform: translateY(100%); }
 .acc-scroll {
   flex: 1; min-height: 0;
   overflow-y: auto; overflow-x: hidden;
-  padding: 1rem var(--pad);
+  /* Marge de contenu plus généreuse sur grand écran pour aérer la page et
+     espacer les blocs des sous-menus (Profil, Sécurité, Activité, …). */
+  padding: 1.75rem 2rem;
 }
 .acc-header { display: flex; flex-direction: column; gap: .75rem; margin-bottom: 1rem; }
 .acc-panels { display: contents; }

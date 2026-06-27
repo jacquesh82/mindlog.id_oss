@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import today.mindlog.id.core.data.ActivityEntry
+import today.mindlog.id.core.data.ActivityLog
 import today.mindlog.id.core.data.NavigationBus
 import today.mindlog.id.core.data.NotificationsRepository
 import today.mindlog.id.core.model.AppNotification
@@ -23,12 +25,21 @@ data class NotificationsUiState(
 class NotificationsViewModel @Inject constructor(
     private val repository: NotificationsRepository,
     private val navigationBus: NavigationBus,
+    private val activityLog: ActivityLog,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(NotificationsUiState(loading = true))
     val uiState: StateFlow<NotificationsUiState> = _uiState.asStateFlow()
 
-    init { load() }
+    /** Journal d'actions local (échecs d'appel, etc.) — onglet « Journal des actions ». */
+    val activity: StateFlow<List<ActivityEntry>> = activityLog.entries
+
+    init {
+        activityLog.reload()
+        load()
+    }
+
+    fun clearActivity() = activityLog.clear()
 
     fun load() {
         _uiState.update { it.copy(loading = true, error = null) }

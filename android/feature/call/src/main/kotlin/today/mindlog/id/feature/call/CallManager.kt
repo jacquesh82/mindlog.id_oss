@@ -8,6 +8,8 @@ import android.content.Intent
 import androidx.core.app.NotificationCompat
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,6 +37,7 @@ import org.webrtc.SessionDescription
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoCapturer
 import org.webrtc.VideoTrack
+import today.mindlog.id.core.data.ActivityLog
 import today.mindlog.id.core.data.CallSignalRepository
 import today.mindlog.id.core.data.ChatRepository
 import today.mindlog.id.core.data.di.AppScope
@@ -46,7 +49,9 @@ enum class CallStage { IDLE, OUTGOING, INCOMING, CONNECTING, CONNECTED, ENDED }
 data class CallState(
     val stage: CallStage = CallStage.IDLE,
     val handle: String = "",
-    val video: Boolean = true,
+    // Par défaut AUDIO : la vidéo s'active en cours d'appel via le bouton caméra
+    // (renégociation). Parité avec public/plugins/call.js (audio par défaut).
+    val video: Boolean = false,
     val micOn: Boolean = true,
     val camOn: Boolean = true,
     val localTrack: VideoTrack? = null,
@@ -60,12 +65,17 @@ data class CallState(
  *
  * Les permissions micro/caméra sont demandées par l'UI AVANT startOutgoing /
  * accept — ce moteur suppose qu'elles sont accordées.
+ *
+ * Appels en audio par défaut ; la vidéo s'ajoute en cours d'appel par
+ * « perfect negotiation » (RFC 8829) : [onRenegotiationNeeded] émet une offre,
+ * gérée côté pair avec rollback poli/impoli en cas de collision.
  */
 @Singleton
 class CallManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val signalRepo: CallSignalRepository,
     private val chatRepository: ChatRepository,
+    private val activityLog: ActivityLog,
     @AppScope private val scope: CoroutineScope,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
@@ -106,6 +116,15 @@ class CallManager @Inject constructor(
     private var connectedAtMs = 0L
     private var declined = false
 
+    // Perfect negotiation (RFC 8829).
+    private var polite = false          // appelant = impoli ; appelé = poli
+    private var makingOffer = false
+    private var ignoreOffer = false
+    private var canRenegotiate = false  // n'autorise la renégo qu'une fois le handshake initial fini
+
+    private val ringer = Ringer(context)
+    private var noAnswerJob: Job? = null
+
     init {
         // Capte globalement la signalisation entrante.
         scope.launch {
@@ -122,7 +141,9 @@ class CallManager @Inject constructor(
         this.peerPub = peerPub
         resetTransient()
         outgoing = true
+        polite = false
         _state.value = CallState(stage = CallStage.OUTGOING, handle = handle, video = video)
+        scheduleNoAnswer()
         scope.launch {
             createMedia(video)
             val conn = createPeerConnection() ?: return@launch
@@ -143,6 +164,7 @@ class CallManager @Inject constructor(
     fun accept() {
         val offer = pendingOffer ?: return
         val video = _state.value.video
+        ringer.stop()
         cancelCallNotification()
         _state.update { it.copy(stage = CallStage.CONNECTING) }
         scope.launch {
@@ -183,10 +205,25 @@ class CallManager @Inject constructor(
         _state.update { it.copy(micOn = on) }
     }
 
+    /**
+     * Bouton caméra : si aucune piste vidéo n'existe encore (appel audio), l'active
+     * en cours d'appel → ajoute la piste, ce qui déclenche [onRenegotiationNeeded].
+     * Sinon, bascule simplement la piste existante (mute/unmute).
+     */
     fun toggleCam() {
-        val on = !_state.value.camOn
-        videoTrack?.setEnabled(on)
-        _state.update { it.copy(camOn = on) }
+        val conn = pc
+        if (videoTrack == null) {
+            if (conn == null) return
+            scope.launch {
+                if (!startCamera()) return@launch
+                videoTrack?.let { conn.addTrack(it, listOf("stream0")) } // → renégociation
+                _state.update { it.copy(video = true, camOn = true) }
+            }
+        } else {
+            val on = !_state.value.camOn
+            videoTrack?.setEnabled(on)
+            _state.update { it.copy(camOn = on) }
+        }
     }
 
     /** Permet à l'UI de revenir à l'état IDLE après ENDED. */
@@ -200,28 +237,50 @@ class CallManager @Inject constructor(
         val msg = runCatching { json.parseToJsonElement(payload).jsonObject }.getOrNull() ?: return
         when (msg["k"]?.jsonPrimitive?.content) {
             "offer" -> {
-                if (_state.value.stage != CallStage.IDLE && _state.value.stage != CallStage.ENDED) {
-                    // Occupé : refuse.
-                    this.handle = from; this.peerPub = fromPub
-                    sendSignal(buildJsonObject { put("k", JsonPrimitive("decline")) })
+                val sdp = msg["sdp"]?.jsonObject?.let { sdpFrom(it) } ?: return
+                val stage = _state.value.stage
+                val active = stage != CallStage.IDLE && stage != CallStage.ENDED
+                val conn = pc
+                if (active && conn != null && from == handle) {
+                    // Renégociation en cours d'appel (perfect negotiation).
+                    val stable = conn.signalingState() == PeerConnection.SignalingState.STABLE
+                    val collision = makingOffer || !stable
+                    ignoreOffer = !polite && collision
+                    if (ignoreOffer) return
+                    scope.launch { handleRemoteOffer(conn, sdp, collision) }
                     return
                 }
+                if (active) {
+                    // Occupé avec un autre pair → refuse sans écraser l'appel courant.
+                    sendSignalTo(from, fromPub, buildJsonObject { put("k", JsonPrimitive("decline")) })
+                    return
+                }
+                // Appel entrant initial.
                 handle = from
                 peerPub = fromPub
                 resetTransient()
                 outgoing = false // appel entrant : c'est le pair (appelant) qui journalisera
-                pendingOffer = msg["sdp"]?.jsonObject?.let { sdpFrom(it) }
-                val hasVideo = pendingOffer?.description?.contains("m=video") == true
+                polite = true
+                pendingOffer = sdp
+                val hasVideo = sdp.description.contains("m=video")
                 _state.value = CallState(stage = CallStage.INCOMING, handle = from, video = hasVideo)
+                ringer.start()
                 postIncomingCallNotification(from) // sonne même app fermée
             }
             "answer" -> {
                 if (from != handle) return
                 val desc = msg["sdp"]?.jsonObject?.let { sdpFrom(it) } ?: return
+                cancelNoAnswer()
                 pc?.setRemoteDescription(object : SimpleSdp() {
-                    override fun onSetSuccess() { remoteDescSet = true; flushIce() }
+                    override fun onSetSuccess() {
+                        remoteDescSet = true
+                        flushIce()
+                        makingOffer = false
+                    }
                 }, desc)
-                _state.update { it.copy(stage = CallStage.CONNECTING) }
+                if (_state.value.stage != CallStage.CONNECTED) {
+                    _state.update { it.copy(stage = CallStage.CONNECTING) }
+                }
             }
             "ice" -> {
                 if (from != handle) return
@@ -229,7 +288,40 @@ class CallManager @Inject constructor(
                 if (remoteDescSet) pc?.addIceCandidate(cand) else pendingIce.add(cand)
             }
             "hangup" -> if (from == handle) cleanup(CallStage.ENDED)
-            "decline" -> if (from == handle) { declined = true; cleanup(CallStage.ENDED) }
+            "decline" -> if (from == handle) {
+                declined = true
+                activityLog.log("call", "info", "Appel refusé par @$from", peer = from)
+                cleanup(CallStage.ENDED)
+            }
+        }
+    }
+
+    /** Applique une offre distante de renégociation (avec rollback si collision) et répond. */
+    private fun handleRemoteOffer(conn: PeerConnection, sdp: SessionDescription, collision: Boolean) {
+        val doAnswer = {
+            conn.setRemoteDescription(object : SimpleSdp() {
+                override fun onSetSuccess() {
+                    remoteDescSet = true
+                    flushIce()
+                    conn.createAnswer(object : SimpleSdp() {
+                        override fun onCreateSuccess(ans: SessionDescription) {
+                            conn.setLocalDescription(SimpleSdp(), ans)
+                            sendSignal(buildJsonObject {
+                                put("k", JsonPrimitive("answer"))
+                                put("sdp", sdpJson(ans))
+                            })
+                        }
+                    }, MediaConstraints())
+                }
+            }, sdp)
+        }
+        if (collision) {
+            conn.setLocalDescription(object : SimpleSdp() {
+                override fun onSetSuccess() { doAnswer() }
+                override fun onSetFailure(error: String?) { doAnswer() }
+            }, SessionDescription(SessionDescription.Type.ROLLBACK, ""))
+        } else {
+            doAnswer()
         }
     }
 
@@ -256,9 +348,20 @@ class CallManager @Inject constructor(
                     PeerConnection.IceConnectionState.CONNECTED,
                     PeerConnection.IceConnectionState.COMPLETED -> {
                         if (connectedAtMs == 0L) connectedAtMs = System.currentTimeMillis() // début communication
+                        canRenegotiate = true // handshake initial fini → renégo autorisée
+                        cancelNoAnswer()
+                        ringer.stop()
                         scope.launch { _state.update { it.copy(stage = CallStage.CONNECTED) } }
                     }
-                    PeerConnection.IceConnectionState.FAILED -> cleanup(CallStage.ENDED)
+                    PeerConnection.IceConnectionState.FAILED -> {
+                        if (handle.isNotEmpty()) {
+                            activityLog.log(
+                                "call", "error", "Appel avec @$handle interrompu",
+                                "Connexion P2P impossible (réseau/NAT).", handle,
+                            )
+                        }
+                        cleanup(CallStage.ENDED)
+                    }
                     else -> {}
                 }
             }
@@ -269,7 +372,26 @@ class CallManager @Inject constructor(
             override fun onAddStream(p0: org.webrtc.MediaStream?) {}
             override fun onRemoveStream(p0: org.webrtc.MediaStream?) {}
             override fun onDataChannel(p0: org.webrtc.DataChannel?) {}
-            override fun onRenegotiationNeeded() {}
+            override fun onRenegotiationNeeded() {
+                val conn = pc ?: return
+                if (!canRenegotiate) return // ignore la négo initiale (offre/réponse manuelles)
+                makingOffer = true
+                conn.createOffer(object : SimpleSdp() {
+                    override fun onCreateSuccess(desc: SessionDescription) {
+                        conn.setLocalDescription(object : SimpleSdp() {
+                            override fun onSetSuccess() {
+                                sendSignal(buildJsonObject {
+                                    put("k", JsonPrimitive("offer"))
+                                    put("sdp", sdpJson(desc))
+                                })
+                                makingOffer = false
+                            }
+                            override fun onSetFailure(error: String?) { makingOffer = false }
+                        }, desc)
+                    }
+                    override fun onCreateFailure(error: String?) { makingOffer = false }
+                }, MediaConstraints())
+            }
         })
         pc = conn
         return conn
@@ -278,15 +400,20 @@ class CallManager @Inject constructor(
     private fun createMedia(video: Boolean) {
         audioTrack = factory.createAudioTrack("audio0", factory.createAudioSource(MediaConstraints()))
             .apply { setEnabled(true) }
-        if (!video) return
+        if (video) startCamera()
+    }
+
+    /** Crée la piste caméra (à la demande : appel audio → vidéo). false si pas de caméra. */
+    private fun startCamera(): Boolean {
+        if (videoTrack != null) return true
         val enumerator = Camera2Enumerator(context)
         val deviceName = enumerator.deviceNames.firstOrNull { enumerator.isFrontFacing(it) }
             ?: enumerator.deviceNames.firstOrNull()
         if (deviceName == null) { // pas de caméra → audio seul
             _state.update { it.copy(video = false) }
-            return
+            return false
         }
-        val cap = enumerator.createCapturer(deviceName, null) ?: return
+        val cap = enumerator.createCapturer(deviceName, null) ?: return false
         val helper = SurfaceTextureHelper.create("CaptureThread", eglBase.eglBaseContext)
         val source = factory.createVideoSource(cap.isScreencast)
         cap.initialize(helper, context, source.capturerObserver)
@@ -296,6 +423,7 @@ class CallManager @Inject constructor(
         surfaceHelper = helper
         videoTrack = vt
         scope.launch { _state.update { it.copy(localTrack = vt) } }
+        return true
     }
 
     private fun attachTracks(conn: PeerConnection) {
@@ -309,16 +437,43 @@ class CallManager @Inject constructor(
         pendingIce.clear()
     }
 
-    private fun sendSignal(obj: JsonObject) {
-        val h = handle
-        val p = peerPub
-        if (h.isEmpty() || p.isEmpty()) return
+    private fun sendSignal(obj: JsonObject) = sendSignalTo(handle, peerPub, obj)
+
+    private fun sendSignalTo(to: String, pub: String, obj: JsonObject) {
+        if (to.isEmpty() || pub.isEmpty()) return
         scope.launch {
-            runCatching { signalRepo.sendSignal(h, p, json.encodeToString(JsonObject.serializer(), obj)) }
+            runCatching { signalRepo.sendSignal(to, pub, json.encodeToString(JsonObject.serializer(), obj)) }
         }
     }
 
+    /* ------------------------- Délai sans réponse ------------------------- */
+
+    private fun scheduleNoAnswer() {
+        noAnswerJob?.cancel()
+        noAnswerJob = scope.launch {
+            delay(NO_ANSWER_MS)
+            val stage = _state.value.stage
+            if (outgoing && !remoteDescSet && connectedAtMs == 0L &&
+                (stage == CallStage.OUTGOING || stage == CallStage.CONNECTING)
+            ) {
+                val h = handle
+                activityLog.log(
+                    "call", "warn", "Appel à @$h sans réponse",
+                    "Aucune réponse avant l'expiration du délai.", h,
+                )
+                cleanup(CallStage.ENDED)
+            }
+        }
+    }
+
+    private fun cancelNoAnswer() {
+        noAnswerJob?.cancel()
+        noAnswerJob = null
+    }
+
     private fun cleanup(finalStage: CallStage) {
+        ringer.stop()
+        cancelNoAnswer()
         cancelCallNotification()
         scope.launch {
             // Historique : l'APPELANT journalise l'appel (message E2E « call:{json} ») dans la
@@ -345,6 +500,10 @@ class CallManager @Inject constructor(
             pendingOffer = null
             remoteDescSet = false
             pendingIce.clear()
+            polite = false
+            makingOffer = false
+            ignoreOffer = false
+            canRenegotiate = false
             _state.value = CallState(stage = finalStage, handle = handle)
         }
     }
@@ -355,6 +514,9 @@ class CallManager @Inject constructor(
         pendingIce.clear()
         connectedAtMs = 0L
         declined = false
+        makingOffer = false
+        ignoreOffer = false
+        canRenegotiate = false
     }
 
     /* --------------------- Notification d'appel entrant ------------------- */
@@ -424,6 +586,7 @@ class CallManager @Inject constructor(
     private companion object {
         const val CALL_CHANNEL = "calls"
         const val CALL_NOTIF_ID = 7001
+        const val NO_ANSWER_MS = 35_000L
     }
 }
 

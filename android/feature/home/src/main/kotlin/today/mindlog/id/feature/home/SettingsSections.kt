@@ -1,5 +1,7 @@
 package today.mindlog.id.feature.home
 
+import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -33,8 +35,13 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.EventAvailable
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MonitorHeart
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Lock
@@ -502,6 +509,67 @@ internal fun DangerZoneSection(
                 },
             )
         }
+}
+
+/**
+ * À propos / Légal : documents légaux, version, code source, API, statut — parité
+ * avec le bloc « Documents légaux / Logiciel » de l'onglet Compte du web.
+ */
+@Composable
+internal fun AboutSection(state: SettingsUiState) {
+    val tileColors = ListItemDefaults.colors(containerColor = Color.Transparent)
+    val context = LocalContext.current
+    // Origine du service dérivée de l'URL publique (`https://host/@handle` → `https://host`).
+    val base = remember(state.publicUrl) {
+        val u = state.publicUrl
+        val i = u.indexOf("/@")
+        (if (i > 0) u.substring(0, i) else u.trimEnd('/')).ifBlank { "https://id.mindlog.today" }
+    }
+    val version = remember {
+        runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        }.getOrNull() ?: "—"
+    }
+    fun open(url: String) {
+        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+            .onFailure { Toast.makeText(context, "Lien indisponible", Toast.LENGTH_SHORT).show() }
+    }
+
+    SettingsCard("Documents légaux", Icons.Default.Shield) {
+        LinkRow("Mentions légales", Icons.Default.Shield) { open("$base/mentions-legales") }
+        LinkRow("Conditions d'utilisation (CGU)", Icons.Default.Description) { open("$base/cgu") }
+        LinkRow("Confidentialité (RGPD)", Icons.Default.Lock) { open("$base/confidentialite") }
+        LinkRow("CGV Premium", Icons.Default.Description) { open("$base/cgv") }
+    }
+
+    SettingsCard("Logiciel mindlog · id", Icons.Default.Info) {
+        ListItem(
+            colors = tileColors,
+            headlineContent = { Text("Version $version") },
+            supportingContent = { Text("Logiciel libre sous licence GNU AGPL v3.0") },
+            leadingContent = { Icon(Icons.Default.Info, contentDescription = null) },
+        )
+        LinkRow("Code source (GitHub)", Icons.Default.Code) {
+            open("https://github.com/jacquesH82/mindlog.id")
+        }
+        LinkRow("Licence GNU AGPL v3.0", Icons.Default.Description) {
+            open("https://www.gnu.org/licenses/agpl-3.0.fr.html")
+        }
+        LinkRow("Documentation API", Icons.Default.Code) { open("$base/static/api-docs.html") }
+        LinkRow("Statut des services", Icons.Default.MonitorHeart) { open("$base/status") }
+    }
+}
+
+/** Ligne « lien externe » : ouvre une URL dans le navigateur. */
+@Composable
+private fun LinkRow(label: String, icon: ImageVector, onClick: () -> Unit) {
+    ListItem(
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier.clickable(onClick = onClick),
+        headlineContent = { Text(label) },
+        leadingContent = { Icon(icon, contentDescription = null) },
+        trailingContent = { Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp)) },
+    )
 }
 
 /**

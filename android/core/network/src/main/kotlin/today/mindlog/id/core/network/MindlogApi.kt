@@ -521,6 +521,10 @@ interface MindlogApi {
     @POST("api/live/{id}/heartbeat")
     suspend fun liveHeartbeat(@Path("id") id: String, @Body body: today.mindlog.id.core.network.dto.LiveDeviceBody): OkDto
 
+    /** Renotifie manuellement les abonné·e·s d'un live en cours (owner-only). */
+    @POST("api/live/{id}/notify")
+    suspend fun notifyLive(@Path("id") id: String): OkDto
+
     /** Roster (compteur + détails des viewers). */
     @GET("api/live/{id}/roster")
     suspend fun liveRoster(@Path("id") id: String): today.mindlog.id.core.network.dto.LiveRosterDto

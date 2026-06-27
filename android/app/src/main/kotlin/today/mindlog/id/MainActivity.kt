@@ -166,6 +166,11 @@ private fun MindlogApp(
         if (authState is AuthState.LoggedIn) {
             CallHost()
         }
+        // Popup d'approbation d'un nouvel appareil (une fois la clé sauvegardée pour
+        // ne pas empiler deux overlays bloquants).
+        if (authState is AuthState.LoggedIn && !needsBackup) {
+            DeviceApprovalHost()
+        }
         // Invite de sauvegarde de clé au démarrage, BLOQUANTE tant que la clé E2E
         // locale n'est pas dans le coffre serveur : sans coffre, perte d'appareil =
         // messages illisibles. Parité avec la modale obligatoire du web.

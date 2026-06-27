@@ -1,6 +1,7 @@
 package today.mindlog.id.core.data
 
 import kotlinx.coroutines.flow.Flow
+import today.mindlog.id.core.datastore.ServerStore
 import today.mindlog.id.core.network.LiveSignalStream
 import today.mindlog.id.core.network.MindlogApi
 import today.mindlog.id.core.network.dto.LiveDeviceBody
@@ -19,7 +20,11 @@ import javax.inject.Singleton
 class LiveRepository @Inject constructor(
     private val api: MindlogApi,
     private val signalStream: LiveSignalStream,
+    private val serverStore: ServerStore,
 ) {
+    /** Lien public partageable d'un live (`<base>/live/<id>`). */
+    fun shareUrl(id: String): String = serverStore.baseUrl().trimEnd('/') + "/live/" + id
+
     suspend fun feed(): LiveFeedDto = api.liveFeed()
     suspend fun mine(): LiveFeedDto = api.myLives()
     suspend fun detail(id: String): LiveDto = api.liveDetail(id)
@@ -40,6 +45,9 @@ class LiveRepository @Inject constructor(
     suspend fun heartbeat(id: String, deviceId: String) {
         runCatching { api.liveHeartbeat(id, LiveDeviceBody(deviceId = deviceId)) }
     }
+
+    /** Renotifie manuellement les abonné·e·s (owner-only). */
+    suspend fun notify(id: String) { api.notifyLive(id) }
 
     suspend fun roster(id: String): LiveRosterDto = api.liveRoster(id)
 

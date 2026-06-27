@@ -13,18 +13,26 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -54,6 +62,7 @@ internal fun ChatListScreen(
     onOpenChat: (String) -> Unit,
     onOpenGroups: () -> Unit,
 ) {
+    var showNewChat by remember { mutableStateOf(false) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -82,6 +91,11 @@ internal fun ChatListScreen(
                 },
             )
         },
+        floatingActionButton = {
+            FloatingActionButton(onClick = { showNewChat = true }) {
+                Icon(Icons.Default.Add, contentDescription = "Nouvelle discussion")
+            }
+        },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when {
@@ -107,6 +121,50 @@ internal fun ChatListScreen(
             }
         }
     }
+
+    if (showNewChat) {
+        NewChatDialog(
+            onDismiss = { showNewChat = false },
+            onStart = { handle -> showNewChat = false; onOpenChat(handle) },
+        )
+    }
+}
+
+/** Saisie d'un @handle pour ouvrir/démarrer une discussion chiffrée. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NewChatDialog(onDismiss: () -> Unit, onStart: (String) -> Unit) {
+    var input by remember { mutableStateOf("") }
+    val handle = input.trim().removePrefix("@").lowercase()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Nouvelle discussion") },
+        text = {
+            Column {
+                Text(
+                    "Saisis le @handle de la personne à contacter.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    singleLine = true,
+                    placeholder = { Text("@handle") },
+                    leadingIcon = {
+                        Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = handle.isNotBlank(), onClick = { onStart(handle) }) {
+                Text("Discuter")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Annuler") } },
+    )
 }
 
 @Composable

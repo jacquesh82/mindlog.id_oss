@@ -1,6 +1,7 @@
 package today.mindlog.id.feature.live
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,15 +19,19 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -221,6 +226,22 @@ fun BroadcasterRoute(
                                 Text("  Démarrer le live")
                             }
                         } else {
+                            // Partager le lien public du live.
+                            IconButton(onClick = {
+                                viewModel.shareUrl()?.let { url ->
+                                    val send = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_TEXT, "Je suis en live sur mindlog : $url")
+                                    }
+                                    context.startActivity(Intent.createChooser(send, "Partager le live"))
+                                }
+                            }) {
+                                Icon(Icons.Default.Share, contentDescription = "Partager le lien", tint = Color.White)
+                            }
+                            // Notifier (relancer) les abonné·e·s.
+                            IconButton(onClick = viewModel::notifySubscribers, enabled = !state.processing) {
+                                Icon(Icons.Default.Campaign, contentDescription = "Notifier les abonnés", tint = Color.White)
+                            }
                             Button(
                                 onClick = viewModel::endLive,
                                 enabled = !state.processing,
@@ -235,5 +256,22 @@ fun BroadcasterRoute(
                 }
             }
         }
+    }
+
+    // RBAC : diffuser un live est réservé aux comptes Premium (refus serveur 402).
+    if (state.needsPremium) {
+        AlertDialog(
+            onDismissRequest = viewModel::dismissPremiumGate,
+            title = { Text("Premium requis") },
+            text = {
+                Text(
+                    "Diffuser un live est réservé aux comptes Premium. " +
+                        "Active Premium depuis le menu Compte pour démarrer ta diffusion.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.dismissPremiumGate(); onBack() }) { Text("Compris") }
+            },
+        )
     }
 }

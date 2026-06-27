@@ -89,7 +89,9 @@ private enum class ColumnTab(
     ECHANGES("Échanges", Icons.AutoMirrored.Filled.Chat, { it.unread }),
     RESEAU("Réseau", Icons.Default.Group, { it.incoming }),
     AGENDA("Agenda", Icons.Default.CalendarMonth, { it.pending }),
-    COMPTE("Compte", Icons.Default.Person),
+    // Pastille notifications portée par l'entrée Compte (parité Web : badge notif
+    // déplacé de l'avatar vers l'entrée de nav « Compte »).
+    COMPTE("Compte", Icons.Default.Person, { it.unread }),
 }
 
 /** Routes hors-deck accessibles via le menu compte (header top-right). */

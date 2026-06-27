@@ -166,11 +166,20 @@ internal fun RelationsScreen(
         Box(Modifier.fillMaxSize().padding(padding)) {
             LazyColumn(Modifier.fillMaxSize()) {
                 item {
+                    val typed = uiState.query.trim().removePrefix("@").lowercase()
                     OutlinedTextField(
                         value = uiState.query,
                         onValueChange = onQueryChange,
-                        label = { Text("Rechercher un profil") },
+                        label = { Text("Rechercher ou ajouter un @handle") },
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                        // Bouton « + » pour ajouter directement le @handle saisi (parité Web .rel-add-btn).
+                        trailingIcon = {
+                            if (typed.isNotBlank()) {
+                                IconButton(onClick = { onAdd(typed) }) {
+                                    Icon(Icons.Default.PersonAdd, contentDescription = "Ajouter @$typed")
+                                }
+                            }
+                        },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().padding(16.dp),
                     )

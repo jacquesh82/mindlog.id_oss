@@ -9,7 +9,8 @@
  * seulement des tokens OAuth à durée de vie courte. Seul le sha256 des secrets
  * (codes, tokens, secret client) est stocké.
  */
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createPrivateKey, randomBytes } from "node:crypto";
+import { importPKCS8, SignJWT } from "jose";
 import { and, eq, lt } from "drizzle-orm";
 import { db } from "./db.js";
 import { oauthClients, oauthCodes, oauthTokens } from "./schema.js";
@@ -28,21 +29,66 @@ const isoIn = (ms: number) => new Date(Date.now() + ms).toISOString();
 export const issuer = () => appUrl();
 export const resourceUrl = () => `${appUrl()}/mcp`;
 
-/** Métadonnées du serveur d'autorisation (RFC 8414). */
+/* ------------------------------ OIDC / JWT ------------------------------- */
+
+const OIDC_KID = "mindlog-id-1";
+type OidcKey = Awaited<ReturnType<typeof importPKCS8>>;
+let _privateKey: OidcKey | null = null;
+
+function rawOidcPem(): string | undefined {
+  return process.env.OIDC_PRIVATE_KEY_PEM?.replace(/\\n/g, "\n");
+}
+
+export function oidcEnabled(): boolean {
+  return !!rawOidcPem();
+}
+
+async function oidcPrivateKey(): Promise<OidcKey | null> {
+  const pem = rawOidcPem();
+  if (!pem) return null;
+  if (!_privateKey) _privateKey = await importPKCS8(pem, "ES256");
+  return _privateKey;
+}
+
+/** Signe un id_token JWT ES256. Renvoie null si OIDC_PRIVATE_KEY_PEM n'est pas configuré. */
+export async function signIdToken(claims: Record<string, unknown>): Promise<string | null> {
+  const key = await oidcPrivateKey();
+  if (!key) return null;
+  return new SignJWT(claims).setProtectedHeader({ alg: "ES256", kid: OIDC_KID }).sign(key);
+}
+
+/** Exporte la clé publique en JWK Set (pour /oauth/jwks). */
+export function getJwks(): { keys: unknown[] } {
+  const pem = rawOidcPem();
+  if (!pem) return { keys: [] };
+  const nodeKey = createPrivateKey(pem);
+  const jwk = nodeKey.export({ format: "jwk" }) as Record<string, string>;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { d, ...pubJwk } = jwk;
+  return { keys: [{ ...pubJwk, use: "sig", alg: "ES256", kid: OIDC_KID }] };
+}
+
+/** Métadonnées du serveur d'autorisation (RFC 8414 + OpenID Connect Discovery). */
 export function authServerMetadata() {
   const base = appUrl();
-  return {
+  const meta: Record<string, unknown> = {
     issuer: base,
     authorization_endpoint: `${base}/oauth/authorize`,
     token_endpoint: `${base}/oauth/token`,
     registration_endpoint: `${base}/oauth/register`,
     revocation_endpoint: `${base}/oauth/revoke`,
+    userinfo_endpoint: `${base}/oauth/userinfo`,
+    jwks_uri: `${base}/oauth/jwks`,
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code", "refresh_token"],
     code_challenge_methods_supported: ["S256"],
     token_endpoint_auth_methods_supported: ["none", "client_secret_post"],
-    scopes_supported: [OAUTH_SCOPE],
+    scopes_supported: [OAUTH_SCOPE, "openid", "profile", "email"],
+    subject_types_supported: ["public"],
+    id_token_signing_alg_values_supported: ["ES256"],
+    claims_supported: ["sub", "iss", "aud", "exp", "iat", "nonce", "name", "picture", "email", "email_verified"],
   };
+  return meta;
 }
 
 /** Métadonnées de la ressource protégée (RFC 9728). */
@@ -121,6 +167,7 @@ export async function createAuthCode(input: {
   code_challenge: string;
   scope: string;
   resource?: string;
+  nonce?: string;
 }): Promise<string> {
   const code = token(32);
   await db.insert(oauthCodes).values({
@@ -131,6 +178,7 @@ export async function createAuthCode(input: {
     code_challenge: input.code_challenge,
     scope: input.scope,
     resource: input.resource ?? null,
+    nonce: input.nonce ?? null,
     expires_at: isoIn(CODE_TTL_MS),
   });
   return code;
@@ -143,6 +191,7 @@ interface CodeRecord {
   code_challenge: string;
   scope: string;
   resource: string | null;
+  nonce: string | null;
   expires_at: string;
 }
 
@@ -155,7 +204,7 @@ export async function consumeAuthCode(code: string): Promise<CodeRecord | null> 
   await db.delete(oauthCodes).where(eq(oauthCodes.code_hash, h));
   if (!r) return null;
   if (Date.parse(r.expires_at) < Date.now()) return null;
-  return r;
+  return { ...r, nonce: r.nonce ?? null };
 }
 
 /** Vérifie un code_verifier PKCE contre le code_challenge (méthode S256). */
@@ -172,6 +221,7 @@ export interface IssuedTokens {
   token_type: "Bearer";
   expires_in: number;
   scope: string;
+  id_token?: string;
 }
 
 export async function issueTokens(input: {
@@ -179,6 +229,7 @@ export async function issueTokens(input: {
   identity_id: number;
   scope: string;
   resource?: string | null;
+  nonce?: string | null;
 }): Promise<IssuedTokens> {
   const access = token(32);
   const refresh = token(32);
@@ -202,12 +253,38 @@ export async function issueTokens(input: {
       expires_at: isoIn(REFRESH_TTL_MS),
     },
   ]);
+
+  let id_token: string | undefined;
+  const scopes = input.scope.split(/\s+/);
+  if (scopes.includes("openid")) {
+    const identity = await getIdentityById(input.identity_id);
+    if (identity) {
+      const now = Math.floor(Date.now() / 1000);
+      const claims: Record<string, unknown> = {
+        sub: identity.id.toString(),
+        iss: issuer(),
+        aud: input.client_id,
+        exp: now + Math.floor(ACCESS_TTL_MS / 1000),
+        iat: now,
+        name: identity.handle,
+        picture: `${appUrl()}/api/photo/${identity.id}`,
+      };
+      if (input.nonce) claims.nonce = input.nonce;
+      if (identity.recovery_email) {
+        claims.email = identity.recovery_email;
+        claims.email_verified = false;
+      }
+      id_token = (await signIdToken(claims)) ?? undefined;
+    }
+  }
+
   return {
     access_token: access,
     refresh_token: refresh,
     token_type: "Bearer",
     expires_in: Math.floor(ACCESS_TTL_MS / 1000),
     scope: input.scope,
+    ...(id_token ? { id_token } : {}),
   };
 }
 
