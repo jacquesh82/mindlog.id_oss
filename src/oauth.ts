@@ -17,7 +17,67 @@ import { oauthClients, oauthCodes, oauthTokens } from "./schema.js";
 import { getIdentityById, type Identity } from "./store.js";
 import { appUrl } from "./mailer.js";
 
+/* ------------------------------- Scopes ---------------------------------- */
+// Consentement sélectif : l'utilisateur accorde catégorie par catégorie. Le
+// profil (identité de base) est TOUJOURS accordé ; les quatre autres sont
+// optionnels. `mindlog:identity` reste une ombrelle « tout » pour la
+// rétro-compatibilité (clients existants + tokens déjà émis).
+export const SCOPE_PROFILE = "mindlog:profile";
+export const SCOPE_AGENDA = "mindlog:agenda";
+export const SCOPE_AVAILABILITY = "mindlog:availability";
+export const SCOPE_MEETINGS = "mindlog:meetings";
+export const SCOPE_RELATIONS = "mindlog:relations";
+
+/** Ombrelle historique = l'ensemble des scopes granulaires. */
 export const OAUTH_SCOPE = "mindlog:identity";
+
+/** Tous les scopes granulaires (profil inclus). */
+export const GRANULAR_SCOPES = [
+  SCOPE_PROFILE,
+  SCOPE_AGENDA,
+  SCOPE_AVAILABILITY,
+  SCOPE_MEETINGS,
+  SCOPE_RELATIONS,
+] as const;
+
+/** Scopes optionnels (décochables) — le profil n'y figure pas (toujours accordé). */
+export const OPTIONAL_SCOPES = [SCOPE_AGENDA, SCOPE_AVAILABILITY, SCOPE_MEETINGS, SCOPE_RELATIONS] as const;
+
+/** Libellés affichés sur la page de consentement. */
+export const SCOPE_LABELS: Record<string, string> = {
+  [SCOPE_PROFILE]: "Profil — identité, attributs et tags",
+  [SCOPE_AGENDA]: "Agenda — vos événements",
+  [SCOPE_AVAILABILITY]: "Disponibilités — vos créneaux libres",
+  [SCOPE_MEETINGS]: "Rendez-vous — demandes de RDV",
+  [SCOPE_RELATIONS]: "Relations — contacts et groupes",
+};
+
+const GRANULAR_SET: ReadonlySet<string> = new Set(GRANULAR_SCOPES);
+
+/** Accès complet — chemin clé d'accès propriétaire (non délégué à un tiers). */
+export const ALL_SCOPES: ReadonlySet<string> = new Set(GRANULAR_SCOPES);
+
+/**
+ * Étend une chaîne de scope demandée/accordée en l'ensemble des scopes
+ * granulaires effectifs. `mindlog:identity` ⇒ tous. Le profil est toujours
+ * inclus (baseline obligatoire). Les scopes inconnus (openid/profile/email…)
+ * sont ignorés ici (gérés à part pour l'OIDC).
+ */
+export function expandScopes(scope: string): Set<string> {
+  const out = new Set<string>();
+  for (const p of (scope || "").split(/\s+/).filter(Boolean)) {
+    if (p === OAUTH_SCOPE) for (const s of GRANULAR_SCOPES) out.add(s);
+    else if (GRANULAR_SET.has(p)) out.add(p);
+  }
+  out.add(SCOPE_PROFILE); // baseline obligatoire
+  return out;
+}
+
+/** Les scopes optionnels effectivement demandés par un client (pour l'UI). */
+export function requestedOptionalScopes(scope: string): string[] {
+  const exp = expandScopes(scope);
+  return OPTIONAL_SCOPES.filter((s) => exp.has(s));
+}
 const ACCESS_TTL_MS = 60 * 60 * 1000; // 1 h
 const REFRESH_TTL_MS = 60 * 24 * 60 * 60 * 1000; // 60 j
 const CODE_TTL_MS = 5 * 60 * 1000; // 5 min
@@ -83,7 +143,7 @@ export function authServerMetadata() {
     grant_types_supported: ["authorization_code", "refresh_token"],
     code_challenge_methods_supported: ["S256"],
     token_endpoint_auth_methods_supported: ["none", "client_secret_post"],
-    scopes_supported: [OAUTH_SCOPE, "openid", "profile", "email"],
+    scopes_supported: [OAUTH_SCOPE, ...GRANULAR_SCOPES, "openid", "profile", "email"],
     subject_types_supported: ["public"],
     id_token_signing_alg_values_supported: ["ES256"],
     claims_supported: ["sub", "iss", "aud", "exp", "iat", "nonce", "name", "picture", "email", "email_verified"],
@@ -96,7 +156,7 @@ export function protectedResourceMetadata() {
   return {
     resource: resourceUrl(),
     authorization_servers: [appUrl()],
-    scopes_supported: [OAUTH_SCOPE],
+    scopes_supported: [OAUTH_SCOPE, ...GRANULAR_SCOPES],
     bearer_methods_supported: ["header"],
   };
 }

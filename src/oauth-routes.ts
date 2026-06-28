@@ -10,9 +10,14 @@ import type { Context, Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { randomBytes } from "node:crypto";
 import { getIdentityBySession, SESSION_COOKIE } from "./session.js";
-import { getIdentityByKey, setRecoveryEmail, type Identity } from "./store.js";
+import { getEvents, getIdentityByKey, setRecoveryEmail, type Identity } from "./store.js";
 import {
   OAUTH_SCOPE,
+  SCOPE_AGENDA,
+  SCOPE_PROFILE,
+  SCOPE_LABELS,
+  expandScopes,
+  requestedOptionalScopes,
   authServerMetadata,
   clientSecretValid,
   consumeAuthCode,
@@ -149,12 +154,31 @@ function consentPage(c: Context, p: AuthzParams, clientName: string, me: Identit
     `<button name="decision" value="deny" style="flex:1;padding:.7rem;border:1px solid #ccc;border-radius:10px;background:#fff;cursor:pointer">Refuser</button>` +
     `</div>`;
 
+  // Consentement sélectif : le profil (identité) est toujours accordé ; les autres
+  // catégories demandées sont des cases à cocher pré-cochées et décochables.
+  const optional = requestedOptionalScopes(p.scope);
+  const scopesBlock =
+    `<fieldset style="border:1px solid #eee;border-radius:12px;padding:.5rem 1rem;margin:1rem 0">` +
+    `<legend style="font-size:.8rem;color:#666;padding:0 .35rem">Accès demandés</legend>` +
+    `<label style="display:flex;gap:.5rem;align-items:flex-start;margin:.4rem 0;color:#666">` +
+    `<input type="checkbox" checked disabled style="margin-top:.15rem">` +
+    `<span>${esc(SCOPE_LABELS[SCOPE_PROFILE])} <em style="color:#999">(toujours inclus)</em></span></label>` +
+    optional
+      .map(
+        (s) =>
+          `<label style="display:flex;gap:.5rem;align-items:flex-start;margin:.4rem 0">` +
+          `<input type="checkbox" name="grant" value="${esc(s)}" checked style="margin-top:.15rem">` +
+          `<span>${esc(SCOPE_LABELS[s] ?? s)}</span></label>`
+      )
+      .join("") +
+    `</fieldset>`;
+
   // Authentifié (session) : juste approuver/refuser. Sinon : clé d'accès (dans le
   // formulaire) + alternative passkey (flux JS qui ouvre une session puis recharge).
   const authBlock = me
     ? `<p>Connecté·e en tant que <strong>@${esc(me.handle)}</strong>.</p>` +
-      `<form method="post" action="/oauth/authorize">${hidden}${buttons}</form>`
-    : `<form method="post" action="/oauth/authorize">${hidden}` +
+      `<form method="post" action="/oauth/authorize">${hidden}${scopesBlock}${buttons}</form>`
+    : `<form method="post" action="/oauth/authorize">${hidden}${scopesBlock}` +
         `<label style="display:block;margin:1rem 0">Votre clé d'accès mindlog` +
         `<input name="access_key" type="password" required autocomplete="off" style="${INPUT_STYLE}" placeholder="collez votre clé d'accès"></label>` +
         buttons +
@@ -171,7 +195,7 @@ function consentPage(c: Context, p: AuthzParams, clientName: string, me: Identit
       `<div style="font-family:system-ui;max-width:30rem;margin:3rem auto;padding:1.5rem;border:1px solid #eee;border-radius:16px">` +
       `<h1 style="font-size:1.2rem">🦎 Autoriser l'accès</h1>` +
       `<p><strong>${esc(clientName || p.client_id)}</strong> demande l'accès à votre carte d'identité mindlog ` +
-      `(profil, agenda, disponibilités, RDV, relations) au nom de votre compte.</p>` +
+      `au nom de votre compte. Choisissez ce que vous partagez :</p>` +
       (msg ? `<p style="color:#c00">${esc(msg)}</p>` : "") +
       authBlock +
       `<p style="color:#888;font-size:.8rem;margin-top:1rem">La clé n'est jamais transmise à ${esc(clientName || "l'application")} : ` +
@@ -215,6 +239,39 @@ export function mountOAuth(app: Hono): void {
       picture: `${new URL(c.req.url).origin}/api/photo/${identity.id}`,
       ...(identity.recovery_email ? { email: identity.recovery_email, email_verified: false } : {}),
     });
+  });
+
+  /* --------------------------- Agenda (lecture) ----------------------- */
+  // Lecture seule des événements de l'agenda du titulaire du token, réservée aux
+  // tokens dont le scope optionnel `mindlog:agenda` a été accordé au consentement.
+  // Consommé par les apps clientes (ex. mindlog.todo) pour afficher l'agenda.
+  app.get("/oauth/agenda", async (c) => {
+    corsJson(c);
+    const auth = c.req.header("Authorization") ?? "";
+    const rawToken = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    if (!rawToken) return c.json({ error: "invalid_token" }, 401);
+    const info = await verifyAccessToken(rawToken);
+    if (!info) return c.json({ error: "invalid_token" }, 401);
+    if (!expandScopes(info.scope).has(SCOPE_AGENDA))
+      return c.json({ error: "insufficient_scope", scope: SCOPE_AGENDA }, 403);
+    const events = await getEvents(info.identity.id, true);
+    return c.json({
+      events: events.map((e) => ({
+        id: e.id,
+        title: e.title,
+        starts_at: e.starts_at,
+        ends_at: e.ends_at,
+        location: e.location,
+        link: e.link,
+        is_public: e.is_public === 1,
+        kind: e.kind,
+      })),
+    });
+  });
+
+  app.options("/oauth/agenda", (c) => {
+    corsJson(c);
+    return c.body(null, 204);
   });
 
   /* ----------------- Recovery email (écriture via token OAuth) ----------- */
@@ -300,7 +357,7 @@ export function mountOAuth(app: Hono): void {
   });
 
   app.post("/oauth/authorize", async (c) => {
-    const form = await c.req.parseBody();
+    const form = await c.req.parseBody({ all: true });
     const s = (k: string) => (typeof form[k] === "string" ? form[k] : "");
     const p: AuthzParams = {
       client_id: s("client_id"),
@@ -333,12 +390,27 @@ export function mountOAuth(app: Hono): void {
       return consentPage(c, p, client.client_name, null, csrf, "Clé d'accès invalide.");
     }
 
+    // Scope accordé = profil (toujours) + cases cochées (bornées aux scopes
+    // optionnels réellement demandés) + scopes OIDC standard demandés (openid…).
+    const requestedOptional = requestedOptionalScopes(p.scope);
+    const grantValues = form.grant;
+    const checked = new Set(
+      Array.isArray(grantValues)
+        ? grantValues.filter((v): v is string => typeof v === "string")
+        : typeof grantValues === "string"
+          ? [grantValues]
+          : []
+    );
+    const grantedOptional = requestedOptional.filter((sc) => checked.has(sc));
+    const oidcPass = p.scope.split(/\s+/).filter((sc) => sc === "openid" || sc === "profile" || sc === "email");
+    const grantedScope = [...new Set([...oidcPass, SCOPE_PROFILE, ...grantedOptional])].join(" ");
+
     const code = await createAuthCode({
       client_id: p.client_id,
       identity_id: me.id,
       redirect_uri: p.redirect_uri,
       code_challenge: p.code_challenge,
-      scope: p.scope,
+      scope: grantedScope,
       resource: p.resource || undefined,
       nonce: p.nonce || undefined,
     });

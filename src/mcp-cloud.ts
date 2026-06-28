@@ -16,6 +16,13 @@
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import {
+  ALL_SCOPES,
+  SCOPE_AGENDA,
+  SCOPE_AVAILABILITY,
+  SCOPE_MEETINGS,
+  SCOPE_RELATIONS,
+} from "./oauth.js";
 import { rmSync } from "node:fs";
 import { resolve } from "node:path";
 import {
@@ -128,9 +135,16 @@ const RO = (title: string) => ({ title, readOnlyHint: true });
 const WR = (title: string) => ({ title, readOnlyHint: false });
 const DES = (title: string) => ({ title, readOnlyHint: false, destructiveHint: true });
 
-/** Construit un serveur MCP dont tous les outils sont scopés à `me`. */
-export function buildCloudMcpServer(me: Identity): McpServer {
+/**
+ * Construit un serveur MCP dont tous les outils sont scopés à `me`.
+ * `scopes` borne les catégories exposées (consentement OAuth sélectif) : le
+ * profil est toujours présent ; agenda/disponibilités/RDV/relations ne sont
+ * enregistrés que si le scope correspondant est accordé. Défaut : accès complet
+ * (chemin clé d'accès propriétaire).
+ */
+export function buildCloudMcpServer(me: Identity, scopes: ReadonlySet<string> = ALL_SCOPES): McpServer {
   const server = new McpServer({ name: "mindlog-id", version: "0.6.1" }, { instructions: INSTRUCTIONS });
+  const can = (scope: string) => scopes.has(scope);
 
   const ok = (data: unknown) => ({
     content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
@@ -177,7 +191,7 @@ export function buildCloudMcpServer(me: Identity): McpServer {
       inputSchema: {},
       annotations: RO("Lire ma carte"),
     },
-    async () => ok({ handle: me.handle, plan: (await isPremium(me.id)) ? "premium" : "free", fields: await getFields(me.id, "owner"), events: await getEvents(me.id, true) })
+    async () => ok({ handle: me.handle, plan: (await isPremium(me.id)) ? "premium" : "free", fields: await getFields(me.id, "owner"), events: can(SCOPE_AGENDA) ? await getEvents(me.id, true) : undefined })
   );
 
   server.registerTool(
@@ -270,6 +284,7 @@ export function buildCloudMcpServer(me: Identity): McpServer {
   );
 
   /* -------------------------------- Agenda (moi) ------------------------- */
+  if (can(SCOPE_AGENDA)) {
 
   server.registerTool(
     "list_events",
@@ -324,7 +339,10 @@ export function buildCloudMcpServer(me: Identity): McpServer {
     async ({ id }) => ok({ deleted: await deleteEvent(me.id, id) })
   );
 
+  }
+
   /* ----------------------------- Disponibilité (moi) -------------------- */
+  if (can(SCOPE_AVAILABILITY)) {
 
   server.registerTool(
     "get_availability",
@@ -450,7 +468,10 @@ export function buildCloudMcpServer(me: Identity): McpServer {
       })
   );
 
+  }
+
   /* -------------------------------- RDV (moi) --------------------------- */
+  if (can(SCOPE_MEETINGS)) {
 
   server.registerTool(
     "request_meeting",
@@ -552,7 +573,10 @@ export function buildCloudMcpServer(me: Identity): McpServer {
     async ({ id }) => ok({ deleted: await deleteRequest(me.id, id) })
   );
 
+  }
+
   /* -------------------------------- Relations (moi) --------------------- */
+  if (can(SCOPE_RELATIONS)) {
 
   server.registerTool(
     "list_relations",
@@ -605,6 +629,8 @@ export function buildCloudMcpServer(me: Identity): McpServer {
     },
     async ({ related_handle }) => ok({ removed: await removeRelation(me.id, related_handle) })
   );
+
+  }
 
   /* ----------------------------- Notifications (moi) -------------------- */
 
@@ -676,6 +702,7 @@ export function buildCloudMcpServer(me: Identity): McpServer {
   );
 
   /* ------------------------------ Groupes -------------------------------- */
+  if (can(SCOPE_RELATIONS)) {
   // Milo peut gérer la membership (créer, ajouter, retirer, promouvoir, transférer),
   // mais PAS envoyer/lire de messages : ceux-ci sont chiffrés E2E côté client
   // (sender keys) et le serveur ne voit que des blobs opaques.
@@ -833,6 +860,8 @@ export function buildCloudMcpServer(me: Identity): McpServer {
         return { name };
       })
   );
+
+  }
 
   /* ------------------------------ Préférences --------------------------- */
 

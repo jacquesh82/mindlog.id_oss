@@ -228,6 +228,61 @@ test("code d'autorisation à usage unique", async () => {
   assert.equal((await exchangeCode(client_id, code, verifier)).status, 400);
 });
 
+/* --------------------------- Consentement sélectif ----------------------- */
+
+test("consentement sélectif : cases optionnelles affichées, scope partiel appliqué côté MCP", async () => {
+  const u = await makeUser("selma");
+  const { client_id } = await registerClient();
+  const { verifier, challenge } = pkce();
+
+  // GET : la page propose les 4 catégories optionnelles en cases à cocher.
+  const qs = new URLSearchParams({
+    response_type: "code", client_id, redirect_uri: REDIRECT,
+    code_challenge: challenge, code_challenge_method: "S256", scope: "mindlog:identity", state: "s",
+  });
+  const getRes = await app.request(`/oauth/authorize?${qs.toString()}`);
+  const html = await getRes.text();
+  assert.match(html, /name="grant" value="mindlog:agenda"/);
+  assert.match(html, /name="grant" value="mindlog:availability"/);
+  assert.match(html, /name="grant" value="mindlog:meetings"/);
+  assert.match(html, /name="grant" value="mindlog:relations"/);
+  const csrf = /name="csrf" value="([^"]+)"/.exec(html)?.[1] ?? "";
+  const cookie = /oauth_csrf=([^;]+)/.exec(getRes.headers.get("set-cookie") ?? "")?.[1] ?? "";
+
+  // POST : on ne coche QUE l'agenda (les autres cases sont décochées = absentes).
+  const form = new URLSearchParams({
+    response_type: "code", client_id, redirect_uri: REDIRECT, code_challenge: challenge,
+    code_challenge_method: "S256", scope: "mindlog:identity", state: "s", resource: "",
+    csrf, decision: "approve", access_key: u.access_key,
+  });
+  form.append("grant", "mindlog:agenda");
+  const postRes = await app.request("/oauth/authorize", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", cookie: `oauth_csrf=${cookie}` },
+    body: form.toString(),
+    redirect: "manual",
+  });
+  assert.equal(postRes.status, 302);
+  const code = new URL(postRes.headers.get("location") ?? "").searchParams.get("code") ?? "";
+
+  const tok = (await (await exchangeCode(client_id, code, verifier)).json()) as { access_token: string; scope: string };
+  // Profil (toujours) + agenda coché ; rien d'autre.
+  assert.equal(tok.scope, "mindlog:profile mindlog:agenda");
+
+  // tools/list : agenda présent, relations/disponibilités absents, profil présent.
+  const mcpRes = await app.request("/mcp", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${tok.access_token}` },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/list" }),
+  });
+  const names = ((await mcpRes.json()) as { result: { tools: { name: string }[] } }).result.tools.map((t) => t.name);
+  assert.ok(names.includes("whoami"), "profil (baseline) présent");
+  assert.ok(names.includes("list_events"), "agenda accordé → list_events présent");
+  assert.ok(!names.includes("list_relations"), "relations non accordé → masqué");
+  assert.ok(!names.includes("get_availability"), "disponibilités non accordé → masqué");
+  assert.ok(!names.includes("request_meeting"), "RDV non accordé → masqué");
+});
+
 test("clé d'accès invalide sur le consentement → pas de code", async () => {
   await makeUser("dan");
   const { client_id } = await registerClient();

@@ -24,7 +24,7 @@ import { bookingReminderEmail } from "./emails.js";
 import { rateLimit, securityHeaders, requestBodyLimit } from "./security.js";
 import { buildCloudMcpServer, cloudMcpToolCount } from "./mcp-cloud.js";
 import { mountOAuth } from "./oauth-routes.js";
-import { verifyAccessToken, protectedResourceMetadata, pruneOAuth, seedFirstPartyClients } from "./oauth.js";
+import { verifyAccessToken, protectedResourceMetadata, pruneOAuth, seedFirstPartyClients, expandScopes, ALL_SCOPES } from "./oauth.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { initDb } from "./db.js";
 import { currentIdentity, notify } from "./routes/_ctx.js";
@@ -252,7 +252,10 @@ app.on(["GET", "POST", "DELETE"], "/mcp", async (c) => {
       401
     );
   }
-  const server = buildCloudMcpServer(identity);
+  // Scopes effectifs : un token OAuth délégué porte les catégories consenties ;
+  // une clé d'accès brute (le propriétaire lui-même) a l'accès complet.
+  const grantedScopes = oauth ? expandScopes(oauth.scope) : ALL_SCOPES;
+  const server = buildCloudMcpServer(identity, grantedScopes);
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless : pas de session persistée côté serveur
     enableJsonResponse: true,

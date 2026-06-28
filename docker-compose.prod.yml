@@ -42,6 +42,16 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
+    # Override du healthcheck baké dans l'image : depuis v0.14.1, `/` renvoie
+    # un 302 vers https://mindlog.id/ (domaine marketing externe, non résolvable
+    # depuis le conteneur), donc le test par défaut sur `/` finit toujours en
+    # `unhealthy`. /api/status est un endpoint applicatif stable et local.
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:'+(process.env.PORT||8787)+'/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   # Terminaison TLS pour id.mindlog.today (cert Let's Encrypt auto via TLS-ALPN-01).
   # Le routeur SNI de l'hôte route le flux 443 de ce domaine vers 127.0.0.1:9543.
