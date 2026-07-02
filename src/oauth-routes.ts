@@ -27,6 +27,7 @@ import {
   issueTokens,
   protectedResourceMetadata,
   registerClient,
+  resourceAllowed,
   revokeToken,
   rotateRefreshToken,
   verifyAccessToken,
@@ -381,6 +382,11 @@ export function mountOAuth(app: Hono): void {
 
     if (s("decision") !== "approve")
       return redirectError(p.redirect_uri, p.state, "access_denied");
+
+    // RFC 8707 : si une ressource cible est demandée, elle doit être autorisée
+    // (sinon on refuse de forger une audience arbitraire).
+    if (p.resource && !resourceAllowed(p.resource))
+      return redirectError(p.redirect_uri, p.state, "invalid_target", "resource non autorisée");
 
     // Authentification : session existante ou clé d'accès saisie.
     const me = (await sessionIdentity(c)) ?? (await getIdentityByKey(s("access_key")));

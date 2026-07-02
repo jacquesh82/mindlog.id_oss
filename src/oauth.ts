@@ -344,6 +344,51 @@ export interface IssuedTokens {
   id_token?: string;
 }
 
+/**
+ * Ressources (RFC 8707) pour lesquelles on accepte d'émettre une audience.
+ * Vide ⇒ pas de restriction (rétro-compatible). Renseigner
+ * `OAUTH_ALLOWED_RESOURCES` (URIs séparées par des virgules) pour n'autoriser
+ * que des serveurs de ressources connus — défense contre la confusion d'audience.
+ */
+export function resourceAllowed(resource: string): boolean {
+  const allow = (process.env.OAUTH_ALLOWED_RESOURCES ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return allow.length === 0 || allow.includes(resource);
+}
+
+/**
+ * Access token à émettre. Quand un `resource` est demandé (RFC 8707) ET qu'OIDC
+ * est configuré, on émet un **JWT ES256 auto-porté** (même clé que le JWKS)
+ * avec `aud=resource` : un serveur de ressources EXTERNE (ex. memory-service) le
+ * vérifie hors-ligne via /oauth/jwks + contrôle d'audience, sans introspection.
+ * Sinon (apps first-party mindlog qui valident via /oauth/userinfo), on garde un
+ * token opaque — comportement inchangé.
+ */
+async function mintAccessToken(input: {
+  client_id: string;
+  identity_id: number;
+  scope: string;
+  resource?: string | null;
+}): Promise<string> {
+  if (input.resource && oidcEnabled()) {
+    const now = Math.floor(Date.now() / 1000);
+    const jwt = await signIdToken({
+      iss: issuer(),
+      sub: input.identity_id.toString(),
+      aud: input.resource,
+      client_id: input.client_id,
+      scope: input.scope,
+      iat: now,
+      exp: now + Math.floor(ACCESS_TTL_MS / 1000),
+      jti: token(12),
+    });
+    if (jwt) return jwt;
+  }
+  return token(32);
+}
+
 export async function issueTokens(input: {
   client_id: string;
   identity_id: number;
@@ -351,7 +396,7 @@ export async function issueTokens(input: {
   resource?: string | null;
   nonce?: string | null;
 }): Promise<IssuedTokens> {
-  const access = token(32);
+  const access = await mintAccessToken(input);
   const refresh = token(32);
   await db.insert(oauthTokens).values([
     {

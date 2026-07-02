@@ -1,13 +1,19 @@
 import { test, after, before, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
+import { importJWK, jwtVerify } from "jose";
 import { eq, sql } from "drizzle-orm";
 import { closeDb, db, initDb } from "../src/db.js";
 import { createIdentity, getIdentityByHandle } from "../src/store.js";
-import { pruneOAuth } from "../src/oauth.js";
+import { issuer, pruneOAuth } from "../src/oauth.js";
 import { oauthTokens } from "../src/schema.js";
 
 process.env.MINDLOG_NO_LISTEN = "1";
+// Active OIDC avec une clé ES256 de test → /oauth/jwks publie la clé publique et
+// les access tokens « resource » sont des JWT signés (cf. RFC 8707).
+process.env.OIDC_PRIVATE_KEY_PEM = generateKeyPairSync("ec", { namedCurve: "P-256" })
+  .privateKey.export({ type: "pkcs8", format: "pem" })
+  .toString();
 
 let app: { request: (path: string, init?: RequestInit) => Promise<Response> };
 
@@ -43,7 +49,7 @@ function pkce() {
 }
 
 /** Déroule authorize (GET consentement → POST approve) et renvoie le code. */
-async function getAuthCode(clientId: string, challenge: string, accessKey: string) {
+async function getAuthCode(clientId: string, challenge: string, accessKey: string, resource = "") {
   const qs = new URLSearchParams({
     response_type: "code",
     client_id: clientId,
@@ -68,7 +74,7 @@ async function getAuthCode(clientId: string, challenge: string, accessKey: strin
     code_challenge_method: "S256",
     scope: "mindlog:identity",
     state: "xyz",
-    resource: "",
+    resource,
     csrf,
     decision: "approve",
     access_key: accessKey,
@@ -281,6 +287,72 @@ test("consentement sélectif : cases optionnelles affichées, scope partiel appl
   assert.ok(!names.includes("list_relations"), "relations non accordé → masqué");
   assert.ok(!names.includes("get_availability"), "disponibilités non accordé → masqué");
   assert.ok(!names.includes("request_meeting"), "RDV non accordé → masqué");
+});
+
+/* ------------------- Resource indicators (RFC 8707) ---------------------- */
+
+test("resource demandé → access token JWT ES256 avec aud=resource, vérifiable via JWKS", async () => {
+  const u = await makeUser("mallory");
+  const { client_id } = await registerClient();
+  const { verifier, challenge } = pkce();
+  const RESOURCE = "https://memory.mindlog.today/mcp";
+
+  const code = await getAuthCode(client_id, challenge, u.access_key, RESOURCE);
+  const tok = (await (await exchangeCode(client_id, code, verifier)).json()) as { access_token: string };
+
+  // C'est un JWT (3 segments), pas un token opaque.
+  assert.equal(tok.access_token.split(".").length, 3, "access token est un JWT");
+
+  // Vérification hors-ligne exactement comme le fera un RS externe (memory-service).
+  const jwks = (await (await app.request("/oauth/jwks")).json()) as { keys: Record<string, unknown>[] };
+  const pub = await importJWK(jwks.keys[0], "ES256");
+  const { payload, protectedHeader } = await jwtVerify(tok.access_token, pub);
+  assert.equal(protectedHeader.alg, "ES256");
+  assert.equal(payload.aud, RESOURCE);
+  assert.equal(payload.iss, issuer());
+  assert.equal(payload.sub, u.id.toString());
+});
+
+test("sans resource → access token opaque (comportement first-party inchangé)", async () => {
+  const u = await makeUser("nadia");
+  const { client_id } = await registerClient();
+  const { verifier, challenge } = pkce();
+  const code = await getAuthCode(client_id, challenge, u.access_key); // pas de resource
+  const tok = (await (await exchangeCode(client_id, code, verifier)).json()) as { access_token: string };
+  assert.notEqual(tok.access_token.split(".").length, 3, "token opaque, pas un JWT");
+});
+
+test("resource hors allowlist → invalid_target", async () => {
+  process.env.OAUTH_ALLOWED_RESOURCES = "https://memory.mindlog.today/mcp";
+  try {
+    const u = await makeUser("oscar");
+    const { client_id } = await registerClient();
+    const { challenge } = pkce();
+    // getAuthCode assert un 302 avec code ; ici on attend une erreur → flux manuel.
+    const qs = new URLSearchParams({
+      response_type: "code", client_id, redirect_uri: REDIRECT,
+      code_challenge: challenge, code_challenge_method: "S256", scope: "mindlog:identity", state: "s",
+    });
+    const getRes = await app.request(`/oauth/authorize?${qs.toString()}`);
+    const html = await getRes.text();
+    const csrf = /name="csrf" value="([^"]+)"/.exec(html)?.[1] ?? "";
+    const cookie = /oauth_csrf=([^;]+)/.exec(getRes.headers.get("set-cookie") ?? "")?.[1] ?? "";
+    const form = new URLSearchParams({
+      response_type: "code", client_id, redirect_uri: REDIRECT, code_challenge: challenge,
+      code_challenge_method: "S256", scope: "mindlog:identity", state: "s",
+      resource: "https://evil.example/mcp", csrf, decision: "approve", access_key: u.access_key,
+    });
+    const res = await app.request("/oauth/authorize", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded", cookie: `oauth_csrf=${cookie}` },
+      body: form.toString(),
+      redirect: "manual",
+    });
+    assert.equal(res.status, 302);
+    assert.equal(new URL(res.headers.get("location") ?? "").searchParams.get("error"), "invalid_target");
+  } finally {
+    delete process.env.OAUTH_ALLOWED_RESOURCES;
+  }
 });
 
 test("clé d'accès invalide sur le consentement → pas de code", async () => {
