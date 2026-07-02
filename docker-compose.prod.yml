@@ -53,23 +53,11 @@ services:
       retries: 3
       start_period: 20s
 
-  # Terminaison TLS pour id.mindlog.today (cert Let's Encrypt auto via TLS-ALPN-01).
-  # Le routeur SNI de l'hôte route le flux 443 de ce domaine vers 127.0.0.1:9543.
-  caddy:
-    image: caddy:2-alpine
-    container_name: mindlog-id_caddy
-    ports:
-      - "127.0.0.1:9543:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    depends_on:
-      - app
-    restart: unless-stopped
+# NB: la terminaison TLS de id.mindlog.today est assurée par le front Astro
+# (mindlog.id.web → nginx, network_mode host, loopback 9543). L'ancien sidecar
+# `caddy` a été retiré (il entrait en conflit sur 9543 et faisait échouer le
+# déploiement).
 
 volumes:
   mindlog-data:
   mindlog-pgdata:
-  caddy-data:
-  caddy-config:
